@@ -84,10 +84,25 @@
   ];
   S.station = (id) => S.STATIONS.find((s) => s.id === id);
 
+  // The crew — a persistent roster of characters, each normally played by one user.
+  // Combat participants are drawn from this roster; the GM can reassign who controls
+  // each one (e.g. cover an absent player) and exclude any from a given fight.
+  S.defaultRoster = function () {
+    return [
+      { id: "astra", name: "ASTRA",        userId: "" },
+      { id: "kael",  name: "Kael Voss",    userId: "" },
+      { id: "baldy", name: "Baldy",        userId: "" },
+      { id: "gobby", name: "Gobby",        userId: "" },
+      { id: "glimm", name: "G.L.I.M.M.",   userId: "" },
+      { id: "ronon", name: "Ronon Dex",    userId: "" },
+      { id: "gerth", name: "Gerthorlemue", userId: "" }
+    ];
+  };
+
   S.defaultCombat = function () {
     const rolesEnabled = {};
     for (const st of S.STATIONS) rolesEnabled[st.id] = !!st.defaultUnlocked;
-    return { active: false, turn: 1, rolesEnabled, seats: {}, pendingSwap: null };
+    return { active: false, turn: 1, rolesEnabled, roster: S.defaultRoster(), crew: {}, pendingSwap: null };
   };
 
   // Merge stored combat onto defaults so new fields/stations forward-migrate.
@@ -98,37 +113,39 @@
       active: !!stored.active,
       turn: Number.isFinite(stored.turn) ? stored.turn : 1,
       rolesEnabled: { ...d.rolesEnabled },
-      seats: {},
+      roster: Array.isArray(stored.roster) && stored.roster.length ? [] : S.defaultRoster(),
+      crew: {},
       pendingSwap: null
     };
     for (const st of S.STATIONS) {
       if (typeof stored.rolesEnabled?.[st.id] === "boolean") out.rolesEnabled[st.id] = stored.rolesEnabled[st.id];
     }
-    for (const st of S.STATIONS) {
-      const s = stored.seats?.[st.id];
-      if (s && typeof s === "object" && s.ownerUserId) {
-        out.seats[st.id] = {
-          role: st.id,
-          ownerUserId: String(s.ownerUserId),
-          controllerUserId: String(s.controllerUserId || s.ownerUserId),
-          action: !!s.action,
-          bonus: !!s.bonus
-        };
+    if (Array.isArray(stored.roster) && stored.roster.length) {
+      for (const m of stored.roster) {
+        if (m && m.id && m.name) out.roster.push({ id: String(m.id), name: String(m.name), userId: String(m.userId || "") });
       }
     }
-    const ps = stored.pendingSwap;
-    if (ps && ps.role && ps.targetRole && ps.fromUserId && ps.targetUserId) {
-      out.pendingSwap = {
-        role: String(ps.role), targetRole: String(ps.targetRole),
-        fromUserId: String(ps.fromUserId), targetUserId: String(ps.targetUserId)
+    const validStation = (s) => (s && S.station(s) ? s : "");
+    for (const [cid, c] of Object.entries(stored.crew || {})) {
+      if (!c || typeof c !== "object" || !c.name) continue;
+      out.crew[cid] = {
+        id: cid, name: String(c.name),
+        ownerUserId: String(c.ownerUserId || ""),
+        controllerUserId: String(c.controllerUserId || c.ownerUserId || ""),
+        station: validStation(c.station),
+        action: !!c.action, bonus: !!c.bonus
       };
+    }
+    const ps = stored.pendingSwap;
+    if (ps && ps.fromCrew && ps.targetCrew) {
+      out.pendingSwap = { fromCrew: String(ps.fromCrew), targetCrew: String(ps.targetCrew) };
     }
     return out;
   };
 
-  // Seats a given user currently operates (their own + any the GM handed them).
-  S.seatsControlledBy = function (combat, userId) {
-    return Object.values(combat.seats).filter((s) => s.controllerUserId === userId);
+  // Crew a given user currently operates (their own + any the GM handed them).
+  S.crewControlledBy = function (combat, userId) {
+    return Object.values(combat.crew).filter((c) => c.controllerUserId === userId);
   };
 
   /* ---------------------------------------------------------------------- */
@@ -456,88 +473,107 @@
     `<span>${token("action", false, false)} Action</span><span>${token("action", true, false)} used</span>` +
     `<span>${token("bonus", false, false)} Bonus</span><span>${token("bonus", true, false)} used</span></div>`;
 
-  function wireTokens(el, role, cctx) {
-    el.querySelectorAll(".ct-tok.click").forEach((t) => { t.onclick = () => cctx.spend(role, t.dataset.tok); });
+  function wireTokens(el, id, cctx) {
+    el.querySelectorAll(".ct-tok.click").forEach((t) => { t.onclick = () => cctx.spend(id, t.dataset.tok); });
   }
+  const stationName = (id) => { const st = S.station(id); return st ? st.name : ""; };
 
   S.renderTracker = function (root, cctx) {
     S.ensureStyles();
     const combat = S.normalizeCombat(cctx.getCombat());
     root.className = "sgct host";
+    const collapseBtn = `<button class="ct-btn" data-act="collapse" title="Hide the tracker">▾ Hide</button>`;
 
+    // Inactive: GM sees Enter + Crew config; players see nothing.
     if (!combat.active) {
       if (cctx.isGM) {
         root.style.display = "flex";
         root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP COMBAT</span>` +
-          `<button class="ct-btn enter" data-act="enter">⚔ ENTER SHIP COMBAT</button></div>`;
+          `<button class="ct-btn enter" data-act="enter">⚔ ENTER SHIP COMBAT</button>` +
+          `<button class="ct-btn" data-act="crew">Crew</button></div>`;
         root.querySelector('[data-act="enter"]').onclick = () => cctx.enterCombat();
-      } else {
-        root.style.display = "none";
-        root.innerHTML = "";
-      }
+        root.querySelector('[data-act="crew"]').onclick = () => cctx.editCrew();
+      } else { root.style.display = "none"; root.innerHTML = ""; }
+      return;
+    }
+
+    // Collapsed: a slim pill you click to expand.
+    if (cctx.collapsed) {
+      root.style.display = "flex";
+      root.innerHTML = `<div class="ct-top"><button class="ct-btn enter" data-act="expand" title="Show combat tracker">⚔ SHIP'S TURN ${combat.turn} ▸</button></div>`;
+      root.querySelector('[data-act="expand"]').onclick = () => cctx.toggleCollapse();
       return;
     }
     root.style.display = "flex";
 
     if (cctx.isGM) {
-      const seats = Object.values(combat.seats);
-      const roster = seats.length ? seats.map((s) => {
-        const st = S.station(s.role);
-        const opts = (cctx.users || []).map((u) =>
-          `<option value="${u.id}" ${u.id === s.controllerUserId ? "selected" : ""}>${esc(u.name)}${u.isGM ? " (GM)" : ""}</option>`).join("");
-        return `<div class="ct-seat" data-role="${s.role}">` +
-          `<div><div class="ct-name">${esc(st ? st.name : s.role)}</div><div class="ct-sub">owner: ${esc(nameOf(cctx, s.ownerUserId))}</div></div>` +
-          `<div class="ct-toks">${token("action", s.action, true)}${token("bonus", s.bonus, true)}</div>` +
-          `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Who controls this seat">${opts}</select>` +
-          `<span class="ct-x" data-remove title="Remove seat">✕</span></div></div>`;
-      }).join("") : `<div class="ct-empty">No crew seated yet — players pick from the popup, or use “+ Add seat”.</div>`;
-      const swap = combat.pendingSwap
-        ? `<div class="ct-note">Swap pending: ${esc(S.station(combat.pendingSwap.role)?.name || combat.pendingSwap.role)} ↔ ${esc(S.station(combat.pendingSwap.targetRole)?.name || combat.pendingSwap.targetRole)} (awaiting confirm)</div>`
-        : "";
+      const crew = Object.values(combat.crew);
+      const stationOpts = (cur) => `<option value="">— station —</option>` +
+        S.STATIONS.filter((st) => combat.rolesEnabled[st.id]).map((st) => `<option value="${st.id}" ${st.id === cur ? "selected" : ""}>${st.num}. ${esc(st.name)}</option>`).join("");
+      const roster = crew.length ? crew.map((c) => {
+        const ctrlOpts = (cctx.users || []).map((u) => `<option value="${u.id}" ${u.id === c.controllerUserId ? "selected" : ""}>${esc(u.name)}${u.isGM ? " (GM)" : ""}</option>`).join("");
+        return `<div class="ct-seat" data-crew="${c.id}">` +
+          `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">owner: ${esc(c.ownerUserId ? nameOf(cctx, c.ownerUserId) : "—")}</div></div>` +
+          `<select class="ct-sel" data-station title="Station">${stationOpts(c.station)}</select>` +
+          `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}</div>` +
+          `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Controlled by">${ctrlOpts}</select>` +
+          `<span class="ct-x" data-remove title="Exclude from combat">✕</span></div></div>`;
+      }).join("") : `<div class="ct-empty">No crew in this fight — use “+ Add crew”.</div>`;
+      const swap = combat.pendingSwap ? `<div class="ct-note">Station swap pending — awaiting confirmation…</div>` : "";
       root.innerHTML =
         `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>` +
         `<button class="ct-btn" data-act="next">⏭ Next Turn</button>` +
-        `<button class="ct-btn" data-act="add">+ Add seat</button>` +
-        `<button class="ct-btn" data-act="roles">Roles</button>` +
+        `<button class="ct-btn" data-act="add">+ Add crew</button>` +
+        `<button class="ct-btn" data-act="crew">Edit crew</button>` +
+        `<button class="ct-btn" data-act="roles">Stations</button>` +
         `<button class="ct-btn" data-act="resend">Re-send picker</button>` +
+        collapseBtn +
         `<button class="ct-btn warn" data-act="end">✖ End Combat</button></div>` +
         `<div class="ct-seats">${roster}</div>${swap}${legendHtml()}`;
-      root.querySelector('[data-act="next"]').onclick = () => cctx.nextTurn();
-      root.querySelector('[data-act="add"]').onclick = () => cctx.addSeat();
-      root.querySelector('[data-act="roles"]').onclick = () => cctx.openRoles();
-      root.querySelector('[data-act="resend"]').onclick = () => cctx.broadcastPick();
-      root.querySelector('[data-act="end"]').onclick = () => cctx.endCombat();
+      const on = (sel, fn) => { const e = root.querySelector(sel); if (e) e.onclick = fn; };
+      on('[data-act="next"]', () => cctx.nextTurn());
+      on('[data-act="add"]', () => cctx.addCrew());
+      on('[data-act="crew"]', () => cctx.editCrew());
+      on('[data-act="roles"]', () => cctx.openRoles());
+      on('[data-act="resend"]', () => cctx.broadcastPick());
+      on('[data-act="collapse"]', () => cctx.toggleCollapse());
+      on('[data-act="end"]', () => cctx.endCombat());
       root.querySelectorAll(".ct-seat").forEach((el) => {
-        const role = el.dataset.role;
-        wireTokens(el, role, cctx);
-        const sel = el.querySelector("[data-ctrl]"); if (sel) sel.onchange = () => cctx.assignController(role, sel.value);
-        const x = el.querySelector("[data-remove]"); if (x) x.onclick = () => cctx.removeSeat(role);
+        const id = el.dataset.crew;
+        wireTokens(el, id, cctx);
+        const stn = el.querySelector("[data-station]"); if (stn) stn.onchange = () => cctx.setStation(id, stn.value);
+        const sel = el.querySelector("[data-ctrl]"); if (sel) sel.onchange = () => cctx.assignController(id, sel.value);
+        const x = el.querySelector("[data-remove]"); if (x) x.onclick = () => cctx.excludeCrew(id);
       });
       return;
     }
 
-    // Player view — only the seats this user controls.
-    const mine = S.seatsControlledBy(combat, cctx.userId);
+    // Player view — only the crew this user controls.
+    const mine = S.crewControlledBy(combat, cctx.userId);
     if (!mine.length) {
       root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>` +
-        `<button class="ct-btn" data-act="pick">Pick a role</button></div>`;
-      root.querySelector('[data-act="pick"]').onclick = () => cctx.pickRole();
+        `<span class="ct-sub">Waiting for the GM…</span>${collapseBtn}</div>`;
+      const c = root.querySelector('[data-act="collapse"]'); if (c) c.onclick = () => cctx.toggleCollapse();
       return;
     }
-    const blocks = mine.map((s) => {
-      const st = S.station(s.role);
-      const sub = s.ownerUserId === cctx.userId ? "" : `<div class="ct-sub">covering ${esc(nameOf(cctx, s.ownerUserId))}</div>`;
-      return `<div class="ct-seat mine" data-role="${s.role}">` +
-        `<div><div class="ct-name">${esc(st ? st.name : s.role)}</div>${sub}</div>` +
-        `<div class="ct-toks">${token("action", s.action, true)}${token("bonus", s.bonus, true)}</div>` +
-        `<button class="ct-btn" data-switch title="Switch station (costs a Bonus action)">Switch</button></div>`;
+    const blocks = mine.map((c) => {
+      const sub = c.ownerUserId === cctx.userId ? "" : `<div class="ct-sub">covering ${esc(c.ownerUserId ? nameOf(cctx, c.ownerUserId) : c.name)}</div>`;
+      const stLabel = c.station ? esc(stationName(c.station)) : "no station";
+      const btn = c.station
+        ? `<button class="ct-btn" data-switch title="Switch station (costs a Bonus action)">Switch</button>`
+        : `<button class="ct-btn enter" data-pick title="Pick your station (free at the start)">Pick station</button>`;
+      return `<div class="ct-seat mine" data-crew="${c.id}">` +
+        `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">${stLabel}</div>${sub}</div>` +
+        `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}</div>${btn}</div>`;
     }).join("");
-    root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span></div>` +
+    root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>${collapseBtn}</div>` +
       `<div class="ct-seats">${blocks}</div>${legendHtml()}`;
+    const cbtn = root.querySelector('[data-act="collapse"]'); if (cbtn) cbtn.onclick = () => cctx.toggleCollapse();
     root.querySelectorAll(".ct-seat").forEach((el) => {
-      const role = el.dataset.role;
-      wireTokens(el, role, cctx);
-      const sw = el.querySelector("[data-switch]"); if (sw) sw.onclick = () => cctx.requestSwitch(role);
+      const id = el.dataset.crew;
+      wireTokens(el, id, cctx);
+      const sw = el.querySelector("[data-switch]"); if (sw) sw.onclick = () => cctx.switchStation(id);
+      const pk = el.querySelector("[data-pick]"); if (pk) pk.onclick = () => cctx.pickStation(id);
     });
   };
 
@@ -658,131 +694,190 @@
     if (msg.toUser && msg.toUser !== game.user.id) return;
     if (msg.toGM && !isActiveGM()) return;
     switch (msg.type) {
-      case "pickRolePrompt": if (!game.user.isGM) promptRolePick(); break;
-      case "pickRole":       gmSeatUser(msg.userId, msg.role); break;
-      case "spend":          gmSpend(msg.role, msg.which, msg.userId); break;
-      case "switchRequest":  gmSwitch(msg.userId, msg.role, msg.target); break;
+      case "pickPrompt":     if (!game.user.isGM) promptPickAll(); break;
+      case "pickStation":    gmSetStation(msg.crewId, msg.station, msg.userId); break;
+      case "spend":          gmSpend(msg.crewId, msg.which, msg.userId); break;
+      case "switchRequest":  gmSwitch(msg.userId, msg.crewId, msg.target); break;
       case "swapConfirm":    promptSwapConfirm(msg); break;
       case "swapResult":     gmResolveSwap(msg.accepted); break;
       case "notify":         ui.notifications?.warn(msg.text); break;
     }
   }
 
+  /* Bar collapse (per-client, localStorage) */
+  const BAR_KEY = `${MODULE_ID}.barCollapsed`;
+  const barCollapsed = () => { try { return localStorage.getItem(BAR_KEY) === "1"; } catch (e) { return false; } };
+  const setBarCollapsed = (v) => { try { localStorage.setItem(BAR_KEY, v ? "1" : "0"); } catch (e) {} };
+
+  const newId = () => "c" + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
+
   /* GM-authoritative handlers */
   async function enterCombat() {
     if (!game.user.isGM) return;
     const cur = getCombat();
+    const included = await includeDialog(cur);
+    if (!included) return;
     const next = S.defaultCombat();
-    next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled;  // keep GM's role toggles
+    next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
+    for (const m of cur.roster) {
+      if (!included.has(m.id)) continue;
+      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false };
+    }
     await saveCombat(next);
-    emit({ type: "pickRolePrompt" });
-    ui.notifications?.info("Ship combat started — players are picking their stations.");
+    emit({ type: "pickPrompt" });
+    ui.notifications?.info("Ship combat started — players, pick your station.");
   }
   async function endCombat() {
     if (!game.user.isGM) return;
-    const next = getCombat(); next.active = false; next.seats = {}; next.pendingSwap = null;
+    const next = getCombat(); next.active = false; next.crew = {}; next.pendingSwap = null;
     await saveCombat(next);
   }
   async function nextTurn() {
     if (!game.user.isGM) return;
     const next = getCombat();
-    for (const s of Object.values(next.seats)) { s.action = false; s.bonus = false; }
+    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; }
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
   }
-  async function gmSeatUser(userId, role) {
+  async function gmSpend(crewId, which, byUserId) {
     if (!game.user.isGM) return;
-    const next = getCombat();
-    if (!next.rolesEnabled[role]) return notifyUser(userId, "That station is disabled.");
-    if (next.seats[role] && next.seats[role].ownerUserId !== userId) return notifyUser(userId, "That station is already taken.");
-    for (const [rid, s] of Object.entries(next.seats)) if (s.ownerUserId === userId && rid !== role) delete next.seats[rid];
-    next.seats[role] = { role, ownerUserId: userId, controllerUserId: userId, action: false, bonus: false };
-    await saveCombat(next);
-  }
-  async function gmSpend(role, which, byUserId) {
-    if (!game.user.isGM) return;
-    const next = getCombat(); const seat = next.seats[role]; if (!seat) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
-    if (!gmActor && seat.controllerUserId !== byUserId) return;   // players only touch seats they control
-    if (which === "action") seat.action = !seat.action;
-    else if (which === "bonus") seat.bonus = !seat.bonus;
+    if (!gmActor && c.controllerUserId !== byUserId) return;   // players only touch crew they control
+    if (which === "action") c.action = !c.action;
+    else if (which === "bonus") c.bonus = !c.bonus;
     await saveCombat(next);
   }
-  async function assignController(role, userId) {
+  async function assignController(crewId, userId) {
     if (!game.user.isGM) return;
-    const next = getCombat(); const seat = next.seats[role]; if (!seat) return;
-    seat.controllerUserId = userId; await saveCombat(next);
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
+    c.controllerUserId = userId; await saveCombat(next);
   }
-  async function removeSeat(role) {
+  async function excludeCrew(crewId) {
     if (!game.user.isGM) return;
-    const next = getCombat(); delete next.seats[role]; await saveCombat(next);
+    const next = getCombat(); delete next.crew[crewId]; await saveCombat(next);
   }
-  async function gmSwitch(byUserId, role, target) {
+  async function gmSetStation(crewId, station, byUserId) {
     if (!game.user.isGM) return;
-    const next = getCombat(); const seat = next.seats[role]; if (!seat) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
+    if (station && !next.rolesEnabled[station]) return;
+    if (station) {
+      const clash = Object.values(next.crew).find((o) => o.id !== crewId && o.station === station);
+      if (clash) return notifyUser(byUserId || game.user.id, `That station is taken by ${clash.name}.`);
+    }
+    c.station = station || "";
+    await saveCombat(next);
+  }
+  async function gmSwitch(byUserId, crewId, target) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
     const gmActor = game.users.get(byUserId)?.isGM;
-    if (!gmActor && seat.controllerUserId !== byUserId) return;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
     if (!next.rolesEnabled[target]) return notifyUser(byUserId, "That station is disabled.");
-    if (seat.bonus) return notifyUser(byUserId, "You've already used your Bonus action.");
-    const occupant = next.seats[target];
-    if (!occupant) {                                   // move into an empty station
-      seat.bonus = true;
-      delete next.seats[role]; next.seats[target] = { ...seat, role: target };
+    if (c.bonus) return notifyUser(byUserId, "You've already used your Bonus action.");
+    const occ = Object.values(next.crew).find((o) => o.id !== crewId && o.station === target);
+    if (!occ) { c.bonus = true; c.station = target; await saveCombat(next); }
+    else {
+      if (occ.bonus) return notifyUser(byUserId, `${occ.name} has no Bonus action left.`);
+      next.pendingSwap = { fromCrew: crewId, targetCrew: occ.id };
       await saveCombat(next);
-    } else {                                           // swap with another crew → needs confirm + their bonus
-      if (occupant.bonus) return notifyUser(byUserId, "That station's crew has no Bonus action left.");
-      next.pendingSwap = { role, targetRole: target, fromUserId: byUserId, targetUserId: occupant.controllerUserId };
-      await saveCombat(next);
-      const payload = { type: "swapConfirm", toUser: occupant.controllerUserId, fromName: nameById(byUserId), role, target };
-      if (occupant.controllerUserId === game.user.id) promptSwapConfirm(payload);
+      const payload = { type: "swapConfirm", toUser: occ.controllerUserId, fromName: c.name, occName: occ.name };
+      if (occ.controllerUserId === game.user.id) promptSwapConfirm(payload);
       else emit(payload);
     }
   }
   async function gmResolveSwap(accepted) {
     if (!game.user.isGM) return;
     const next = getCombat(); const ps = next.pendingSwap; if (!ps) return;
-    if (!accepted) { next.pendingSwap = null; await saveCombat(next); notifyUser(ps.fromUserId, "Your swap request was declined."); return; }
-    const a = next.seats[ps.role], b = next.seats[ps.targetRole];
-    if (a && b) {
-      a.bonus = true; b.bonus = true;
-      next.seats[ps.targetRole] = { ...a, role: ps.targetRole };
-      next.seats[ps.role] = { ...b, role: ps.role };
-    }
+    const a = next.crew[ps.fromCrew], b = next.crew[ps.targetCrew];
+    if (!accepted) { next.pendingSwap = null; await saveCombat(next); if (a) notifyUser(a.controllerUserId, "Your station swap was declined."); return; }
+    if (a && b) { const t = a.station; a.station = b.station; b.station = t; a.bonus = true; b.bonus = true; }
     next.pendingSwap = null;
     await saveCombat(next);
   }
 
   /* Player-side prompts */
-  async function promptRolePick() {
+  async function promptPickAll() {
     const combat = getCombat();
     if (!combat.active) return;
-    const taken = new Set(Object.keys(combat.seats));
+    const mine = S.crewControlledBy(combat, game.user.id).filter((c) => !c.station);
+    for (const c of mine) await pickStationFor(c.id);
+  }
+  async function pickStationFor(crewId) {
+    const combat = getCombat(); const c = combat.crew[crewId]; if (!c) return;
+    const taken = new Set(Object.values(combat.crew).map((x) => x.station).filter(Boolean));
     const opts = S.STATIONS.filter((st) => combat.rolesEnabled[st.id] && !taken.has(st.id)).map((st) => ({ value: st.id, label: `${st.num}. ${st.name}` }));
-    if (!opts.length) return ui.notifications?.warn("No stations are available to crew right now.");
-    const role = await chooseDlg("Pick your station", "Choose the station you'll crew this combat:", opts);
-    if (!role) return;
-    if (game.user.isGM) gmSeatUser(game.user.id, role);
-    else emit({ type: "pickRole", toGM: true, userId: game.user.id, role });
+    if (!opts.length) return ui.notifications?.warn("No free stations left to crew.");
+    const station = await chooseDlg(`Pick ${c.name}'s station`, "Which station will they crew this combat?", opts);
+    if (!station) return;
+    if (game.user.isGM) gmSetStation(crewId, station, null);
+    else emit({ type: "pickStation", toGM: true, crewId, station, userId: game.user.id });
   }
   async function promptSwapConfirm(msg) {
-    const theirs = S.station(msg.role)?.name || msg.role;
-    const mine = S.station(msg.target)?.name || msg.target;
     const ok = await confirmDlg("Station swap request",
-      `${esc(msg.fromName)} (${esc(theirs)}) wants to swap stations with you (${esc(mine)}). This spends your Bonus action. Accept?`);
+      `${esc(msg.fromName)} wants to swap stations with ${esc(msg.occName || "you")}. This spends your Bonus action. Accept?`);
     if (game.user.isGM) gmResolveSwap(ok);
     else emit({ type: "swapResult", toGM: true, accepted: !!ok });
   }
-  async function addSeatDialog() {
+
+  /* GM dialogs: who's in the fight, add a crew member, edit the roster, enable stations */
+  async function includeDialog(combat) {
+    if (!combat.roster.length) { ui.notifications?.warn("No crew in the roster — set it up via ‘Crew’ first."); return null; }
+    const rows = combat.roster.map((m) => `<label style="display:flex;gap:8px;align-items:center;margin-bottom:3px;">` +
+      `<input type="checkbox" name="${m.id}" checked/> ${esc(m.name)}${m.userId ? ` — ${esc(nameById(m.userId))}` : " — (no player)"}</label>`).join("");
+    const content = `<div style="display:flex;flex-direction:column;"><p>Who's in this fight?</p>${rows}</div>`;
+    const read = (form) => { const s = new Set(); for (const m of combat.roster) if (form.elements[m.id]?.checked) s.add(m.id); return s; };
+    const d = D2();
+    if (d) return d.prompt({ window: { title: "Start ship combat" }, content, ok: { label: "Start", callback: (e, b) => read(b.form) } }).catch(() => null);
+    return new Promise((res) => new Dialog({ title: "Start ship combat", content,
+      buttons: { ok: { label: "Start", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+  }
+  async function addCrewDialog() {
     if (!game.user.isGM) return;
     const combat = getCombat();
-    const taken = new Set(Object.keys(combat.seats));
-    const roleOpts = S.STATIONS.filter((st) => combat.rolesEnabled[st.id] && !taken.has(st.id)).map((st) => ({ value: st.id, label: `${st.num}. ${st.name}` }));
-    if (!roleOpts.length) return ui.notifications?.warn("No free enabled stations.");
-    const role = await chooseDlg("Add seat — station", "Which station?", roleOpts);
-    if (!role) return;
-    const owner = await chooseDlg("Add seat — owner", "Whose station is this (e.g. an absent player)?", game.users.map((u) => ({ value: u.id, label: u.name + (u.isGM ? " (GM)" : "") })));
-    if (!owner) return;
-    gmSeatUser(owner, role);
+    const inFight = new Set(Object.keys(combat.crew));
+    const opts = combat.roster.filter((m) => !inFight.has(m.id)).map((m) => ({ value: m.id, label: m.name + (m.userId ? ` — ${nameById(m.userId)}` : "") }));
+    if (!opts.length) return ui.notifications?.warn("Every roster crew is already in the fight (add more via ‘Edit crew’).");
+    const cid = await chooseDlg("Add crew", "Bring which crew member into the fight?", opts);
+    if (!cid) return;
+    const m = combat.roster.find((x) => x.id === cid); if (!m) return;
+    const next = getCombat();
+    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false };
+    await saveCombat(next);
+  }
+  async function editCrewDialog() {
+    if (!game.user.isGM) return;
+    const combat = getCombat();
+    const userSel = (name, sel) => `<select name="${name}" style="width:150px"><option value="">(no player)</option>` +
+      game.users.map((u) => `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.name)}${u.isGM ? " (GM)" : ""}</option>`).join("") + `</select>`;
+    const rows = combat.roster.map((m, i) => `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">` +
+      `<input name="name_${i}" value="${esc(m.name)}" style="flex:1"/>${userSel("user_" + i, m.userId)}` +
+      `<label style="font-size:11px;white-space:nowrap"><input type="checkbox" name="del_${i}"/> remove</label></div>`).join("");
+    const addRow = `<div style="display:flex;gap:6px;align-items:center;margin-top:6px;border-top:1px solid #555;padding-top:6px;">` +
+      `<input name="name_new" placeholder="+ new crew member" style="flex:1"/>${userSel("user_new", "")}</div>`;
+    const content = `<div style="display:flex;flex-direction:column;max-height:60vh;overflow:auto;"><p>Your ship's crew — assign each to a player (or leave blank for the GM to run).</p>${rows}${addRow}</div>`;
+    const read = (form) => {
+      const roster = [];
+      combat.roster.forEach((m, i) => {
+        if (form.elements["del_" + i]?.checked) return;
+        const nm = (form.elements["name_" + i]?.value || "").trim(); if (!nm) return;
+        roster.push({ id: m.id, name: nm, userId: form.elements["user_" + i]?.value || "" });
+      });
+      const nn = (form.elements["name_new"]?.value || "").trim();
+      if (nn) roster.push({ id: newId(), name: nn, userId: form.elements["user_new"]?.value || "" });
+      return roster;
+    };
+    const d = D2();
+    let result = null;
+    if (d) result = await d.prompt({ window: { title: "Ship crew roster" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null);
+    else result = await new Promise((res) => new Dialog({ title: "Ship crew roster", content,
+      buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+    if (!result) return;
+    const next = getCombat(); next.roster = result;
+    for (const cid of Object.keys(next.crew)) if (!result.find((m) => m.id === cid)) delete next.crew[cid];
+    await saveCombat(next);
   }
   async function rolesDialog() {
     if (!game.user.isGM) return;
@@ -806,24 +901,29 @@
     userId: game.user.id,
     users: usersList(),
     getCombat,
+    get collapsed() { return barCollapsed(); },
+    toggleCollapse: () => { setBarCollapsed(!barCollapsed()); renderBar(); },
     enterCombat, endCombat, nextTurn,
-    spend: (role, which) => { if (game.user.isGM) gmSpend(role, which, null); else emit({ type: "spend", toGM: true, role, which, userId: game.user.id }); },
-    requestSwitch: async (role) => {
-      const combat = getCombat();
-      const taken = new Set(Object.keys(combat.seats));
-      const opts = S.STATIONS.filter((st) => combat.rolesEnabled[st.id] && st.id !== role)
-        .map((st) => ({ value: st.id, label: `${st.num}. ${st.name}${taken.has(st.id) ? " — occupied" : ""}` }));
+    editCrew: editCrewDialog,
+    openRoles: rolesDialog,
+    addCrew: addCrewDialog,
+    broadcastPick: () => { emit({ type: "pickPrompt" }); ui.notifications?.info("Re-sent the station picker to players."); },
+    assignController, excludeCrew,
+    setStation: (crewId, station) => gmSetStation(crewId, station, null),
+    spend: (crewId, which) => { if (game.user.isGM) gmSpend(crewId, which, null); else emit({ type: "spend", toGM: true, crewId, which, userId: game.user.id }); },
+    pickStation: (crewId) => pickStationFor(crewId),
+    switchStation: async (crewId) => {
+      const combat = getCombat(); const c = combat.crew[crewId]; if (!c) return;
+      const opts = S.STATIONS.filter((st) => combat.rolesEnabled[st.id] && st.id !== c.station).map((st) => {
+        const occ = Object.values(combat.crew).find((o) => o.station === st.id);
+        return { value: st.id, label: `${st.num}. ${st.name}${occ ? ` — ${occ.name}` : ""}` };
+      });
       if (!opts.length) return;
       const target = await chooseDlg("Switch station", "Move to which station? (costs a Bonus action)", opts);
       if (!target) return;
-      if (game.user.isGM) gmSwitch(game.user.id, role, target);
-      else emit({ type: "switchRequest", toGM: true, userId: game.user.id, role, target });
-    },
-    pickRole: promptRolePick,
-    addSeat: addSeatDialog,
-    openRoles: rolesDialog,
-    broadcastPick: () => { emit({ type: "pickRolePrompt" }); ui.notifications?.info("Re-sent the station picker to players."); },
-    assignController, removeSeat
+      if (game.user.isGM) gmSwitch(game.user.id, crewId, target);
+      else emit({ type: "switchRequest", toGM: true, userId: game.user.id, crewId, target });
+    }
   });
 
   /* The always-on tracker bar mounted into the Foundry UI */
@@ -848,6 +948,12 @@
       hint: game.i18n?.localize(`${MODULE_ID}.keybind.open.hint`) || "Opens the SSV Silver Gull ship-combat overview.",
       editable: [{ key: "KeyS" }],
       onDown: () => { openShipHUD(); return true; }
+    });
+    game.keybindings.register(MODULE_ID, "toggleCombatBar", {
+      name: "Show/Hide Ship Combat Bar",
+      hint: "Collapses or reopens the ship-combat turn tracker at the top of the screen.",
+      editable: [{ key: "KeyC" }],
+      onDown: () => { setBarCollapsed(!barCollapsed()); renderBar(); return true; }
     });
   });
 
