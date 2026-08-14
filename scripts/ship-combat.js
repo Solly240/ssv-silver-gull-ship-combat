@@ -84,6 +84,30 @@
   ];
   S.station = (id) => S.STATIONS.find((s) => s.id === id);
 
+  // Per-station playable actions. Only the Shields/Comms Officer is built out for now;
+  // every other station is empty and slots in later. Action `type`s:
+  //   shield-allocate → arm the red circles, move the MAIN shield facing
+  //   shield-micro    → arm the green circles, set the SECONDARY shield facing (+2 AC)
+  //   roll            → d20 + ability (from the 5e sheet) or manual, posted to chat
+  //   note            → just posts a description + spends the action (GM adjudicates)
+  S.STATION_ACTIONS = {
+    shields_officer: {
+      main: [
+        { id: "allocate", name: "Allocate Shields", type: "shield-allocate",
+          text: "Pick a facing (fore/aft/port/starboard). Attacks from that direction this round take half damage and the target gets +5 AC." },
+        { id: "jam", name: "Jam / Scramble", type: "roll", ability: "int", dc: 15,
+          text: "Opposed INT vs the enemy (flat DC 15 otherwise). Success: disadvantage on one enemy gunner's attack, OR block their reinforcements this round." },
+        { id: "hail", name: "Hail", type: "roll", ability: "cha", dc: null,
+          text: "CHA check vs enemy morale/attitude DC (GM sets, usually 12–18). Roleplay-first, GM adjudicated." }
+      ],
+      bonus: [
+        { id: "micro", name: "Micro-Adjust", type: "shield-micro",
+          text: "Grant a second facing +2 AC (no damage-halving) on top of your main allocation. Lasts until the start of your next turn." }
+      ]
+    }
+  };
+  S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
+
   // The crew — a persistent roster of characters, each normally played by one user.
   // Combat participants are drawn from this roster; the GM can reassign who controls
   // each one (e.g. cover an absent player) and exclude any from a given fight.
@@ -161,8 +185,9 @@
       hull: { cur: 150, max: 150 },
       ship: "auto", // auto | intact | damaged | cloaked
       systems,
-      // A single directional shield: on/off + which side it covers.
-      shield: { on: true, facing: "fore" }
+      // Main directional shield (on/off + facing) plus an optional smaller SECONDARY
+      // facing (the Shields Officer's Micro-Adjust bonus, +2 AC, cleared each turn).
+      shield: { on: true, facing: "fore", secondary: null }
     };
   };
 
@@ -190,6 +215,7 @@
     if (sh && typeof sh === "object") {
       out.shield.on = !!sh.on;
       if (S.FACINGS.includes(sh.facing)) out.shield.facing = sh.facing;
+      out.shield.secondary = S.FACINGS.includes(sh.secondary) ? sh.secondary : null;
     }
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
     return out;
@@ -257,6 +283,9 @@
   animation:sgsc-pulse 2.6s ease-in-out infinite;}
 .sgsc .sc-shieldimg.dmg{filter:sepia(1) saturate(9) hue-rotate(-38deg) brightness(1) contrast(1.1)
   drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));animation:sgsc-flicker .5s steps(2,end) infinite;}
+/* Secondary shield (Micro-Adjust): smaller, green, inside the main one. */
+.sgsc .sc-shieldimg.secondary{z-index:3;transform:scale(.72);
+  filter:hue-rotate(85deg) saturate(1.2) brightness(1.05) drop-shadow(0 0 7px rgba(80,235,120,.85)) drop-shadow(0 0 16px rgba(80,235,120,.5));}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
 .sgsc .sc-shipph{position:absolute;inset:20% 15%;border:1.5px dashed var(--edge2);border-radius:40% 40% 20% 20%/30% 30% 12% 12%;
@@ -308,6 +337,45 @@
 .sgct .ct-legend{display:flex;gap:14px;justify-content:center;font-size:10px;color:var(--muted);letter-spacing:1px;flex-wrap:wrap;}
 .sgct .ct-legend span{display:inline-flex;align-items:center;gap:5px;}
 .sgct .ct-empty{font-size:11px;color:var(--muted);letter-spacing:1px;text-align:center;}
+
+/* ---- Full-screen station console ---- */
+.sgcon{position:fixed;inset:0;z-index:60;display:flex;gap:0;background:
+   radial-gradient(1200px 700px at 30% -10%,rgba(29,106,134,.22),transparent 60%),#03070d;
+  font-family:'Courier New',monospace;color:#cfeef0;overflow:hidden;}
+.sgcon *{box-sizing:border-box;}
+.sgcon .con-left{flex:1 1 62%;min-width:0;overflow:auto;padding:6px 6px 20px;}
+.sgcon .con-left .sgsc{background:transparent;min-height:100%;}
+.sgcon .con-right{flex:0 0 clamp(320px,34%,460px);border-left:1px solid #12455a;background:rgba(6,14,22,.6);
+  display:flex;flex-direction:column;gap:14px;padding:16px 16px 22px;overflow:auto;}
+.sgcon .con-head{display:flex;align-items:center;gap:10px;}
+.sgcon .con-title{flex:1;font-size:16px;font-weight:700;letter-spacing:2px;color:#38e1c4;text-shadow:0 0 10px rgba(56,225,196,.4);}
+.sgcon select.con-sel{font-family:inherit;font-size:12px;background:#0a1c26;color:#cfeef0;border:1px solid #1d6a86;border-radius:6px;padding:4px 6px;max-width:160px;}
+.sgcon .con-x{cursor:pointer;background:#0a1c26;border:1px solid #1d6a86;color:#cfeef0;border-radius:7px;width:30px;height:30px;font-weight:700;}
+.sgcon .con-x:hover{border-color:#f2b03d;color:#f2b03d;}
+.sgcon .con-crew{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #12455a;border-radius:9px;padding:8px 12px;background:rgba(14,34,48,.5);}
+.sgcon .con-cname{font-size:15px;font-weight:700;}
+.sgcon .con-toks{display:inline-flex;align-items:center;gap:8px;}
+.sgcon .con-toks .ct-tok{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;}
+.sgcon .con-sec{display:flex;flex-direction:column;gap:8px;}
+.sgcon .con-h{font-size:11px;letter-spacing:2px;color:#7fa6b4;border-bottom:1px solid #12455a;padding-bottom:4px;}
+.sgcon .con-btns{display:flex;flex-direction:column;gap:8px;}
+.sgcon .con-btn{font-family:inherit;text-align:left;font-size:13px;font-weight:700;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:9px 12px;cursor:pointer;transition:border-color .12s,box-shadow .12s;}
+.sgcon .con-btn:hover{border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.35);}
+.sgcon .con-btn.armed{border-color:#f2b03d;box-shadow:0 0 14px rgba(242,176,61,.5);color:#f2b03d;}
+.sgcon .con-btn.used,.sgcon .con-btn[disabled]{opacity:.4;cursor:not-allowed;border-style:dashed;box-shadow:none;}
+.sgcon .con-hint{font-size:12px;color:#f2b03d;letter-spacing:1px;text-align:center;}
+.sgcon .con-empty{font-size:12px;color:#6f97a6;letter-spacing:1px;}
+/* shield-allocation circles overlaid on the ship stage */
+.sgsc .con-circle{position:absolute;width:34px;height:34px;border-radius:50%;cursor:pointer;z-index:6;
+  border:3px solid #e0454d;background:rgba(224,69,77,.28);box-shadow:0 0 14px rgba(224,69,77,.8);animation:sgsc-pulse 1.1s ease-in-out infinite;}
+.sgsc .con-circle.secondary{border-color:#4fe07a;background:rgba(80,235,120,.28);box-shadow:0 0 14px rgba(80,235,120,.8);}
+.sgsc .con-circle:hover{transform:scale(1.18);}
+.sgsc .con-circle.pos-fore{top:-2%;left:50%;margin-left:-17px;}
+.sgsc .con-circle.pos-aft{bottom:-2%;left:50%;margin-left:-17px;}
+.sgsc .con-circle.pos-port{left:-3%;top:46%;}
+.sgsc .con-circle.pos-starboard{right:-3%;top:46%;}
+@media (max-width:820px){.sgcon{flex-direction:column;}.sgcon .con-right{flex-basis:auto;border-left:none;border-top:1px solid #12455a;}}
 `;
     document.head.appendChild(st);
   };
@@ -346,10 +414,19 @@
   // The shield depends on the Shield Generator: damaged → the field flickers RED; destroyed → no field.
   function shieldEl(ctx, state) {
     const gen = state.systems.shields;
-    if (!state.shield.on || gen === "destroyed") return "";
-    const file = ctx.assetUrl(`assets/shields/shield-${state.shield.facing}.png`);
-    const cls = "sc-shieldimg" + (gen === "damaged" ? " dmg" : "");
-    return `<img class="${cls}" src="${file}" alt="" onerror="this.style.display='none'">`;
+    if (gen === "destroyed") return "";
+    let html = "";
+    if (state.shield.on) {
+      const file = ctx.assetUrl(`assets/shields/shield-${state.shield.facing}.png`);
+      const cls = "sc-shieldimg" + (gen === "damaged" ? " dmg" : "");
+      html += `<img class="${cls}" src="${file}" alt="" onerror="this.style.display='none'">`;
+    }
+    // Secondary facing (Micro-Adjust): a smaller green shield, reusing the same art tinted.
+    if (state.shield.secondary) {
+      const file2 = ctx.assetUrl(`assets/shields/shield-${state.shield.secondary}.png`);
+      html += `<img class="sc-shieldimg secondary" src="${file2}" alt="" onerror="this.style.display='none'">`;
+    }
+    return html;
   }
 
   // Sub-header shield readout, coloured by the generator's condition.
@@ -577,6 +654,85 @@
     });
   };
 
+  /* ---------------------------------------------------------------------- */
+  /*  Full-screen station console (environment-agnostic)                      */
+  /*                                                                          */
+  /*  kctx = {                                                                */
+  /*    isGM, userId, overviewCtx,           // overviewCtx → S.render(left)  */
+  /*    getCombat(), station, crew, currentCrewId,                           */
+  /*    stationOptions:[{crewId,station,label}], selectStation(crewId),      */
+  /*    armed, setArmed(mode), allocate(facing, slot),                       */
+  /*    runAction(action, isBonus), close()                                  */
+  /*  }                                                                       */
+  /* ---------------------------------------------------------------------- */
+
+  S.renderConsole = function (root, kctx) {
+    S.ensureStyles();
+    root.className = "sgcon";
+    root.innerHTML = `<div class="con-left"></div><div class="con-right"></div>`;
+    const leftEl = root.querySelector(".con-left");
+    const rightEl = root.querySelector(".con-right");
+
+    // Left column = the existing overview.
+    const leftInner = document.createElement("div");
+    leftEl.appendChild(leftInner);
+    S.render(leftInner, kctx.overviewCtx);
+
+    // Shield-allocation circles overlaid on the ship when armed.
+    if (kctx.armed) {
+      const wrap = leftInner.querySelector(".sc-shipwrap");
+      if (wrap) for (const f of S.FACINGS) {
+        const c = document.createElement("div");
+        c.className = `con-circle pos-${f}${kctx.armed === "secondary" ? " secondary" : ""}`;
+        c.title = `Allocate to ${S.FACING_LABEL[f]}`;
+        c.onclick = () => kctx.allocate(f, kctx.armed);
+        wrap.appendChild(c);
+      }
+    }
+
+    // Right column = station action panel.
+    const stId = kctx.station, crew = kctx.crew;
+    const acts = stId ? S.stationActions(stId) : { main: [], bonus: [] };
+    const stName = stId ? (S.station(stId)?.name || stId) : "STATION";
+    const picker = (kctx.isGM && kctx.stationOptions?.length)
+      ? `<select class="con-sel" title="Drive which station">${kctx.stationOptions.map((o) => `<option value="${o.crewId}" ${o.crewId === kctx.currentCrewId ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+      : "";
+
+    if (!stId || !crew) {
+      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-x" title="Close (Esc)">✕</button></div>` +
+        `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it." : "You're not manning a station yet. Join combat and pick a station to see its controls here."}</div>`;
+      rightEl.querySelector(".con-x").onclick = () => kctx.close();
+      const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
+      return;
+    }
+
+    const btn = (a, isBonus) => {
+      const used = isBonus ? crew.bonus : crew.action;
+      const armedThis = (a.type === "shield-allocate" && kctx.armed === "main") || (a.type === "shield-micro" && kctx.armed === "secondary");
+      return `<button class="con-btn${used ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${used ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : ""}</button>`;
+    };
+    rightEl.innerHTML =
+      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
+      `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}</span></div>` +
+      `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
+      `<div class="con-sec"><div class="con-h">BONUS ACTION${crew.bonus ? " · used" : ""}</div><div class="con-btns">${acts.bonus.map((a) => btn(a, true)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
+      (kctx.armed ? `<div class="con-hint">Click a ${kctx.armed === "main" ? "red" : "green"} circle on the ship to allocate — or click the button again to cancel.</div>` : "");
+
+    rightEl.querySelector(".con-x").onclick = () => kctx.close();
+    const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
+    const wire = (a, isBonus) => {
+      const el = rightEl.querySelector(`[data-act="${a.id}"]`); if (!el || el.disabled) return;
+      el.onclick = () => {
+        if (a.type === "shield-allocate") kctx.setArmed(kctx.armed === "main" ? null : "main");
+        else if (a.type === "shield-micro") kctx.setArmed(kctx.armed === "secondary" ? null : "secondary");
+        else kctx.runAction(a, isBonus);
+      };
+    };
+    acts.main.forEach((a) => wire(a, false));
+    acts.bonus.forEach((a) => wire(a, true));
+  };
+
   // Expose for the preview harness and external callers.
   (typeof globalThis !== "undefined" ? globalThis : window).SSVShipHUD = S;
 
@@ -622,31 +778,124 @@
 
   const ctx = () => ({ isGM: game.user.isGM, getState, setState, assetUrl, promptHull });
 
-  /* -- Standalone window ------------------------------------------------- */
+  /* -- Full-screen station console (frameless overlay) ------------------- */
 
-  let _win = null;
-  function openShipHUD() {
-    const Api = foundry.applications?.api;
-    if (!Api?.ApplicationV2) return ui.notifications?.error("Ship Overview needs Foundry v12+ (ApplicationV2).");
-    if (_win?.rendered) { _win.close(); return; }
-    const { ApplicationV2 } = Api;
-    if (!_win) {
-      class ShipHUDWindow extends ApplicationV2 {
-        static DEFAULT_OPTIONS = {
-          id: "ssv-ship-hud", classes: ["ssv-ship-hud"],
-          window: { title: "SSV Silver Gull — Ship Overview" },
-          position: { width: 940, height: "auto" }
-        };
-        async _renderHTML() { return ""; }
-        _replaceHTML(_r, content) { content.innerHTML = "<div></div>"; S.render(content.firstElementChild, ctx()); }
-      }
-      _win = new ShipHUDWindow();
+  let _console = null;
+  let armed = null;            // transient shield-allocation mode: 'main' | 'secondary' | null
+  let gmDriveCrewId = null;    // which crew the GM is driving in the console
+
+  const consoleOpen = () => _console && _console.style.display !== "none" && document.body.contains(_console);
+  function renderConsole() {
+    if (!_console) { _console = document.createElement("div"); _console.id = "ssv-ship-console"; document.body.appendChild(_console); }
+    _console.style.display = "flex";   // must be flex (the .sgcon layout); inline style wins over the class
+    try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
+  }
+  function closeConsole() { armed = null; if (_console) _console.style.display = "none"; }
+  function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
+  function refreshOpen() { if (consoleOpen()) renderConsole(); }
+
+  function drivenCrew() {
+    const combat = getCombat();
+    if (game.user.isGM) {
+      const stationed = Object.values(combat.crew).filter((c) => c.station);
+      return stationed.find((x) => x.id === gmDriveCrewId) || stationed[0] || null;
     }
-    _win.render(true);
+    return S.crewControlledBy(combat, game.user.id).filter((c) => c.station)[0] || null;
+  }
+  function consoleCtx() {
+    const combat = getCombat();
+    const crew = drivenCrew();
+    const stName = crew?.station ? (S.station(crew.station)?.name || crew.station) : "";
+    return {
+      isGM: game.user.isGM, userId: game.user.id,
+      overviewCtx: ctx(),
+      getCombat,
+      station: crew?.station || null, crew, currentCrewId: crew?.id || null,
+      stationOptions: game.user.isGM
+        ? Object.values(combat.crew).filter((c) => c.station).map((c) => ({ crewId: c.id, station: c.station, label: `${c.name} — ${S.station(c.station)?.name || c.station}` }))
+        : [],
+      selectStation: (cid) => { gmDriveCrewId = cid; armed = null; renderConsole(); },
+      get armed() { return armed; },
+      setArmed: (m) => { armed = m; renderConsole(); },
+      allocate: (facing, slot) => {
+        armed = null;
+        if (!crew) return;
+        if (game.user.isGM) gmAllocateShield(crew.id, facing, slot, null);
+        else emit({ type: "allocateShield", toGM: true, crewId: crew.id, facing, slot, userId: game.user.id });
+        renderConsole();
+      },
+      runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
+      close: () => closeConsole()
+    };
   }
 
-  function refreshOpen() {
-    if (_win?.rendered) _win.render(false);
+  async function gmAllocateShield(crewId, facing, slot, byUserId) {
+    if (!game.user.isGM) return;
+    const combat = getCombat(); const c = combat.crew[crewId]; if (!c) return;
+    const who = byUserId || game.user.id;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
+    if (c.station !== "shields_officer") return notifyUser(who, "Only the Shields Officer can allocate shields.");
+    if (!S.FACINGS.includes(facing)) return;
+    const ship = getState();
+    if (ship.systems.shields === "destroyed") return notifyUser(who, "The Shield Generator is destroyed.");
+    if (slot === "secondary") {
+      if (c.bonus) return notifyUser(who, "Bonus action already used.");
+      ship.shield.secondary = facing; await setState(ship);
+      c.bonus = true; await saveCombat(combat);
+    } else {
+      if (c.action) return notifyUser(who, "Main action already used.");
+      ship.shield.on = true; ship.shield.facing = facing; await setState(ship);
+      c.action = true; await saveCombat(combat);
+    }
+  }
+
+  // Roll dialog: pull the ability mod from the acting player's dnd5e sheet, or manual total.
+  async function stationRoll(a, crew, stName) {
+    const abil = a.ability, abilLabel = abil ? abil.toUpperCase() : "";
+    const dcTxt = a.dc != null ? `DC ${a.dc}` : "a GM-set DC (usually 12–18)";
+    const actor = game.user.character;
+    const mod = actor?.system?.abilities?.[abil]?.mod;
+    const hasMod = Number.isFinite(mod);
+    const content = `<div style="display:flex;flex-direction:column;gap:8px;min-width:300px;">` +
+      `<p style="opacity:.85">${esc(a.text)}</p><p>${abilLabel} check vs ${dcTxt}.</p>` +
+      (hasMod ? `<p>Sheet: <b>${esc(actor.name)}</b> · ${abilLabel} <b>${mod >= 0 ? "+" : ""}${mod}</b></p>` : `<p><i>No linked character — enter your total.</i></p>`) +
+      `<label>Manual total: <input type="number" name="total" placeholder="d20 + mods" style="width:90px"/></label></div>`;
+    const D = D2();
+    let choice = "cancel", form = null;
+    if (D) {
+      const buttons = [];
+      if (hasMod) buttons.push({ action: "roll", label: `Roll 1d20 ${mod >= 0 ? "+" : ""}${mod}`, default: true, callback: (e, b) => { form = b.form; return "roll"; } });
+      buttons.push({ action: "manual", label: "Use manual total", default: !hasMod, callback: (e, b) => { form = b.form; return "manual"; } });
+      buttons.push({ action: "cancel", label: "Cancel", callback: () => "cancel" });
+      choice = await D.wait({ window: { title: a.name }, content, buttons, rejectClose: false }).catch(() => "cancel");
+    } else {
+      choice = await new Promise((res) => {
+        const bt = {};
+        if (hasMod) bt.roll = { label: "Roll", callback: (h) => { form = h[0].querySelector("form") || h[0]; res("roll"); } };
+        bt.manual = { label: "Manual", callback: (h) => { form = h[0].querySelector("form") || h[0]; res("manual"); } };
+        bt.cancel = { label: "Cancel", callback: () => res("cancel") };
+        new Dialog({ title: a.name, content, buttons: bt, default: hasMod ? "roll" : "manual", close: () => res("cancel") }).render(true);
+      });
+    }
+    if (choice === "cancel" || !choice) return false;
+    let total, rollObj = null;
+    if (choice === "roll") { rollObj = await (new Roll(`1d20 + ${mod}`)).evaluate(); total = rollObj.total; }
+    else { total = Number(form?.elements?.total?.value); if (!Number.isFinite(total)) { ui.notifications?.warn("Enter a number for your total."); return false; } }
+    const pass = a.dc != null ? (total >= a.dc ? ` — <b style="color:#42d16a">SUCCESS</b>` : ` — <b style="color:#e0454d">FAIL</b>`) : "";
+    const body = `<div><b>${esc(stName)}</b> · ${esc(crew.name)}<br>${esc(a.name)} — <b>${total}</b>${pass}<br><span style="opacity:.7">${esc(a.text)}</span></div>`;
+    await ChatMessage.create({ content: body, speaker: { alias: "SSV Silver Gull" }, rolls: rollObj ? [rollObj] : undefined });
+    return true;
+  }
+  async function runStationAction(a, isBonus, crew, stName) {
+    if (!crew) return;
+    let ok = true;
+    if (a.type === "roll") ok = await stationRoll(a, crew, stName);
+    else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
+    if (!ok) return;
+    const which = isBonus ? "bonus" : "action";
+    if (game.user.isGM) gmSpend(crew.id, which, null);
+    else emit({ type: "spend", toGM: true, crewId: crew.id, which, userId: game.user.id });
   }
 
   /* -- Ship combat: setting, socket, dialogs, handlers ------------------- */
@@ -700,6 +949,7 @@
       case "switchRequest":  gmSwitch(msg.userId, msg.crewId, msg.target); break;
       case "swapConfirm":    promptSwapConfirm(msg); break;
       case "swapResult":     gmResolveSwap(msg.accepted); break;
+      case "allocateShield": gmAllocateShield(msg.crewId, msg.facing, msg.slot, msg.userId); break;
       case "notify":         ui.notifications?.warn(msg.text); break;
     }
   }
@@ -738,6 +988,9 @@
     for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; }
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
+    // Micro-Adjust's secondary shield lasts only until the start of the next turn.
+    const ship = getState();
+    if (ship.shield.secondary) { ship.shield.secondary = null; await setState(ship); }
   }
   async function gmSpend(crewId, which, byUserId) {
     if (!game.user.isGM) return;
@@ -966,6 +1219,10 @@
     }
     game.socket.on(SOCKET, onSocket);
     renderBar();
+    // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
+    }, true);
     const mod = game.modules.get(MODULE_ID);
     if (mod) mod.api = { open: openShipHUD, getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,

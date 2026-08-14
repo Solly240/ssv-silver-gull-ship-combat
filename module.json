@@ -1,9 +1,9 @@
 {
   "id": "ssv-silver-gull-ship-combat",
   "title": "SSV Silver Gull — Ship Combat",
-  "description": "Ship-combat systems for the SSV Silver Gull campaign. Ship Overview HUD (press S) plus a crew-centric multiplayer turn/action tracker: a roster of crew (the GM can reassign an absent player's crew to someone present, or exclude crew), each with a top-of-screen Action + Bonus for the ship's turn. Bar can be hidden.",
+  "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and a per-station action console. First station built: Shields / Comms Officer — Allocate Shields (click a side of the ship), Jam/Hail (roll from your 5e sheet or manual), Micro-Adjust (a green secondary shield).",
   "authors": [ { "name": "Solly240" } ],
-  "version": "0.3.0",
+  "version": "0.4.0",
   "compatibility": { "minimum": "12", "verified": "14" },
   "socket": true,
   "esmodules": [ "scripts/ship-combat.js" ],
