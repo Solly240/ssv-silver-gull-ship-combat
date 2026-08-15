@@ -237,7 +237,12 @@
       systems,
       // Main directional shield (on/off + facing) plus an optional smaller SECONDARY
       // facing (the Shields Officer's Micro-Adjust bonus, +2 AC, cleared each turn).
-      shield: { on: true, facing: "fore", secondary: null }
+      shield: { on: true, facing: "fore", secondary: null },
+      // Ship resources for the inventory screen (GM-tunable).
+      fuel:  { cur: 100, max: 100 },
+      power: { cur: 100, max: 100 },
+      tuning: { fuelPerItem: 25, powerPerItem: 25, convertFuel: 10, convertPower: 50 },
+      actorId: ""   // GM-selected ship (dnd5e vehicle) actor; falls back to a name lookup
     };
   };
 
@@ -254,7 +259,16 @@
       },
       ship: stored.ship || d.ship,
       systems: { ...d.systems },
-      shield: { ...d.shield }
+      shield: { ...d.shield },
+      fuel:  { max: Number(stored.fuel?.max  ?? d.fuel.max),  cur: Number(stored.fuel?.cur  ?? d.fuel.cur)  },
+      power: { max: Number(stored.power?.max ?? d.power.max), cur: Number(stored.power?.cur ?? d.power.cur) },
+      tuning: {
+        fuelPerItem:  Number(stored.tuning?.fuelPerItem  ?? d.tuning.fuelPerItem),
+        powerPerItem: Number(stored.tuning?.powerPerItem ?? d.tuning.powerPerItem),
+        convertFuel:  Number(stored.tuning?.convertFuel  ?? d.tuning.convertFuel),
+        convertPower: Number(stored.tuning?.convertPower ?? d.tuning.convertPower)
+      },
+      actorId: String(stored.actorId ?? d.actorId)
     };
     for (const sys of S.SYSTEMS) {
       const v = stored.systems?.[sys.id];
@@ -268,6 +282,11 @@
       out.shield.secondary = S.FACINGS.includes(sh.secondary) ? sh.secondary : null;
     }
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
+    for (const g of ["fuel", "power"]) {
+      if (!(out[g].max > 0)) out[g].max = d[g].max;
+      out[g].cur = Math.max(0, Math.min(out[g].cur, out[g].max));
+    }
+    for (const k in out.tuning) if (!Number.isFinite(out.tuning[k]) || out.tuning[k] < 0) out.tuning[k] = d.tuning[k];
     return out;
   };
 
@@ -406,6 +425,26 @@
 .sgcon select.con-sel{font-family:inherit;font-size:12px;background:#0a1c26;color:#cfeef0;border:1px solid #1d6a86;border-radius:6px;padding:4px 6px;max-width:160px;}
 .sgcon .con-x{cursor:pointer;background:#0a1c26;border:1px solid #1d6a86;color:#cfeef0;border-radius:7px;width:30px;height:30px;font-weight:700;}
 .sgcon .con-x:hover{border-color:#f2b03d;color:#f2b03d;}
+.sgcon .con-inv{cursor:pointer;background:#0a1c26;border:1px solid #1d6a86;color:#cfeef0;border-radius:7px;height:30px;padding:0 9px;font-weight:700;}
+.sgcon .con-inv:hover{border-color:#38e1c4;color:#38e1c4;}
+/* inventory panel */
+.sgcon .con-gauge{border:1px solid #12455a;border-radius:9px;padding:8px 10px;background:rgba(14,34,48,.5);}
+.sgcon .con-gauge.gm{cursor:pointer;}
+.sgcon .con-gauge.gm:hover{border-color:#1d6a86;}
+.sgcon .con-gauge .cg-row{display:flex;justify-content:space-between;font-size:12px;letter-spacing:1px;color:#7fa6b4;}
+.sgcon .con-gauge .cg-val{color:#cfeef0;font-weight:700;}
+.sgcon .con-gauge .cg-bar{height:12px;margin-top:5px;background:#0a1c26;border:1px solid #12455a;border-radius:7px;overflow:hidden;}
+.sgcon .con-gauge .cg-fill{height:100%;border-radius:7px;transition:width .25s;}
+.sgcon .con-gauge.fuel .cg-fill{background:#f2b03d;box-shadow:0 0 10px rgba(242,176,61,.6);}
+.sgcon .con-gauge.power .cg-fill{background:#38e1c4;box-shadow:0 0 10px rgba(56,225,196,.6);}
+.sgcon .con-gmrow{display:flex;gap:8px;}
+.sgcon .con-items{display:flex;flex-direction:column;gap:6px;}
+.sgcon .con-item{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #12455a;border-radius:8px;padding:6px 9px;background:rgba(14,34,48,.4);}
+.sgcon .con-item .ci-name{font-size:13px;}
+.sgcon .con-item .ci-qty{color:#7fa6b4;}
+.sgcon .con-item .ci-btns{display:inline-flex;gap:5px;flex:none;}
+.sgcon .con-mini{cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:6px;padding:3px 7px;white-space:nowrap;}
+.sgcon .con-mini:hover{border-color:#38e1c4;color:#38e1c4;}
 .sgcon .con-crew{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #12455a;border-radius:9px;padding:8px 12px;background:rgba(14,34,48,.5);}
 .sgcon .con-cname{font-size:15px;font-weight:700;}
 .sgcon .con-toks{display:inline-flex;align-items:center;gap:8px;}
@@ -718,6 +757,47 @@
   /*  }                                                                       */
   /* ---------------------------------------------------------------------- */
 
+  // Ship inventory panel (right column, when kctx.invMode). Reads gauges from kctx.getState()
+  // and item lists from kctx.shipItems / kctx.playerItems; all mutations go through kctx intents.
+  function renderInventoryPanel(rightEl, kctx) {
+    const st = kctx.getState();
+    const t = st.tuning, ship = kctx.shipItems || [], mine = kctx.playerItems || [];
+    const gauge = (label, g, cls) => {
+      const pct = g.max > 0 ? Math.max(0, Math.min(1, g.cur / g.max)) * 100 : 0;
+      return `<div class="con-gauge ${cls}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${kctx.isGM ? "Click to set" : ""}">` +
+        `<div class="cg-row"><span>${label}</span><span class="cg-val">${g.cur} / ${g.max}</span></div>` +
+        `<div class="cg-bar"><div class="cg-fill" style="width:${pct}%"></div></div></div>`;
+    };
+    const qty = (it) => it.qty > 1 ? ` <span class="ci-qty">×${it.qty}</span>` : "";
+    const shipRow = (it) => `<div class="con-item" data-id="${it.id}"><span class="ci-name">${esc(it.name)}${qty(it)}</span>` +
+      `<span class="ci-btns"><button class="con-mini" data-use="fuel" title="Use as fuel (+${t.fuelPerItem})">⛽</button>` +
+      `<button class="con-mini" data-use="power" title="Use as power (+${t.powerPerItem})">⚡</button>` +
+      `<button class="con-mini" data-move title="Move to your inventory">→ Me</button></span></div>`;
+    const myRow = (it) => `<div class="con-item" data-id="${it.id}"><span class="ci-name">${esc(it.name)}${qty(it)}</span>` +
+      `<span class="ci-btns"><button class="con-mini" data-move title="Move to the ship">→ Ship</button></span></div>`;
+    const gmRow = kctx.isGM ? `<div class="con-gmrow"><button class="con-mini" data-act="tune" title="Set fuel/power amounts">Tune</button><button class="con-mini" data-act="actor" title="Pick the ship actor">Ship actor</button></div>` : "";
+    rightEl.innerHTML =
+      `<div class="con-head"><span class="con-title">SHIP INVENTORY</span><button class="con-inv" data-act="stations" title="Back to stations">⚔</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-sec">${gauge("FUEL", st.fuel, "fuel")}${gauge("POWER", st.power, "power")}` +
+      `<button class="con-btn" data-act="convert">Convert ${t.convertFuel} fuel → ${t.convertPower} power ⚡</button>${gmRow}</div>` +
+      `<div class="con-sec"><div class="con-h">SHIP CARGO</div><div class="con-items">${ship.length ? ship.map(shipRow).join("") : `<span class="con-empty">— empty —</span>`}</div></div>` +
+      `<div class="con-sec"><div class="con-h">YOUR ITEMS</div><div class="con-items">${kctx.hasPlayerActor ? (mine.length ? mine.map(myRow).join("") : `<span class="con-empty">— empty —</span>`) : `<span class="con-empty">No character is assigned to you.</span>`}</div></div>`;
+    rightEl.querySelector(".con-x").onclick = () => kctx.close();
+    rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleInv();
+    rightEl.querySelector('[data-act="convert"]').onclick = () => kctx.convert();
+    const tune = rightEl.querySelector('[data-act="tune"]'); if (tune) tune.onclick = () => kctx.tune();
+    const actor = rightEl.querySelector('[data-act="actor"]'); if (actor) actor.onclick = () => kctx.setActor();
+    if (kctx.isGM) rightEl.querySelectorAll(".con-gauge.gm").forEach((g) => { g.onclick = () => (g.dataset.edit === "fuel" ? kctx.editFuel() : kctx.editPower()); });
+    rightEl.querySelectorAll(".con-sec .con-items").forEach((list, idx) => {
+      const fromShip = idx === 0;   // list 0 = ship cargo, list 1 = your items
+      list.querySelectorAll(".con-item").forEach((row) => {
+        const id = row.dataset.id;
+        const mv = row.querySelector("[data-move]"); if (mv) mv.onclick = () => kctx.moveItem(fromShip, id);
+        row.querySelectorAll("[data-use]").forEach((b) => { b.onclick = () => (b.dataset.use === "fuel" ? kctx.useFuel(id) : kctx.usePower(id)); });
+      });
+    });
+  }
+
   S.renderConsole = function (root, kctx) {
     S.ensureStyles();
     root.className = "sgcon";
@@ -742,6 +822,9 @@
       }
     }
 
+    // Right column: inventory mode overrides the station panel.
+    if (kctx.invMode) { renderInventoryPanel(rightEl, kctx); return; }
+
     // Right column = station action panel.
     const stId = kctx.station, crew = kctx.crew;
     const acts = stId ? S.stationActions(stId) : { main: [], bonus: [] };
@@ -751,9 +834,10 @@
       : "";
 
     if (!stId || !crew) {
-      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-x" title="Close (Esc)">✕</button></div>` +
+      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">⛃</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
         `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it." : "You're not manning a station yet. Join combat and pick a station to see its controls here."}</div>`;
       rightEl.querySelector(".con-x").onclick = () => kctx.close();
+      const inv0 = rightEl.querySelector("[data-inv]"); if (inv0) inv0.onclick = () => kctx.toggleInv();
       const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
       return;
     }
@@ -766,7 +850,7 @@
       return `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>`;
     };
     rightEl.innerHTML =
-      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">⛃</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
       `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
       `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}${grantedTokens(crew.granted)}</span></div>` +
       `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
@@ -774,6 +858,7 @@
       (kctx.armed ? `<div class="con-hint">Click a ${kctx.armed === "main" ? "red" : "green"} circle on the ship to allocate — or click the button again to cancel.</div>` : "");
 
     rightEl.querySelector(".con-x").onclick = () => kctx.close();
+    const invBtn = rightEl.querySelector("[data-inv]"); if (invBtn) invBtn.onclick = () => kctx.toggleInv();
     const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
     const wire = (a, isBonus) => {
       const el = rightEl.querySelector(`[data-act="${a.id}"]`); if (!el || el.disabled) return;
@@ -837,6 +922,7 @@
   let _console = null;
   let armed = null;            // transient shield-allocation mode: 'main' | 'secondary' | null
   let gmDriveCrewId = null;    // which crew the GM is driving in the console
+  let invMode = false;         // console showing the inventory panel instead of the station panel
 
   const consoleOpen = () => _console && _console.style.display !== "none" && document.body.contains(_console);
   function renderConsole() {
@@ -845,7 +931,7 @@
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
     renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; if (_console) _console.style.display = "none"; renderBar(); }
+  function closeConsole() { armed = null; invMode = false; if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -880,8 +966,126 @@
         renderConsole();
       },
       runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
+      // Inventory
+      invMode, toggleInv: () => { invMode = !invMode; armed = null; renderConsole(); },
+      getState,
+      shipItems: physicalItems(getShipActor()),
+      playerItems: physicalItems(game.user.character),
+      hasPlayerActor: !!game.user.character,
+      moveItem: async (fromShip, itemId) => {
+        const src = fromShip ? getShipActor() : game.user.character;
+        const item = src?.items?.get(itemId); if (!item) return;
+        const max = item.system?.quantity ?? 1;
+        let qty = 1;
+        if (max > 1) { qty = await promptNumber(`Move ${item.name}`, `How many? (max ${max})`, max, max); if (qty == null) return; }
+        if (game.user.isGM) gmMoveItem(fromShip, itemId, qty, null);
+        else emit({ type: "moveItem", toGM: true, fromShip, itemId, qty, userId: game.user.id });
+      },
+      useFuel: (itemId) => { if (game.user.isGM) gmUseResource("fuel", itemId, null); else emit({ type: "useResource", toGM: true, kind: "fuel", itemId, userId: game.user.id }); },
+      usePower: (itemId) => { if (game.user.isGM) gmUseResource("power", itemId, null); else emit({ type: "useResource", toGM: true, kind: "power", itemId, userId: game.user.id }); },
+      convert: () => { if (game.user.isGM) gmConvert(null); else emit({ type: "convert", toGM: true, userId: game.user.id }); },
+      editFuel: () => gmEditGauge("fuel"),
+      editPower: () => gmEditGauge("power"),
+      tune: gmTuneDialog,
+      setActor: gmSetActorDialog,
       close: () => closeConsole()
     };
+  }
+
+  /* -- Ship inventory: actor lookup, GM handlers ------------------------- */
+
+  const PHYSICAL_TYPES = new Set(["weapon", "equipment", "consumable", "tool", "loot", "container", "backpack"]);
+  function getShipActor() {
+    const st = getState();
+    return (st.actorId && game.actors.get(st.actorId)) || game.actors.getName(st.name) || null;
+  }
+  function physicalItems(actor) {
+    if (!actor?.items) return [];
+    return actor.items.filter((i) => PHYSICAL_TYPES.has(i.type)).map((i) => ({ id: i.id, name: i.name, qty: i.system?.quantity ?? 1 }));
+  }
+  async function promptNumber(title, label, value, max) {
+    const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="number" name="v" value="${value}" min="1"${max != null ? ` max="${max}"` : ""}/></label></div>`;
+    const read = (form) => { const n = Number(form.elements.v.value); return Number.isFinite(n) ? n : null; };
+    const d = D2();
+    if (d) return d.prompt({ window: { title }, content, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
+    return new Promise((res) => new Dialog({ title, content, buttons: { ok: { label: "OK", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+  }
+
+  async function gmMoveItem(fromShip, itemId, qty, byUserId) {
+    if (!game.user.isGM) return;
+    const pc = (byUserId && game.users.get(byUserId)?.character) || game.user.character;
+    const ship = getShipActor();
+    if (!ship) return notifyUser(byUserId || game.user.id, "No ship actor configured (GM: Inventory → Ship actor).");
+    if (!pc) return notifyUser(byUserId || game.user.id, "No character assigned to that player.");
+    const src = fromShip ? ship : pc, dst = fromShip ? pc : ship;
+    const item = src.items.get(itemId); if (!item) return;
+    const have = item.system?.quantity ?? 1;
+    const move = Math.max(1, Math.min(Number(qty) || 1, have));
+    const twin = dst.items.find((i) => i.name === item.name && i.type === item.type);
+    if (twin) await twin.update({ "system.quantity": (twin.system?.quantity ?? 1) + move });
+    else { const data = item.toObject(); if (data.system) data.system.quantity = move; delete data._id; await dst.createEmbeddedDocuments("Item", [data]); }
+    if (have - move > 0) await item.update({ "system.quantity": have - move });
+    else await item.delete();
+    refreshOpen();
+  }
+  async function gmUseResource(kind, itemId, byUserId) {
+    if (!game.user.isGM) return;
+    const ship = getShipActor(); const item = ship?.items?.get(itemId); if (!item) return;
+    const st = getState();
+    const add = kind === "fuel" ? st.tuning.fuelPerItem : st.tuning.powerPerItem;
+    const have = item.system?.quantity ?? 1;
+    if (have - 1 > 0) await item.update({ "system.quantity": have - 1 }); else await item.delete();
+    st[kind].cur = Math.min(st[kind].max, st[kind].cur + add);
+    await setState(st);
+    await ChatMessage.create({ content: `Used <b>${esc(item.name)}</b> → +${add} ${kind}`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  async function gmConvert(byUserId) {
+    if (!game.user.isGM) return;
+    const st = getState(); const t = st.tuning;
+    if (st.fuel.cur < t.convertFuel) return notifyUser(byUserId || game.user.id, "Not enough fuel to convert.");
+    st.fuel.cur -= t.convertFuel;
+    st.power.cur = Math.min(st.power.max, st.power.cur + t.convertPower);
+    await setState(st);
+    await ChatMessage.create({ content: `Converted <b>${t.convertFuel}</b> fuel → <b>${t.convertPower}</b> power`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  async function gmEditGauge(kind) {
+    if (!game.user.isGM) return;
+    const st = getState();
+    const cur = await promptNumber(`Set ${kind}`, `${kind.toUpperCase()} current (max ${st[kind].max})`, st[kind].cur, st[kind].max);
+    if (cur == null) return;
+    st[kind].cur = Math.max(0, Math.min(cur, st[kind].max));
+    await setState(st);
+  }
+  async function gmTuneDialog() {
+    if (!game.user.isGM) return;
+    const st = getState(), t = st.tuning;
+    const content = `<div style="display:flex;flex-direction:column;gap:6px;">
+      <label>Fuel per item <input type="number" name="fpi" value="${t.fuelPerItem}" min="0"/></label>
+      <label>Power per item <input type="number" name="ppi" value="${t.powerPerItem}" min="0"/></label>
+      <label>Convert — fuel spent <input type="number" name="cf" value="${t.convertFuel}" min="0"/></label>
+      <label>Convert — power gained <input type="number" name="cp" value="${t.convertPower}" min="0"/></label>
+      <label>Fuel max <input type="number" name="fmax" value="${st.fuel.max}" min="1"/></label>
+      <label>Power max <input type="number" name="pmax" value="${st.power.max}" min="1"/></label></div>`;
+    const read = (f) => ({ fpi: +f.elements.fpi.value, ppi: +f.elements.ppi.value, cf: +f.elements.cf.value, cp: +f.elements.cp.value, fmax: +f.elements.fmax.value, pmax: +f.elements.pmax.value });
+    const d = D2();
+    const r = d
+      ? await d.prompt({ window: { title: "Tune fuel & power" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
+      : await new Promise((res) => new Dialog({ title: "Tune fuel & power", content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+    if (!r) return;
+    st.tuning = { fuelPerItem: r.fpi, powerPerItem: r.ppi, convertFuel: r.cf, convertPower: r.cp };
+    st.fuel.max = Math.max(1, r.fmax); st.power.max = Math.max(1, r.pmax);
+    st.fuel.cur = Math.min(st.fuel.cur, st.fuel.max); st.power.cur = Math.min(st.power.cur, st.power.max);
+    await setState(st);
+  }
+  async function gmSetActorDialog() {
+    if (!game.user.isGM) return;
+    const vehicles = game.actors.filter((a) => a.type === "vehicle");
+    const opts = (vehicles.length ? vehicles : game.actors.contents).map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }));
+    if (!opts.length) return ui.notifications?.warn("No actors found.");
+    const id = await chooseDlg("Ship actor", "Which actor is the ship? (its inventory is the ship's cargo)", opts);
+    if (!id) return;
+    const st = getState(); st.actorId = id; await setState(st);
+    ui.notifications?.info(`Ship actor set to ${game.actors.get(id)?.name}.`);
   }
 
   // Spend a crew's action: use the normal Main/Bonus first, then a granted extra (purple star).
@@ -1041,6 +1245,9 @@
       case "allocateShield": gmAllocateShield(msg.crewId, msg.facing, msg.slot, msg.userId); break;
       case "consume":        gmConsume(msg.crewId, msg.which, msg.userId); break;
       case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
+      case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
+      case "useResource":    gmUseResource(msg.kind, msg.itemId, msg.userId); break;
+      case "convert":        gmConvert(msg.userId); break;
       case "notify":         ui.notifications?.warn(msg.text); break;
     }
   }
@@ -1314,6 +1521,10 @@
     }
     game.socket.on(SOCKET, onSocket);
     renderBar();
+    // Live inventory: re-render the open console when the ship actor or this user's character changes.
+    const itemTouches = (item) => { const p = item?.parent; return p && (p === getShipActor() || p === game.user.character); };
+    for (const hook of ["createItem", "updateItem", "deleteItem"]) Hooks.on(hook, (item) => { if (consoleOpen() && invMode && itemTouches(item)) refreshOpen(); });
+    Hooks.on("updateActor", (actor) => { if (consoleOpen() && invMode && (actor === getShipActor() || actor === game.user.character)) refreshOpen(); });
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }

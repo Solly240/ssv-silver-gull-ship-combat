@@ -1,9 +1,9 @@
 {
   "id": "ssv-silver-gull-ship-combat",
   "title": "SSV Silver Gull — Ship Combat",
-  "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and per-station action consoles for all 15 stations. Shields/Comms is fully built (Allocate Shields, Jam/Hail rolls, green Micro-Adjust); the Captain's Grant Actions gives a crew a purple-star extra action.",
+  "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and per-station action consoles for all 15 stations. Shields/Comms is fully built (Allocate Shields, Jam/Hail rolls, yellow-dotted Micro-Adjust); the Captain's Grant Actions gives a crew a purple-star extra action. Ship Inventory (⛃) links the dnd5e ship actor: move items crew↔ship, FUEL/POWER gauges, use fuel items, convert fuel→power.",
   "authors": [ { "name": "Solly240" } ],
-  "version": "0.6.2",
+  "version": "0.7.0",
   "compatibility": { "minimum": "12", "verified": "14" },
   "socket": true,
   "esmodules": [ "scripts/ship-combat.js" ],
