@@ -84,13 +84,48 @@
   ];
   S.station = (id) => S.STATIONS.find((s) => s.id === id);
 
-  // Per-station playable actions. Only the Shields/Comms Officer is built out for now;
-  // every other station is empty and slots in later. Action `type`s:
+  // Per-station playable actions (from ship/ship-combat.md). Action `type`s:
   //   shield-allocate → arm the red circles, move the MAIN shield facing
   //   shield-micro    → arm the green circles, set the SECONDARY shield facing (+2 AC)
   //   roll            → d20 + ability (from the 5e sheet) or manual, posted to chat
-  //   note            → just posts a description + spends the action (GM adjudicates)
+  //   grant           → Captain's Grant Actions: pick a crew, give them a +1 extra (purple star)
+  //   note            → spends the action + posts a one-line chat card (effects/dice come later)
+  const N = (id, name, text) => ({ id, name, type: "note", text });
   S.STATION_ACTIONS = {
+    captain: {
+      main: [
+        N("cmd_adv", "Command · Double Advantage", "Give one crew Double Advantage on their Main Action this round."),
+        { id: "grant", name: "Grant Actions", type: "grant", text: "Give one crew +1 extra action (a purple star, usable as a Main or Bonus). They spend it after their normal action of that type. Lasts one turn." },
+        N("bc_flee", "Big Call · Flee", "Opposed Piloting vs enemy Pilot (DC 15). Success disengages next round; failure gives the enemy a free attack."),
+        N("bc_ram", "Big Call · Ram", "Pilot must be Aggressive & within 3 spaces. Hit: +4d6, ignores Shield Facing; you take ¼ back."),
+        N("bc_allhands", "Big Call · All Hands", "Every station gets +3 to their Main check this round OR an extra Bonus Action; you lose your Rally this round.")
+      ],
+      bonus: [N("rally", "Rally", "Give one ally a flat +1 to their Main Action roll.")]
+    },
+    pilot: {
+      main: [
+        N("evasive", "Evasive Maneuvers", "+5 ship AC; forward gunners at disadvantage; 5 Movement Points."),
+        N("steady", "Steady Approach", "+0 AC; gunners normal; 3 Movement Points."),
+        N("aggressive", "Aggressive Positioning", "−5 AC; forward gunners advantage; 2 Movement Points; enables Ram.")
+      ],
+      bonus: [N("reposition", "Reposition", "Spend Movement Points: Move Forward, Rotate 45°/90°, or Enter Hiding.")]
+    },
+    gunner_port: {
+      main: [N("attack", "Attack", "Gun to-hit + Pilot/Science mods vs AC."), N("called", "Called Shot", "−5, no hull damage; inflict Engines Disabled / Weapon Offline / Shields Down."), N("launch", "Launch a Boarder", "Fire a crewmate at the enemy hull instead of shooting.")],
+      bonus: [N("quickaim", "Quick Aim", "+2 to hit this round (+4 with perk).")]
+    },
+    gunner_starboard: {
+      main: [N("attack", "Attack", "Gun to-hit + Pilot/Science mods vs AC."), N("called", "Called Shot", "−5, no hull damage; inflict Engines Disabled / Weapon Offline / Shields Down."), N("launch", "Launch a Boarder", "Fire a crewmate at the enemy hull instead of shooting.")],
+      bonus: [N("quickaim", "Quick Aim", "+2 to hit this round (+4 with perk).")]
+    },
+    boarding: {
+      main: [N("launch_breach", "Launch & Breach", "At close range: the boarder + that bay's gunner both spend their Main. Roll Athletics/Acrobatics (DC 15) to latch & breach.")],
+      bonus: [N("repel", "Repel Boarders", "Leave your station to fight enemy boarders (you lose this station's Main this round).")]
+    },
+    engineer: {
+      main: [N("repair", "Repair", "Int DC 15 → 2d6 + Int Hull (+1d6 per 5 over)."), N("reroute", "Reroute Power", "Buff an ally (+1d4 roll, +5 temp AC to Pilot, or +1d6 damage); risk of a self-mishap.")],
+      bonus: [N("patch", "Patch Job", "Flat 1d4 Hull or Shield back, or clear one negative status.")]
+    },
     shields_officer: {
       main: [
         { id: "allocate", name: "Allocate Shields", type: "shield-allocate",
@@ -104,7 +139,21 @@
         { id: "micro", name: "Micro-Adjust", type: "shield-micro",
           text: "Grant a second facing +2 AC (no damage-halving) on top of your main allocation. Lasts until the start of your next turn." }
       ]
-    }
+    },
+    science: {
+      main: [N("scan", "Scan", "Int/Investigation DC 15 → reveal enemy AC, resistances, shield facing; beat by 3+/10+ grants gunners advantage."), N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), N("navsupport", "Navigation Support", "Double the Pilot's Movement Points; safe passage; Enter Hiding even on Aggressive.")],
+      bonus: [N("ping", "Quick Ping", "No roll — ask the GM one factual question about the enemy, get a truthful answer.")]
+    },
+    cloaking: {
+      main: [N("engage", "Engage Cloak", "Enemy attacks at disadvantage until you fire or take damage."), N("burst", "Cloak Burst", "Undetectable for 1 round."), N("phase", "Phase Shift", "Auto-dodge one attack."), N("decoy", "Decoy Drop", "Drop a decoy to misdirect.")],
+      bonus: [N("stealth", "Stealth Debuff", "Impose a stealth-based debuff on the enemy.")]
+    },
+    turret_flak: { main: [N("attack", "Flak Spread", "Hit up to 3 targets; anti-swarm point-defense."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
+    turret_autocannon: { main: [N("attack", "Armor-Piercing Shot", "Ignores armor AC; Called Shots ignore the −5."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
+    turret_plasma: { main: [N("attack", "Plasma Shot", "Auto-inflicts Shields Down; +1d6 vs already-Shields-Down."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
+    turret_cryo: { main: [N("attack", "Cryo-Beam", "Inflicts Frozen/Brittle; frozen take double from kinetic."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
+    turret_ion: { main: [N("attack", "Ion Shot", "Inflicts Engines Disabled or Shields Down; advantage vs disabled."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
+    turret_gravity: { main: [N("attack", "Gravity Well", "Grapple/Crush up to 2–3 targets; crushed take double from Rams."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] }
   };
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
 
@@ -157,7 +206,8 @@
         ownerUserId: String(c.ownerUserId || ""),
         controllerUserId: String(c.controllerUserId || c.ownerUserId || ""),
         station: validStation(c.station),
-        action: !!c.action, bonus: !!c.bonus
+        action: !!c.action, bonus: !!c.bonus,
+        granted: Number.isFinite(c.granted) && c.granted > 0 ? Math.floor(c.granted) : 0
       };
     }
     const ps = stored.pendingSwap;
@@ -366,15 +416,15 @@
 .sgcon .con-btn.used,.sgcon .con-btn[disabled]{opacity:.4;cursor:not-allowed;border-style:dashed;box-shadow:none;}
 .sgcon .con-hint{font-size:12px;color:#f2b03d;letter-spacing:1px;text-align:center;}
 .sgcon .con-empty{font-size:12px;color:#6f97a6;letter-spacing:1px;}
-/* shield-allocation circles overlaid on the ship stage */
-.sgsc .con-circle{position:absolute;width:34px;height:34px;border-radius:50%;cursor:pointer;z-index:6;
-  border:3px solid #e0454d;background:rgba(224,69,77,.28);box-shadow:0 0 14px rgba(224,69,77,.8);animation:sgsc-pulse 1.1s ease-in-out infinite;}
-.sgsc .con-circle.secondary{border-color:#4fe07a;background:rgba(80,235,120,.28);box-shadow:0 0 14px rgba(80,235,120,.8);}
-.sgsc .con-circle:hover{transform:scale(1.18);}
-.sgsc .con-circle.pos-fore{top:-2%;left:50%;margin-left:-17px;}
-.sgsc .con-circle.pos-aft{bottom:-2%;left:50%;margin-left:-17px;}
-.sgsc .con-circle.pos-port{left:-3%;top:46%;}
-.sgsc .con-circle.pos-starboard{right:-3%;top:46%;}
+/* shield-allocation circles — larger, clustered on the hull (~half on the ship) */
+.sgsc .con-circle{position:absolute;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;cursor:pointer;z-index:6;
+  border:4px solid #e0454d;background:rgba(224,69,77,.32);box-shadow:0 0 16px rgba(224,69,77,.85);animation:sgsc-pulse 1.1s ease-in-out infinite;}
+.sgsc .con-circle.secondary{border-color:#4fe07a;background:rgba(80,235,120,.32);box-shadow:0 0 16px rgba(80,235,120,.85);}
+.sgsc .con-circle:hover{transform:scale(1.15);}
+.sgsc .con-circle.pos-fore{top:26%;left:50%;}
+.sgsc .con-circle.pos-aft{top:74%;left:50%;}
+.sgsc .con-circle.pos-port{top:52%;left:36%;}
+.sgsc .con-circle.pos-starboard{top:52%;left:64%;}
 @media (max-width:820px){.sgcon{flex-direction:column;}.sgcon .con-right{flex-basis:auto;border-left:none;border-top:1px solid #12455a;}}
 `;
     document.head.appendChild(st);
@@ -546,9 +596,13 @@
       `<svg width="22" height="22" viewBox="0 0 24 24">${shape}</svg></span>`;
   }
 
-  const legendHtml = () => `<div class="ct-legend">` +
-    `<span>${token("action", false, false)} Action</span><span>${token("action", true, false)} used</span>` +
-    `<span>${token("bonus", false, false)} Bonus</span><span>${token("bonus", true, false)} used</span></div>`;
+  // Granted extra actions (Captain's Grant Actions) show as purple stars.
+  function grantedTokens(n) {
+    if (!n || n < 1) return "";
+    const star = `<span class="ct-tok" title="Extra action (spend after your normal action of that type)">` +
+      `<svg width="22" height="22" viewBox="0 0 24 24"><polygon points="12,2 14.9,8.6 22,9.3 16.7,14 18.2,21 12,17.3 5.8,21 7.3,14 2,9.3 9.1,8.6" fill="#b06bf0"/></svg></span>`;
+    return star.repeat(Math.min(n, 4));
+  }
 
   function wireTokens(el, id, cctx) {
     el.querySelectorAll(".ct-tok.click").forEach((t) => { t.onclick = () => cctx.spend(id, t.dataset.tok); });
@@ -574,13 +628,8 @@
       return;
     }
 
-    // Collapsed: a slim pill you click to expand.
-    if (cctx.collapsed) {
-      root.style.display = "flex";
-      root.innerHTML = `<div class="ct-top"><button class="ct-btn enter" data-act="expand" title="Show combat tracker">⚔ SHIP'S TURN ${combat.turn} ▸</button></div>`;
-      root.querySelector('[data-act="expand"]').onclick = () => cctx.toggleCollapse();
-      return;
-    }
+    // Hidden (Hide button / press C): fully gone until toggled back with C.
+    if (cctx.collapsed) { root.style.display = "none"; root.innerHTML = ""; return; }
     root.style.display = "flex";
 
     if (cctx.isGM) {
@@ -592,7 +641,7 @@
         return `<div class="ct-seat" data-crew="${c.id}">` +
           `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">owner: ${esc(c.ownerUserId ? nameOf(cctx, c.ownerUserId) : "—")}</div></div>` +
           `<select class="ct-sel" data-station title="Station">${stationOpts(c.station)}</select>` +
-          `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}</div>` +
+          `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>` +
           `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Controlled by">${ctrlOpts}</select>` +
           `<span class="ct-x" data-remove title="Exclude from combat">✕</span></div></div>`;
       }).join("") : `<div class="ct-empty">No crew in this fight — use “+ Add crew”.</div>`;
@@ -606,7 +655,7 @@
         `<button class="ct-btn" data-act="resend">Re-send picker</button>` +
         collapseBtn +
         `<button class="ct-btn warn" data-act="end">✖ End Combat</button></div>` +
-        `<div class="ct-seats">${roster}</div>${swap}${legendHtml()}`;
+        `<div class="ct-seats">${roster}</div>${swap}`;
       const on = (sel, fn) => { const e = root.querySelector(sel); if (e) e.onclick = fn; };
       on('[data-act="next"]', () => cctx.nextTurn());
       on('[data-act="add"]', () => cctx.addCrew());
@@ -641,10 +690,10 @@
         : `<button class="ct-btn enter" data-pick title="Pick your station (free at the start)">Pick station</button>`;
       return `<div class="ct-seat mine" data-crew="${c.id}">` +
         `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">${stLabel}</div>${sub}</div>` +
-        `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}</div>${btn}</div>`;
+        `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>${btn}</div>`;
     }).join("");
     root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>${collapseBtn}</div>` +
-      `<div class="ct-seats">${blocks}</div>${legendHtml()}`;
+      `<div class="ct-seats">${blocks}</div>`;
     const cbtn = root.querySelector('[data-act="collapse"]'); if (cbtn) cbtn.onclick = () => cctx.toggleCollapse();
     root.querySelectorAll(".ct-seat").forEach((el) => {
       const id = el.dataset.crew;
@@ -708,13 +757,15 @@
 
     const btn = (a, isBonus) => {
       const used = isBonus ? crew.bonus : crew.action;
+      const disabled = used && !(crew.granted > 0);   // still usable if a granted ⭐ is available
+      const star = used && crew.granted > 0 ? " ⭐" : "";
       const armedThis = (a.type === "shield-allocate" && kctx.armed === "main") || (a.type === "shield-micro" && kctx.armed === "secondary");
-      return `<button class="con-btn${used ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${used ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : ""}</button>`;
+      return `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>`;
     };
     rightEl.innerHTML =
       `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-x" title="Close (Esc)">✕</button></div>` +
       `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
-      `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}</span></div>` +
+      `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}${grantedTokens(crew.granted)}</span></div>` +
       `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
       `<div class="con-sec"><div class="con-h">BONUS ACTION${crew.bonus ? " · used" : ""}</div><div class="con-btns">${acts.bonus.map((a) => btn(a, true)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
       (kctx.armed ? `<div class="con-hint">Click a ${kctx.armed === "main" ? "red" : "green"} circle on the ship to allocate — or click the button again to cancel.</div>` : "");
@@ -789,8 +840,9 @@
     if (!_console) { _console = document.createElement("div"); _console.id = "ssv-ship-console"; document.body.appendChild(_console); }
     _console.style.display = "flex";   // must be flex (the .sgcon layout); inline style wins over the class
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
+    renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; if (_console) _console.style.display = "none"; }
+  function closeConsole() { armed = null; if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -829,6 +881,33 @@
     };
   }
 
+  // Spend a crew's action: use the normal Main/Bonus first, then a granted extra (purple star).
+  function tryConsume(c, which) {
+    if (which === "action" && !c.action) { c.action = true; return true; }
+    if (which === "bonus" && !c.bonus) { c.bonus = true; return true; }
+    if (c.granted > 0) { c.granted -= 1; return true; }   // spend the extra
+    return false;
+  }
+  async function gmConsume(crewId, which, byUserId) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
+    if (!tryConsume(c, which)) return notifyUser(byUserId || game.user.id, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
+    await saveCombat(next);
+  }
+  async function gmGrant(captainCrewId, targetCrewId, byUserId) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const cap = next.crew[captainCrewId], tgt = next.crew[targetCrewId];
+    if (!cap || !tgt) return;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && cap.controllerUserId !== byUserId) return;
+    if (!tryConsume(cap, "action")) return notifyUser(byUserId || game.user.id, "You've no Main action left to Grant.");
+    tgt.granted = (tgt.granted || 0) + 1;
+    await saveCombat(next);
+    await ChatMessage.create({ content: `<b>${esc(cap.name)}</b> grants <b>${esc(tgt.name)}</b> an extra action ⭐`, speaker: { alias: "SSV Silver Gull" } });
+  }
+
   async function gmAllocateShield(crewId, facing, slot, byUserId) {
     if (!game.user.isGM) return;
     const combat = getCombat(); const c = combat.crew[crewId]; if (!c) return;
@@ -839,15 +918,11 @@
     if (!S.FACINGS.includes(facing)) return;
     const ship = getState();
     if (ship.systems.shields === "destroyed") return notifyUser(who, "The Shield Generator is destroyed.");
-    if (slot === "secondary") {
-      if (c.bonus) return notifyUser(who, "Bonus action already used.");
-      ship.shield.secondary = facing; await setState(ship);
-      c.bonus = true; await saveCombat(combat);
-    } else {
-      if (c.action) return notifyUser(who, "Main action already used.");
-      ship.shield.on = true; ship.shield.facing = facing; await setState(ship);
-      c.action = true; await saveCombat(combat);
-    }
+    const which = slot === "secondary" ? "bonus" : "action";
+    if (!tryConsume(c, which)) return notifyUser(who, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
+    if (slot === "secondary") ship.shield.secondary = facing;
+    else { ship.shield.on = true; ship.shield.facing = facing; }
+    await setState(ship); await saveCombat(combat);
   }
 
   // Roll dialog: pull the ability mod from the acting player's dnd5e sheet, or manual total.
@@ -889,13 +964,24 @@
   }
   async function runStationAction(a, isBonus, crew, stName) {
     if (!crew) return;
+    // Grant Actions: pick a target crew who gains a purple-star extra action.
+    if (a.type === "grant") {
+      const combat = getCombat();
+      const opts = Object.values(combat.crew).map((c) => ({ value: c.id, label: `${c.name}${c.station ? ` — ${S.station(c.station)?.name || c.station}` : ""}` }));
+      if (!opts.length) return;
+      const target = await chooseDlg("Grant Actions", "Give a +1 extra action (purple star) to which crew?", opts);
+      if (!target) return;
+      if (game.user.isGM) gmGrant(crew.id, target, null);
+      else emit({ type: "grantAction", toGM: true, captainCrewId: crew.id, targetCrewId: target, userId: game.user.id });
+      return;
+    }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
     if (!ok) return;
     const which = isBonus ? "bonus" : "action";
-    if (game.user.isGM) gmSpend(crew.id, which, null);
-    else emit({ type: "spend", toGM: true, crewId: crew.id, which, userId: game.user.id });
+    if (game.user.isGM) gmConsume(crew.id, which, null);
+    else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id });
   }
 
   /* -- Ship combat: setting, socket, dialogs, handlers ------------------- */
@@ -950,6 +1036,8 @@
       case "swapConfirm":    promptSwapConfirm(msg); break;
       case "swapResult":     gmResolveSwap(msg.accepted); break;
       case "allocateShield": gmAllocateShield(msg.crewId, msg.facing, msg.slot, msg.userId); break;
+      case "consume":        gmConsume(msg.crewId, msg.which, msg.userId); break;
+      case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
       case "notify":         ui.notifications?.warn(msg.text); break;
     }
   }
@@ -971,7 +1059,7 @@
     next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
     for (const m of cur.roster) {
       if (!included.has(m.id)) continue;
-      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false };
+      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0 };
     }
     await saveCombat(next);
     emit({ type: "pickPrompt" });
@@ -985,7 +1073,7 @@
   async function nextTurn() {
     if (!game.user.isGM) return;
     const next = getCombat();
-    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; }
+    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; }
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
     // Micro-Adjust's secondary shield lasts only until the start of the next turn.
@@ -1097,7 +1185,7 @@
     if (!cid) return;
     const m = combat.roster.find((x) => x.id === cid); if (!m) return;
     const next = getCombat();
-    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false };
+    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0 };
     await saveCombat(next);
   }
   async function editCrewDialog() {
@@ -1187,6 +1275,8 @@
       _bar.id = "ssv-combat-bar";
       document.body.appendChild(_bar);
     }
+    if (consoleOpen()) { _bar.style.display = "none"; return; }  // console shows its own tokens
+    _bar.style.display = "";
     try { S.renderTracker(_bar, combatCtx()); } catch (e) { console.error(`${MODULE_ID} | tracker render failed`, e); }
   }
 
