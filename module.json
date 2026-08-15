@@ -3,7 +3,7 @@
   "title": "SSV Silver Gull — Ship Combat",
   "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and per-station action consoles for all 15 stations. Shields/Comms is fully built (Allocate Shields, Jam/Hail rolls, green Micro-Adjust); the Captain's Grant Actions gives a crew a purple-star extra action.",
   "authors": [ { "name": "Solly240" } ],
-  "version": "0.6.1",
+  "version": "0.6.2",
   "compatibility": { "minimum": "12", "verified": "14" },
   "socket": true,
   "esmodules": [ "scripts/ship-combat.js" ],

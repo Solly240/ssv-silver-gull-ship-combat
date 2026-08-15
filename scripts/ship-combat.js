@@ -333,9 +333,13 @@
   animation:sgsc-pulse 2.6s ease-in-out infinite;}
 .sgsc .sc-shieldimg.dmg{filter:sepia(1) saturate(9) hue-rotate(-38deg) brightness(1) contrast(1.1)
   drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));animation:sgsc-flicker .5s steps(2,end) infinite;}
-/* Secondary shield (Micro-Adjust): smaller, green, inside the main one. */
-.sgsc .sc-shieldimg.secondary{z-index:3;transform:scale(.72);
-  filter:hue-rotate(85deg) saturate(1.2) brightness(1.05) drop-shadow(0 0 7px rgba(80,235,120,.85)) drop-shadow(0 0 16px rgba(80,235,120,.5));}
+/* Secondary shield (Micro-Adjust): a faint yellow dotted line on the allocated side. */
+.sgsc .sc-shield2{position:absolute;z-index:3;pointer-events:none;border-radius:2px;
+  filter:drop-shadow(0 0 2px rgba(242,199,68,.5));}
+.sgsc .sc-shield2.face-fore{top:15%;left:27%;width:46%;height:0;border-top:4px dotted #f2c744;}
+.sgsc .sc-shield2.face-aft{top:83%;left:27%;width:46%;height:0;border-top:4px dotted #f2c744;}
+.sgsc .sc-shield2.face-port{top:36%;left:29%;width:0;height:38%;border-left:4px dotted #f2c744;}
+.sgsc .sc-shield2.face-starboard{top:36%;right:29%;width:0;height:38%;border-right:4px dotted #f2c744;}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
 .sgsc .sc-shipph{position:absolute;inset:20% 15%;border:1.5px dashed var(--edge2);border-radius:40% 40% 20% 20%/30% 30% 12% 12%;
@@ -471,10 +475,9 @@
       const cls = "sc-shieldimg" + (gen === "damaged" ? " dmg" : "");
       html += `<img class="${cls}" src="${file}" alt="" onerror="this.style.display='none'">`;
     }
-    // Secondary facing (Micro-Adjust): a smaller green shield, reusing the same art tinted.
+    // Secondary facing (Micro-Adjust): a subtle yellow dotted line on that side.
     if (state.shield.secondary) {
-      const file2 = ctx.assetUrl(`assets/shields/shield-${state.shield.secondary}.png`);
-      html += `<img class="sc-shieldimg secondary" src="${file2}" alt="" onerror="this.style.display='none'">`;
+      html += `<div class="sc-shield2 face-${state.shield.secondary}"></div>`;
     }
     return html;
   }
