@@ -1284,8 +1284,10 @@
 
   Hooks.once("init", () => {
     // onChange fires on every client when a world setting replicates → our cross-client refresh.
-    game.settings.register(MODULE_ID, SETTING_DATA, { scope: "world", config: false, type: Object, default: {}, onChange: () => refreshOpen() });
-    game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: () => renderBar() });
+    // Both the bar AND the console read combat + ship state, so refresh both on either change.
+    const refreshUI = () => { renderBar(); refreshOpen(); };
+    game.settings.register(MODULE_ID, SETTING_DATA, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
+    game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.keybindings.register(MODULE_ID, "open", {
       name: game.i18n?.localize(`${MODULE_ID}.keybind.open.name`) || "Open Ship Overview HUD",
       hint: game.i18n?.localize(`${MODULE_ID}.keybind.open.hint`) || "Opens the SSV Silver Gull ship-combat overview.",
