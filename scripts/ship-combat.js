@@ -421,10 +421,10 @@
   border:4px solid #e0454d;background:rgba(224,69,77,.32);box-shadow:0 0 16px rgba(224,69,77,.85);animation:sgsc-pulse 1.1s ease-in-out infinite;}
 .sgsc .con-circle.secondary{border-color:#4fe07a;background:rgba(80,235,120,.32);box-shadow:0 0 16px rgba(80,235,120,.85);}
 .sgsc .con-circle:hover{transform:scale(1.15);}
-.sgsc .con-circle.pos-fore{top:26%;left:50%;}
-.sgsc .con-circle.pos-aft{top:74%;left:50%;}
-.sgsc .con-circle.pos-port{top:52%;left:36%;}
-.sgsc .con-circle.pos-starboard{top:52%;left:64%;}
+.sgsc .con-circle.pos-fore{top:20%;left:50%;}
+.sgsc .con-circle.pos-aft{top:80%;left:50%;}
+.sgsc .con-circle.pos-port{top:56%;left:41%;}
+.sgsc .con-circle.pos-starboard{top:56%;left:59%;}
 @media (max-width:820px){.sgcon{flex-direction:column;}.sgcon .con-right{flex-basis:auto;border-left:none;border-top:1px solid #12455a;}}
 `;
     document.head.appendChild(st);
@@ -1294,8 +1294,8 @@
     });
     game.keybindings.register(MODULE_ID, "toggleCombatBar", {
       name: "Show/Hide Ship Combat Bar",
-      hint: "Collapses or reopens the ship-combat turn tracker at the top of the screen.",
-      editable: [{ key: "KeyC" }],
+      hint: "Fully hides or reopens the ship-combat turn tracker at the top of the screen. Rebind here if it clashes.",
+      editable: [{ key: "Backslash" }],   // was KeyC (conflicted); '\' is rebindable in Configure Controls
       onDown: () => { setBarCollapsed(!barCollapsed()); renderBar(); return true; }
     });
   });
