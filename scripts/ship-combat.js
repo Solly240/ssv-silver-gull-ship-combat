@@ -352,13 +352,16 @@
   animation:sgsc-pulse 2.6s ease-in-out infinite;}
 .sgsc .sc-shieldimg.dmg{filter:sepia(1) saturate(9) hue-rotate(-38deg) brightness(1) contrast(1.1)
   drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));animation:sgsc-flicker .5s steps(2,end) infinite;}
-/* Secondary shield (Micro-Adjust): a faint yellow dotted line on the allocated side. */
-.sgsc .sc-shield2{position:absolute;z-index:3;pointer-events:none;border-radius:2px;
-  filter:drop-shadow(0 0 2px rgba(242,199,68,.5));}
-.sgsc .sc-shield2.face-fore{top:15%;left:27%;width:46%;height:0;border-top:4px dotted #f2c744;}
-.sgsc .sc-shield2.face-aft{top:83%;left:27%;width:46%;height:0;border-top:4px dotted #f2c744;}
-.sgsc .sc-shield2.face-port{top:36%;left:29%;width:0;height:38%;border-left:4px dotted #f2c744;}
-.sgsc .sc-shield2.face-starboard{top:36%;right:29%;width:0;height:38%;border-right:4px dotted #f2c744;}
+/* Secondary shield (Micro-Adjust): a thin violet arc hugging the allocated side —
+   a slimmer, inward-scaled copy of that side's main shield, tinted distinct from the cyan primary. */
+.sgsc .sc-shield2img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:3;pointer-events:none;
+  filter:hue-rotate(92deg) saturate(1.6) brightness(1.1) drop-shadow(0 0 5px rgba(176,107,240,.85)) drop-shadow(0 0 13px rgba(176,107,240,.45));
+  opacity:.9;animation:sgsc-pulse2 2.2s ease-in-out infinite;}
+.sgsc .sc-shield2img.face-fore{transform:scale(.8);transform-origin:center top;}
+.sgsc .sc-shield2img.face-aft{transform:scale(.8);transform-origin:center bottom;}
+.sgsc .sc-shield2img.face-port{transform:scale(.8);transform-origin:left center;}
+.sgsc .sc-shield2img.face-starboard{transform:scale(.8);transform-origin:right center;}
+@keyframes sgsc-pulse2{0%,100%{opacity:.68;}50%{opacity:.96;}}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
 .sgsc .sc-shipph{position:absolute;inset:20% 15%;border:1.5px dashed var(--edge2);border-radius:40% 40% 20% 20%/30% 30% 12% 12%;
@@ -514,9 +517,10 @@
       const cls = "sc-shieldimg" + (gen === "damaged" ? " dmg" : "");
       html += `<img class="${cls}" src="${file}" alt="" onerror="this.style.display='none'">`;
     }
-    // Secondary facing (Micro-Adjust): a subtle yellow dotted line on that side.
+    // Secondary facing (Micro-Adjust): a thin violet arc hugging that side.
     if (state.shield.secondary) {
-      html += `<div class="sc-shield2 face-${state.shield.secondary}"></div>`;
+      const f2 = ctx.assetUrl(`assets/shields/shield-${state.shield.secondary}.png`);
+      html += `<img class="sc-shield2img face-${state.shield.secondary}" src="${f2}" alt="" onerror="this.style.display='none'">`;
     }
     return html;
   }
@@ -777,7 +781,7 @@
       `<span class="ci-btns"><button class="con-mini" data-move title="Move to the ship">→ Ship</button></span></div>`;
     const gmRow = kctx.isGM ? `<div class="con-gmrow"><button class="con-mini" data-act="tune" title="Set fuel/power amounts">Tune</button><button class="con-mini" data-act="actor" title="Pick the ship actor">Ship actor</button></div>` : "";
     rightEl.innerHTML =
-      `<div class="con-head"><span class="con-title">SHIP INVENTORY</span><button class="con-inv" data-act="stations" title="Back to stations">⚔</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-head"><span class="con-title">SHIP INVENTORY</span><button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
       `<div class="con-sec">${gauge("FUEL", st.fuel, "fuel")}${gauge("POWER", st.power, "power")}` +
       `<button class="con-btn" data-act="convert">Convert ${t.convertFuel} fuel → ${t.convertPower} power ⚡</button>${gmRow}</div>` +
       `<div class="con-sec"><div class="con-h">SHIP CARGO</div><div class="con-items">${ship.length ? ship.map(shipRow).join("") : `<span class="con-empty">— empty —</span>`}</div></div>` +
@@ -834,7 +838,7 @@
       : "";
 
     if (!stId || !crew) {
-      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">⛃</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
         `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it." : "You're not manning a station yet. Join combat and pick a station to see its controls here."}</div>`;
       rightEl.querySelector(".con-x").onclick = () => kctx.close();
       const inv0 = rightEl.querySelector("[data-inv]"); if (inv0) inv0.onclick = () => kctx.toggleInv();
@@ -850,7 +854,7 @@
       return `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>`;
     };
     rightEl.innerHTML =
-      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">⛃</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
       `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
       `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}${grantedTokens(crew.granted)}</span></div>` +
       `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
