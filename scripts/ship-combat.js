@@ -156,6 +156,14 @@
     turret_gravity: { main: [N("attack", "Gravity Well", "Grapple/Crush up to 2–3 targets; crushed take double from Rams."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] }
   };
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
+  // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk). Chosen as the Main action.
+  S.MANEUVERS = { evasive: { label: "Evasive", mp: 6 }, steady: { label: "Steady", mp: 4 }, aggressive: { label: "Aggressive", mp: 3 } };
+  // Every named d20 roll a crew can be proficient in (scanned from the station table).
+  S.rollActions = () => {
+    const out = [];
+    for (const st of Object.values(S.STATION_ACTIONS)) for (const a of [...(st.main || []), ...(st.bonus || [])]) if (a.type === "roll") out.push({ id: a.id, name: a.name, ability: a.ability });
+    return out;
+  };
 
   // The crew — a persistent roster of characters, each normally played by one user.
   // Combat participants are drawn from this roster; the GM can reassign who controls
@@ -207,7 +215,10 @@
         controllerUserId: String(c.controllerUserId || c.ownerUserId || ""),
         station: validStation(c.station),
         action: !!c.action, bonus: !!c.bonus,
-        granted: Number.isFinite(c.granted) && c.granted > 0 ? Math.floor(c.granted) : 0
+        granted: Number.isFinite(c.granted) && c.granted > 0 ? Math.floor(c.granted) : 0,
+        maneuver: S.MANEUVERS[c.maneuver] ? c.maneuver : null,        // pilot: chosen this turn
+        mp: Number.isFinite(c.mp) && c.mp > 0 ? Math.floor(c.mp) : 0, // pilot: Movement Points left
+        prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
     const ps = stored.pendingSwap;
@@ -396,6 +407,19 @@
 .sgct .ct-seats{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;}
 .sgct .ct-seat{display:flex;align-items:center;gap:10px;border:1px solid var(--edge);border-radius:9px;padding:6px 10px;background:rgba(14,34,48,.5);}
 .sgct .ct-seat.mine{border-color:var(--teal);box-shadow:0 0 12px rgba(56,225,196,.25);}
+/* Pilot: seat + inline movement panel stacked in a full-width column. */
+.sgct .ct-seatwrap{display:flex;flex-direction:column;gap:6px;flex-basis:100%;align-items:stretch;}
+.sgct .ct-seatwrap.mine .ct-seat{border-color:var(--teal);box-shadow:0 0 12px rgba(56,225,196,.25);}
+.sgct .ct-move{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:center;padding:6px 10px;
+  border:1px solid var(--edge);border-radius:9px;background:rgba(10,28,38,.55);}
+.sgct .ct-move .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;}
+.sgct .ct-move .pm-mp{font-size:13px;font-weight:700;color:var(--teal);background:#0a1c26;border:1px solid var(--edge2);border-radius:9px;padding:2px 9px;white-space:nowrap;}
+.sgct .ct-move .pm-mp.bonus{color:var(--amber);border-color:var(--amber);}
+.sgct .pm-btn{font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;color:var(--ink);background:#0a1c26;
+  border:1px solid var(--edge2);border-radius:7px;padding:4px 9px;white-space:nowrap;}
+.sgct .pm-btn:hover:not([disabled]){border-color:var(--teal);box-shadow:0 0 8px rgba(56,225,196,.35);color:var(--teal);}
+.sgct .pm-btn b{color:var(--teal);}
+.sgct .pm-btn[disabled]{opacity:.4;cursor:not-allowed;}
 .sgct .ct-name{font-weight:700;font-size:13px;color:var(--ink);white-space:nowrap;}
 .sgct .ct-sub{font-size:10px;color:var(--muted);letter-spacing:1px;}
 .sgct .ct-toks{display:flex;align-items:center;gap:7px;}
@@ -747,17 +771,56 @@
 
   const nameOf = (cctx, id) => { const u = (cctx.users || []).find((x) => x.id === id); return u ? u.name : "?"; };
 
-  // Action = green circle, Bonus = orange triangle; filled when ready, outline when used.
-  function token(kind, used, clickable) {
+  // Action = green circle, Bonus = orange triangle. state: false = ready (filled), true = used (outline),
+  // "half" = partly spent (half-filled circle — the pilot's Movement pool draining).
+  function token(kind, state, clickable) {
     const c = kind === "action" ? "#42d16a" : "#f2a03d";
-    const shape = kind === "action"
-      ? (used ? `<circle cx="12" cy="12" r="8" fill="none" stroke="${c}" stroke-width="2.6"/>`
-              : `<circle cx="12" cy="12" r="9" fill="${c}"/>`)
-      : (used ? `<polygon points="12,3 22,21 2,21" fill="none" stroke="${c}" stroke-width="2.6" stroke-linejoin="round"/>`
-              : `<polygon points="12,3 22,21 2,21" fill="${c}"/>`);
-    const label = (kind === "action" ? "Action" : "Bonus action") + " — " + (used ? "used" : "ready") + (clickable ? " (click to toggle)" : "");
+    const used = state === true, half = state === "half";
+    let shape;
+    if (kind === "action") {
+      shape = used ? `<circle cx="12" cy="12" r="8" fill="none" stroke="${c}" stroke-width="2.6"/>`
+        : half ? `<circle cx="12" cy="12" r="9" fill="none" stroke="${c}" stroke-width="2.2"/><path d="M12 3 A9 9 0 0 0 12 21 Z" fill="${c}"/>`
+        : `<circle cx="12" cy="12" r="9" fill="${c}"/>`;
+    } else {
+      shape = used ? `<polygon points="12,3 22,21 2,21" fill="none" stroke="${c}" stroke-width="2.6" stroke-linejoin="round"/>`
+        : `<polygon points="12,3 22,21 2,21" fill="${c}"/>`;
+    }
+    const stateTxt = used ? "used" : half ? "in use" : "ready";
+    const label = (kind === "action" ? "Action" : "Bonus action") + " — " + stateTxt + (clickable ? " (click to toggle)" : "");
     return `<span class="ct-tok${clickable ? " click" : ""}" data-tok="${kind}" title="${label}">` +
       `<svg width="22" height="22" viewBox="0 0 24 24">${shape}</svg></span>`;
+  }
+  // The Main action-token state for a crew (pilot shows half/empty as Movement Points drain).
+  function actionState(c) {
+    if (c.station === "pilot" && c.maneuver) return c.mp > 0 ? "half" : true;
+    return c.action;
+  }
+  // Inline pilot movement panel (under the seat): pick a maneuver, then spend Movement Points to move/rotate.
+  function pilotPanel(c) {
+    if (c.station !== "pilot") return "";
+    if (!c.maneuver) {
+      const btns = Object.entries(S.MANEUVERS).map(([k, v]) => `<button class="pm-btn" data-man="${k}">${v.label} <b>${v.mp}</b></button>`).join("");
+      return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">Maneuver</span>${btns}</div>`;
+    }
+    const remaining = c.mp > 0 ? c.mp : (!c.bonus ? 1 : 0);
+    const onBonus = c.mp <= 0 && !c.bonus;
+    const dis = remaining <= 0 ? " disabled" : "";
+    const man = S.MANEUVERS[c.maneuver]?.label || c.maneuver;
+    const mv = (k, t, lbl) => `<button class="pm-btn pm-mv"${dis} data-move="${k}" title="${t}">${lbl}</button>`;
+    return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">${esc(man)}</span>` +
+      `<span class="pm-mp${onBonus ? " bonus" : ""}" title="Movement Points left${onBonus ? " (bonus action)" : ""}">${remaining} MP${onBonus ? " ⚡" : ""}</span>` +
+      mv("forward", "Move forward 1 space (1 MP)", "↑ Fwd") +
+      mv("rotL45", "Rotate 45° left (1 MP)", "⟲45") + mv("rotR45", "Rotate 45° right (1 MP)", "⟳45") +
+      mv("rotL90", "Rotate 90° left (1 MP)", "⟲90") + mv("rotR90", "Rotate 90° right (1 MP)", "⟳90") +
+      `</div>`;
+  }
+  // Wire the pilot panels (maneuver + move buttons) — shared by GM and player views.
+  function wirePilotPanels(root, cctx) {
+    root.querySelectorAll(".ct-move").forEach((el) => {
+      const id = el.dataset.crew;
+      el.querySelectorAll("[data-man]").forEach((b) => { b.onclick = () => cctx.pilotManeuver(id, b.dataset.man); });
+      el.querySelectorAll("[data-move]").forEach((b) => { if (!b.disabled) b.onclick = () => cctx.pilotMove(id, b.dataset.move); });
+    });
   }
 
   // Granted extra actions (Captain's Grant Actions) show as purple stars.
@@ -802,12 +865,14 @@
         S.STATIONS.filter((st) => combat.rolesEnabled[st.id]).map((st) => `<option value="${st.id}" ${st.id === cur ? "selected" : ""}>${st.num}. ${esc(st.name)}</option>`).join("");
       const roster = crew.length ? crew.map((c) => {
         const ctrlOpts = (cctx.users || []).map((u) => `<option value="${u.id}" ${u.id === c.controllerUserId ? "selected" : ""}>${esc(u.name)}${u.isGM ? " (GM)" : ""}</option>`).join("");
-        return `<div class="ct-seat" data-crew="${c.id}">` +
+        const seat = `<div class="ct-seat" data-crew="${c.id}">` +
           `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">owner: ${esc(c.ownerUserId ? nameOf(cctx, c.ownerUserId) : "—")}</div></div>` +
           `<select class="ct-sel" data-station title="Station">${stationOpts(c.station)}</select>` +
-          `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>` +
+          `<div class="ct-toks">${token("action", actionState(c), true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>` +
           `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Controlled by">${ctrlOpts}</select>` +
           `<span class="ct-x" data-remove title="Exclude from combat">✕</span></div></div>`;
+        const panel = pilotPanel(c);
+        return panel ? `<div class="ct-seatwrap">${seat}${panel}</div>` : seat;
       }).join("") : `<div class="ct-empty">No crew in this fight — use “+ Add crew”.</div>`;
       const swap = combat.pendingSwap ? `<div class="ct-note">Station swap pending — awaiting confirmation…</div>` : "";
       root.innerHTML =
@@ -835,6 +900,7 @@
         const sel = el.querySelector("[data-ctrl]"); if (sel) sel.onchange = () => cctx.assignController(id, sel.value);
         const x = el.querySelector("[data-remove]"); if (x) x.onclick = () => cctx.excludeCrew(id);
       });
+      wirePilotPanels(root, cctx);
       return;
     }
 
@@ -852,9 +918,11 @@
       const btn = c.station
         ? `<button class="ct-btn" data-switch title="Switch station (costs a Bonus action)">Switch</button>`
         : `<button class="ct-btn enter" data-pick title="Pick your station (free at the start)">Pick station</button>`;
-      return `<div class="ct-seat mine" data-crew="${c.id}">` +
+      const seat = `<div class="ct-seat mine" data-crew="${c.id}">` +
         `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">${stLabel}</div>${sub}</div>` +
-        `<div class="ct-toks">${token("action", c.action, true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>${btn}</div>`;
+        `<div class="ct-toks">${token("action", actionState(c), true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>${btn}</div>`;
+      const panel = pilotPanel(c);
+      return panel ? `<div class="ct-seatwrap mine">${seat}${panel}</div>` : seat;
     }).join("");
     root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>${collapseBtn}</div>` +
       `<div class="ct-seats">${blocks}</div>`;
@@ -865,6 +933,7 @@
       const sw = el.querySelector("[data-switch]"); if (sw) sw.onclick = () => cctx.switchStation(id);
       const pk = el.querySelector("[data-pick]"); if (pk) pk.onclick = () => cctx.pickStation(id);
     });
+    wirePilotPanels(root, cctx);
   };
 
   /* ---------------------------------------------------------------------- */
@@ -1155,10 +1224,14 @@
       `</div></div>` +
       (armed
         ? `<div class="con-hint">Click a ${armed === "main" ? "red" : "green"} circle on the ship to place the shield — click the lit side again to switch it off, or the button again to cancel.</div>`
-        : `<div class="con-hint">Click a shield, then a side of the ship to allocate it. Free, no action cost, announced in chat.</div>`);
+        : `<div class="con-hint">Click a shield, then a side of the ship to allocate it. Free, no action cost, announced in chat.</div>`) +
+      `<div class="con-sec"><div class="con-h">CREW</div><div class="con-btns">` +
+        `<button class="con-btn" data-act="prof">Proficiency…</button></div>` +
+        `<div class="con-hint">Tick which rolls each crew member is proficient in — adds their character's proficiency bonus to that roll.</div></div>`;
     rightEl.querySelector(".con-x").onclick = () => kctx.close();
     rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleGM();
     rightEl.querySelectorAll("[data-arm]").forEach((b) => { b.onclick = () => kctx.armShield(b.dataset.arm); });
+    rightEl.querySelector('[data-act="prof"]').onclick = () => kctx.openProficiency();
   }
 
   S.renderConsole = function (root, kctx) {
@@ -1362,6 +1435,7 @@
       // GM Actions panel (GM-only, direct control + chat, no action economy)
       gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
       armShield: (slot) => { armed = (armed === slot ? null : slot); renderConsole(); },
+      openProficiency: () => gmProficiencyDialog(),
       // Inventory
       invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
       invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
@@ -1604,6 +1678,79 @@
     if (!tryConsume(c, which)) return notifyUser(byUserId || game.user.id, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
     await saveCombat(next);
   }
+
+  // Pilot: choose a maneuver (Main) → sets Movement Points; then spend them to move/rotate the ship.
+  async function gmPilotManeuver(crewId, maneuverId, byUserId) {
+    if (!game.user.isGM) return;
+    const m = S.MANEUVERS[maneuverId]; if (!m) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c || c.station !== "pilot") return;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
+    c.maneuver = maneuverId; c.mp = m.mp; c.action = true;
+    await saveCombat(next);
+    await ChatMessage.create({ content: `<b>${esc(c.name)}</b> · Pilot — <b>${esc(m.label)}</b> (${m.mp} Movement Points)`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  async function gmPilotMove(crewId, kind, byUserId) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c || c.station !== "pilot") return;
+    const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
+    if (!gmActor && c.controllerUserId !== byUserId) return;
+    if (!c.maneuver) return notifyUser(byUserId || game.user.id, "Pick a maneuver first.");
+    if (c.mp <= 0 && c.bonus) return notifyUser(byUserId || game.user.id, "No movement left this turn.");
+    const moved = await moveShipToken(kind, byUserId);   // abort (don't spend) if there's no ship token
+    if (!moved) return;
+    if (c.mp > 0) c.mp -= 1; else c.bonus = true;         // spend from the Main pool, then the +1 bonus
+    await saveCombat(next);
+  }
+  // Move/rotate the ship-icon actor's token on the active scene. Returns false if it can't.
+  async function moveShipToken(kind, byUserId) {
+    const a = shipIconActor();
+    const scene = game.scenes?.active || canvas?.scene;
+    if (!a || !scene) { notifyUser(byUserId || game.user.id, "No active scene or ship actor to move."); return false; }
+    const tdoc = scene.tokens.find((t) => t.actorId === a.id);
+    if (!tdoc) { notifyUser(byUserId || game.user.id, "Place the SSV Silver Gull token on the scene first."); return false; }
+    const g = scene.grid?.size || canvas?.grid?.size || 100;
+    const upd = { _id: tdoc.id };
+    if (kind === "forward") {
+      const rad = (tdoc.rotation || 0) * Math.PI / 180;   // rotation 0 = nose up
+      upd.x = Math.round(tdoc.x + Math.sin(rad) * g);
+      upd.y = Math.round(tdoc.y - Math.cos(rad) * g);
+    } else {
+      const delta = { rotL45: -45, rotR45: 45, rotL90: -90, rotR90: 90 }[kind];
+      if (delta == null) return false;
+      upd.rotation = (((tdoc.rotation || 0) + delta) % 360 + 360) % 360;
+    }
+    await scene.updateEmbeddedDocuments("Token", [upd]);
+    return true;
+  }
+  async function gmSetProficiency(map) {
+    if (!game.user.isGM) return;
+    const next = getCombat();
+    for (const [crewId, profMap] of Object.entries(map || {})) {
+      const c = next.crew[crewId]; if (!c) continue;
+      c.prof = {};
+      for (const [rid, on] of Object.entries(profMap || {})) if (on) c.prof[rid] = true;
+    }
+    await saveCombat(next);
+  }
+  // GM editor: a crew × named-roll checkbox grid → per-crew proficiency map.
+  async function gmProficiencyDialog() {
+    if (!game.user.isGM) return;
+    const crew = Object.values(getCombat().crew);
+    const rolls = S.rollActions();
+    if (!crew.length) return ui.notifications?.warn("No crew in this fight yet.");
+    if (!rolls.length) return ui.notifications?.warn("No roll-type station actions to be proficient in.");
+    const head = `<tr><th style="text-align:left;padding:4px 8px">Crew</th>${rolls.map((r) => `<th style="padding:4px 8px">${esc(r.name)}${r.ability ? ` (${r.ability.toUpperCase()})` : ""}</th>`).join("")}</tr>`;
+    const rows = crew.map((c) => `<tr><td style="padding:4px 8px;white-space:nowrap">${esc(c.name)}</td>` +
+      rolls.map((r) => `<td style="text-align:center;padding:4px 8px"><input type="checkbox" name="p-${c.id}-${r.id}" ${c.prof?.[r.id] ? "checked" : ""}></td>`).join("") + `</tr>`).join("");
+    const content = `<div style="max-height:60vh;overflow:auto"><table style="border-collapse:collapse;width:100%">${head}${rows}</table></div>`;
+    const read = (form) => { const map = {}; for (const c of crew) { map[c.id] = {}; for (const r of rolls) map[c.id][r.id] = !!form.elements[`p-${c.id}-${r.id}`]?.checked; } return map; };
+    const d = D2();
+    const result = d
+      ? await d.prompt({ window: { title: "Crew proficiencies" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
+      : await new Promise((res) => new Dialog({ title: "Crew proficiencies", content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+    if (result) await gmSetProficiency(result);
+  }
   async function gmGrant(captainCrewId, targetCrewId, byUserId) {
     if (!game.user.isGM) return;
     const next = getCombat(); const cap = next.crew[captainCrewId], tgt = next.crew[targetCrewId];
@@ -1667,15 +1814,20 @@
     const actor = game.user.character;
     const mod = actor?.system?.abilities?.[abil]?.mod;
     const hasMod = Number.isFinite(mod);
+    // Proficiency: if the GM marked this crew proficient in this roll, add their character's prof bonus.
+    const profOn = !!crew?.prof?.[a.id];
+    const rawProf = actor?.system?.attributes?.prof;
+    const prof = (profOn && Number.isFinite(rawProf)) ? rawProf : 0;
+    const bonusExpr = `${mod}${prof ? ` + ${prof}` : ""}`;
     const content = `<div style="display:flex;flex-direction:column;gap:8px;min-width:300px;">` +
       `<p style="opacity:.85">${esc(a.text)}</p><p>${abilLabel} check vs ${dcTxt}.</p>` +
-      (hasMod ? `<p>Sheet: <b>${esc(actor.name)}</b> · ${abilLabel} <b>${mod >= 0 ? "+" : ""}${mod}</b></p>` : `<p><i>No linked character — enter your total.</i></p>`) +
+      (hasMod ? `<p>Sheet: <b>${esc(actor.name)}</b> · ${abilLabel} <b>${mod >= 0 ? "+" : ""}${mod}</b>${prof ? ` · proficient <b>+${prof}</b>` : ""}</p>` : `<p><i>No linked character — enter your total.</i></p>`) +
       `<label>Manual total: <input type="number" name="total" placeholder="d20 + mods" style="width:90px"/></label></div>`;
     const D = D2();
     let choice = "cancel", form = null;
     if (D) {
       const buttons = [];
-      if (hasMod) buttons.push({ action: "roll", label: `Roll 1d20 ${mod >= 0 ? "+" : ""}${mod}`, default: true, callback: (e, b) => { form = b.form; return "roll"; } });
+      if (hasMod) buttons.push({ action: "roll", label: `Roll 1d20 + ${bonusExpr}`, default: true, callback: (e, b) => { form = b.form; return "roll"; } });
       buttons.push({ action: "manual", label: "Use manual total", default: !hasMod, callback: (e, b) => { form = b.form; return "manual"; } });
       buttons.push({ action: "cancel", label: "Cancel", callback: () => "cancel" });
       choice = await D.wait({ window: { title: a.name }, content, buttons, rejectClose: false }).catch(() => "cancel");
@@ -1690,10 +1842,11 @@
     }
     if (choice === "cancel" || !choice) return false;
     let total, rollObj = null;
-    if (choice === "roll") { rollObj = await (new Roll(`1d20 + ${mod}`)).evaluate(); total = rollObj.total; }
+    if (choice === "roll") { rollObj = await (new Roll(`1d20 + ${bonusExpr}`)).evaluate(); total = rollObj.total; }
     else { total = Number(form?.elements?.total?.value); if (!Number.isFinite(total)) { ui.notifications?.warn("Enter a number for your total."); return false; } }
     const pass = a.dc != null ? (total >= a.dc ? ` — <b style="color:#42d16a">SUCCESS</b>` : ` — <b style="color:#e0454d">FAIL</b>`) : "";
-    const body = `<div><b>${esc(stName)}</b> · ${esc(crew.name)}<br>${esc(a.name)} — <b>${total}</b>${pass}<br><span style="opacity:.7">${esc(a.text)}</span></div>`;
+    const breakdown = (choice === "roll") ? ` <span style="opacity:.6">(${abilLabel} ${mod >= 0 ? "+" : ""}${mod}${prof ? ` · prof +${prof}` : ""})</span>` : "";
+    const body = `<div><b>${esc(stName)}</b> · ${esc(crew.name)}<br>${esc(a.name)} — <b>${total}</b>${pass}${breakdown}<br><span style="opacity:.7">${esc(a.text)}</span></div>`;
     await ChatMessage.create({ content: body, speaker: { alias: "SSV Silver Gull" }, rolls: rollObj ? [rollObj] : undefined });
     return true;
   }
@@ -1773,6 +1926,8 @@
       case "allocateShield": gmAllocateShield(msg.crewId, msg.facing, msg.slot, msg.userId); break;
       case "consume":        gmConsume(msg.crewId, msg.which, msg.userId); break;
       case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
+      case "pilotManeuver":  gmPilotManeuver(msg.crewId, msg.maneuver, msg.userId); break;
+      case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
       case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
       case "useResource":    gmUseResource(msg.itemId, msg.userId); break;
       case "convert":        gmConvert(msg.userId, msg.fuelAmt); break;
@@ -1801,7 +1956,7 @@
     next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
     for (const m of cur.roster) {
       if (!included.has(m.id)) continue;
-      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0 };
+      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, prof: {} };
     }
     await saveCombat(next);
     emit({ type: "pickPrompt" });
@@ -1815,7 +1970,7 @@
   async function nextTurn() {
     if (!game.user.isGM) return;
     const next = getCombat();
-    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; }
+    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null; c.mp = 0; }
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
     // Micro-Adjust's secondary shield lasts only until the start of the next turn.
@@ -1927,7 +2082,7 @@
     if (!cid) return;
     const m = combat.roster.find((x) => x.id === cid); if (!m) return;
     const next = getCombat();
-    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0 };
+    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, prof: {} };
     await saveCombat(next);
   }
   async function editCrewDialog() {
@@ -1995,6 +2150,8 @@
     assignController, excludeCrew,
     setStation: (crewId, station) => gmSetStation(crewId, station, null),
     spend: (crewId, which) => { if (game.user.isGM) gmSpend(crewId, which, null); else emit({ type: "spend", toGM: true, crewId, which, userId: game.user.id }); },
+    pilotManeuver: (crewId, id) => { if (game.user.isGM) gmPilotManeuver(crewId, id, null); else emit({ type: "pilotManeuver", toGM: true, crewId, maneuver: id, userId: game.user.id }); },
+    pilotMove: (crewId, kind) => { if (game.user.isGM) gmPilotMove(crewId, kind, null); else emit({ type: "pilotMove", toGM: true, crewId, kind, userId: game.user.id }); },
     pickStation: (crewId) => pickStationFor(crewId),
     switchStation: async (crewId) => {
       const combat = getCombat(); const c = combat.crew[crewId]; if (!c) return;
