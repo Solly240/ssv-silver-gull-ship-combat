@@ -151,7 +151,7 @@
       ]
     },
     science: {
-      main: [N("scan", "Scan", "Int/Investigation DC 15 → reveal enemy AC, resistances, shield facing; beat by 3+/10+ grants gunners advantage."), N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), N("navsupport", "Navigation Support", "Double the Pilot's Movement Points; safe passage; Enter Hiding even on Aggressive.")],
+      main: [N("scan", "Scan", "Int/Investigation DC 15 → reveal enemy AC, resistances, shield facing; beat by 3+/10+ grants gunners advantage."), N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), { id: "navsupport", name: "Navigation Support", type: "navsupport", text: "Play a quick nav mini-game (plot the course or thread the gates). The better you fly it, the bigger the Pilot's Movement-Point multiplier this turn — ×1.5 (rough) up to ×2.5 (perfect). Applies to their maneuver even if they've already started moving." }],
       bonus: [N("ping", "Quick Ping", "No roll — ask the GM one factual question about the enemy, get a truthful answer.")]
     },
     cloaking: {
@@ -166,8 +166,23 @@
     turret_gravity: { main: [N("attack", "Gravity Well", "Grapple/Crush up to 2–3 targets; crushed take double from Rams."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] }
   };
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
-  // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk). Chosen as the Main action.
-  S.MANEUVERS = { evasive: { label: "Evasive", mp: 6 }, steady: { label: "Steady", mp: 4 }, aggressive: { label: "Aggressive", mp: 3 } };
+  // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk) + a ship-AC modifier. Chosen as the Main action.
+  S.MANEUVERS = { evasive: { label: "Evasive", mp: 6, ac: 5 }, steady: { label: "Steady", mp: 4, ac: 0 }, aggressive: { label: "Aggressive", mp: 3, ac: -5 } };
+  // Effective per-facing ship AC = base (GM) + pilot maneuver (all sides) + directional shield bonuses.
+  S.shipAC = function (state, combat) {
+    const raw = Number(state?.ac?.base), base = Number.isFinite(raw) ? raw : 13;
+    let manMod = 0, manLabel = "";
+    if (combat && combat.crew) {
+      const pilot = Object.values(combat.crew).find((c) => c.station === "pilot" && c.maneuver);
+      const m = pilot && S.MANEUVERS[pilot.maneuver];
+      if (m) { manMod = m.ac; manLabel = m.label; }
+    }
+    const shieldsOk = S.systemWorks(state, "shields"), sh = state.shield || {};
+    const bonus = (f) => shieldsOk ? ((sh.on && sh.facing === f ? 5 : 0) + (sh.secondary === f ? 2 : 0)) : 0;
+    const out = { base, maneuver: manMod, maneuverLabel: manLabel };
+    for (const f of S.FACINGS) out[f] = base + manMod + bonus(f);
+    return out;
+  };
   // Roles a crew can be proficient in — the active bridge stations (each makes rolls), EXCEPT Boarding.
   // A crew proficient in a role adds their character's proficiency bonus to that station's rolls.
   S.profRoles = () => S.STATIONS.filter((st) => st.defaultUnlocked && st.id !== "boarding").map((st) => ({ id: st.id, name: st.name }));
@@ -225,6 +240,8 @@
         granted: Number.isFinite(c.granted) && c.granted > 0 ? Math.floor(c.granted) : 0,
         maneuver: S.MANEUVERS[c.maneuver] ? c.maneuver : null,        // pilot: chosen this turn
         mp: Number.isFinite(c.mp) && c.mp > 0 ? Math.floor(c.mp) : 0, // pilot: Movement Points left
+        mpMax: Number.isFinite(c.mpMax) && c.mpMax > 0 ? Math.floor(c.mpMax) : 0, // pilot: this turn's full pool (after nav mult)
+        navMult: Number.isFinite(c.navMult) && c.navMult >= 1 ? c.navMult : 1,     // pilot: Science nav-support multiplier this turn
         prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
@@ -260,6 +277,8 @@
       // Main directional shield (on/off + facing) plus an optional smaller SECONDARY
       // facing (the Shields Officer's Micro-Adjust bonus, +2 AC, cleared each turn).
       shield: { on: true, facing: "fore", secondary: null },
+      // Base ship AC (GM-editable). Effective per-facing AC adds maneuver + shield bonuses.
+      ac: { base: 13 },
       // Ship resources for the inventory screen (GM-tunable).
       fuel:  { cur: 100, max: 100 },
       power: { cur: 100, max: 100 },
@@ -282,6 +301,7 @@
       ship: stored.ship || d.ship,
       systems: { ...d.systems },
       systemHp: {},
+      ac: { base: Number.isFinite(Number(stored.ac?.base)) ? Number(stored.ac.base) : d.ac.base },
       shield: { ...d.shield },
       fuel:  { max: Number(stored.fuel?.max  ?? d.fuel.max),  cur: Number(stored.fuel?.cur  ?? d.fuel.cur)  },
       power: { max: Number(stored.power?.max ?? d.power.max), cur: Number(stored.power?.cur ?? d.power.cur) },
@@ -375,6 +395,19 @@
 .sgsc .sc-name{font-size:14px;font-weight:700;color:var(--ink);line-height:1.15;}
 .sgsc .sc-pill{display:inline-block;margin-top:3px;font-size:10px;font-weight:700;letter-spacing:1px;padding:1px 7px;border-radius:10px;border:1px solid currentColor;}
 .sgsc .sc-hp{margin-left:6px;font-size:11px;font-weight:700;letter-spacing:.5px;opacity:.9;}
+.sgsc .sc-ac{position:relative;z-index:2;text-align:center;font-size:12px;color:var(--muted);letter-spacing:1px;margin:-6px 0 8px;}
+.sgsc .sc-ac span{display:inline-block;margin:0 5px;}
+.sgsc .sc-ac b{color:var(--ink);font-size:13px;}
+.sgsc .sc-ac em{display:block;font-size:10px;opacity:.6;font-style:normal;margin-top:1px;letter-spacing:.5px;}
+.sgsc .sc-ac.gm{cursor:pointer;}
+.sgsc .sc-ac.gm:hover b{color:var(--teal);}
+.sgsc .sc-acdir{position:absolute;z-index:4;min-width:24px;text-align:center;font-size:13px;font-weight:700;color:var(--ink);
+  background:rgba(4,10,18,.78);border:1px solid var(--edge2);border-radius:9px;padding:1px 6px;pointer-events:none;transform:translate(-50%,-50%);}
+.sgsc .sc-acdir.shielded{color:#04121c;background:var(--teal);border-color:var(--teal);box-shadow:0 0 10px rgba(56,225,196,.55);}
+.sgsc .sc-acdir.pos-fore{top:5%;left:50%;}
+.sgsc .sc-acdir.pos-aft{top:95%;left:50%;}
+.sgsc .sc-acdir.pos-port{top:55%;left:14%;}
+.sgsc .sc-acdir.pos-starboard{top:55%;left:86%;}
 /* Ship + shield sit BEHIND the panels, confined to the central band (clear of the title & hull bar). */
 .sgsc .sc-shipbg{position:absolute;top:-55px;bottom:0;left:-78%;right:-78%;z-index:1;display:flex;align-items:center;justify-content:center;pointer-events:none;}
 .sgsc .sc-shipwrap{position:relative;height:112%;aspect-ratio:1218/1620;pointer-events:auto;}
@@ -434,6 +467,7 @@
   border:1px solid var(--edge);border-radius:9px;background:rgba(10,28,38,.55);}
 .sgct .ct-move .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;}
 .sgct .ct-move .pm-mp{font-size:13px;font-weight:700;color:var(--teal);background:#0a1c26;border:1px solid var(--edge2);border-radius:9px;padding:2px 9px;white-space:nowrap;}
+.sgct .ct-move .pm-nav{font-size:11px;font-weight:700;color:#0a1c26;background:#f2b03d;border-radius:8px;padding:2px 7px;white-space:nowrap;letter-spacing:.5px;box-shadow:0 0 8px rgba(242,176,61,.4);}
 .sgct .ct-move .pm-mp.bonus{color:var(--amber);border-color:var(--amber);}
 .sgct .pm-btn{font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;color:var(--ink);background:#0a1c26;
   border:1px solid var(--edge2);border-radius:7px;padding:4px 9px;white-space:nowrap;}
@@ -682,6 +716,26 @@
 .srp-gauge{width:26px;height:120px;border:1px solid #163b4e;border-radius:6px;background:#07141d;position:relative;overflow:hidden;}
 .srp-gauge .fill{position:absolute;left:0;right:0;bottom:0;background:#38e1c4;transition:height .1s,background .1s;}
 .srp-gauge .band{position:absolute;left:0;right:0;background:rgba(66,209,106,.22);border-top:1px solid #42d16a;border-bottom:1px solid #42d16a;}
+/* ── Nav Support mini-game ── */
+.sng-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#cfeef0;}
+.sng{width:min(600px,95vw);border:1px solid #1d6a86;border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.75);}
+.sng-head{display:flex;align-items:baseline;justify-content:space-between;padding:13px 16px 10px;}
+.sng-title{font-weight:700;letter-spacing:2px;color:#38e1c4;text-shadow:0 0 10px rgba(56,225,196,.4);}
+.sng-score{font-weight:700;font-size:16px;color:#f2b03d;letter-spacing:1px;}
+.sng-body{padding:12px 16px;display:flex;align-items:center;justify-content:center;min-height:240px;}
+.sng-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:10px 16px;border-top:1px solid #12455a;}
+.sng-msg{flex:1;font-size:12px;color:#9fc0cc;}
+.sng-x{cursor:pointer;font-family:inherit;font-weight:700;font-size:12px;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:8px;padding:5px 12px;}
+.sng-x:hover{border-color:#e0454d;color:#e0454d;}
+.sng-field{position:relative;border:1px solid #163b4e;border-radius:12px;background:radial-gradient(circle at 50% 40%,#0b2130,#06121b);overflow:hidden;}
+.sng-lines{position:absolute;inset:0;pointer-events:none;}
+.sng-lines line.on{stroke:#38e1c4;stroke-width:3;stroke-linecap:round;filter:drop-shadow(0 0 4px rgba(56,225,196,.6));}
+.sng-node{position:absolute;transform:translate(-50%,-50%);width:38px;height:38px;border-radius:50%;cursor:pointer;font-family:inherit;font-weight:700;font-size:15px;color:#cfeef0;background:#0a1c26;border:2px solid #2b7d99;box-shadow:0 0 0 3px rgba(10,28,38,.6);transition:transform .1s,border-color .1s,background .1s;}
+.sng-node:hover{border-color:#38e1c4;}
+.sng-node.hit{background:#0f6f66;border-color:#38e1c4;color:#eafffb;box-shadow:0 0 12px rgba(56,225,196,.55);}
+.sng-node.miss{border-color:#e0454d;background:#3a1114;animation:sngshake .22s;}
+@keyframes sngshake{0%,100%{transform:translate(-50%,-50%)}25%{transform:translate(-58%,-50%)}75%{transform:translate(-42%,-50%)}}
+.sng-chan canvas{display:block;cursor:crosshair;}
 `;
     document.head.appendChild(st);
   };
@@ -766,10 +820,18 @@
     const hullPct = state.hull.max ? clamp(state.hull.cur / state.hull.max, 0, 1) * 100 : 0;
     const hullColor = hullPct > 50 ? "var(--teal)" : hullPct > 20 ? "var(--amber)" : "var(--red)";
 
+    // Per-facing ship AC (base + pilot maneuver + directional shields).
+    const ac = S.shipAC(state, ctx.getCombat ? ctx.getCombat() : null);
+    const acDir = (f, lbl) => `<div class="sc-acdir pos-${f}${ac[f] > ac.base + ac.maneuver ? " shielded" : ""}" title="${lbl} AC ${ac[f]}">${ac[f]}</div>`;
+    const acLine = `<div class="sc-ac${ctx.isGM ? " gm" : ""}" data-ac title="${ctx.isGM ? "Click to set base AC" : ""}">AC · ` +
+      `<span>F <b>${ac.fore}</b></span><span>S <b>${ac.starboard}</b></span><span>A <b>${ac.aft}</b></span><span>P <b>${ac.port}</b></span>` +
+      `<em>base ${ac.base}${ac.maneuver ? ` · ${esc(ac.maneuverLabel)} ${ac.maneuver >= 0 ? "+" : ""}${ac.maneuver}` : ""}</em></div>`;
+
     root.className = `sgsc ${ctx.isGM ? "gm" : ""}`;
     root.innerHTML = `
       <div class="sc-title">${esc(state.name)} — SHIP OVERVIEW</div>
       <div class="sc-sub">SYSTEMS · HULL INTEGRITY · SHIELD: <b style="color:${shieldStatus(state).color}">${shieldStatus(state).label}</b></div>
+      ${acLine}
       <div class="sc-grid">
         <div class="sc-col">${left.map((s) => systemCard(ctx, s, state)).join("")}</div>
         <div class="sc-col sc-center">
@@ -777,6 +839,7 @@
             <span class="sc-shipph">SSV SILVER GULL</span>
             <img class="sc-shipimg" src="${shipFile}" alt="SSV Silver Gull" onload="this.previousElementSibling.style.display='none'" onerror="this.style.display='none'">
             ${shieldEl(ctx, state)}
+            ${acDir("fore", "Fore")}${acDir("aft", "Aft")}${acDir("port", "Port")}${acDir("starboard", "Starboard")}
           </div></div>
         </div>
         <div class="sc-col">${right.map((s) => systemCard(ctx, s, state)).join("")}</div>
@@ -810,6 +873,15 @@
         await ctx.setState(next);
       };
     });
+    // GM: click the AC readout to set the base AC.
+    const acEl = root.querySelector("[data-ac].gm");
+    if (acEl && ctx.promptNumber) acEl.onclick = async () => {
+      const cur = S.normalize(ctx.getState()).ac.base;
+      const v = await ctx.promptNumber("Base ship AC", "e.g. 13", cur, null);
+      if (v == null || isNaN(v)) return;
+      const next = S.normalize(ctx.getState()); next.ac.base = Math.max(1, Math.round(Number(v)));
+      await ctx.setState(next);
+    };
     // (Clicking the ship no longer moves the shield — the GM uses the ⚙ GM Actions toggles,
     //  and the crew aim shields via their station actions.)
     const hullBar = root.querySelector('[data-hull]');
@@ -865,16 +937,18 @@
   // Inline pilot movement panel (under the seat): pick a maneuver, then spend Movement Points to move/rotate.
   function pilotPanel(c) {
     if (c.station !== "pilot") return "";
+    const nav = Number(c.navMult) > 1 ? Number(c.navMult) : 1;
+    const navBadge = nav > 1 ? `<span class="pm-nav" title="Navigation Support: Movement Points ×${nav} this turn">×${nav} nav</span>` : "";
     if (!c.maneuver) {
-      const btns = Object.entries(S.MANEUVERS).map(([k, v]) => `<button class="pm-btn" data-man="${k}">${v.label} <b>${v.mp}</b></button>`).join("");
-      return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">Maneuver</span>${btns}</div>`;
+      const btns = Object.entries(S.MANEUVERS).map(([k, v]) => `<button class="pm-btn" data-man="${k}">${v.label} <b>${Math.round(v.mp * nav)}</b></button>`).join("");
+      return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">Maneuver</span>${navBadge}${btns}</div>`;
     }
     const remaining = c.mp > 0 ? c.mp : (!c.bonus ? 1 : 0);
     const onBonus = c.mp <= 0 && !c.bonus;
     const dis = remaining <= 0 ? " disabled" : "";
     const man = S.MANEUVERS[c.maneuver]?.label || c.maneuver;
     const mv = (k, t, lbl) => `<button class="pm-btn pm-mv"${dis} data-move="${k}" title="${t}">${lbl}</button>`;
-    return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">${esc(man)}</span>` +
+    return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">${esc(man)}</span>${navBadge}` +
       `<span class="pm-mp${onBonus ? " bonus" : ""}" title="Movement Points left${onBonus ? " (bonus action)" : ""}">${remaining} MP${onBonus ? " ⚡" : ""}</span>` +
       mv("rotL90", "Rotate 90° left (1 MP)", "⟲90") + mv("rotL45", "Rotate 45° left (1 MP)", "⟲45") +
       mv("forward", "Move forward 1 space (1 MP)", "↑ Fwd") +
@@ -1183,6 +1257,134 @@
     api.addCleanup(() => clearInterval(iv));
     (PUZZLES[key] || PUZZLES.flow)(bodyEl, api);
   };
+
+  // ── Navigation Support mini-game (Science action) — graded, never fails.
+  //    Calls opts.onDone(perf 0..1) on completion, opts.onCancel() on abort. Two random variants. ──
+  const _nowMs = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
+  const _clamp01 = (x) => Math.max(0, Math.min(1, x));
+  let _ngCleanups = [];
+  function closeNavGame() {
+    _ngCleanups.forEach((fn) => { try { fn(); } catch (e) {} });
+    _ngCleanups = [];
+    const o = document.getElementById("ssv-nav-game"); if (o) o.remove();
+  }
+  S.closeNavGame = closeNavGame;
+  S.openNavGame = function (opts) {
+    opts = opts || {};
+    closeNavGame();
+    S.ensureStyles();
+    const variant = opts.variant || (_rnd(2) === 0 ? "course" : "gates");
+    const titles = { course: "PLOT THE COURSE", gates: "THREAD THE GATES" };
+    const hints = { course: "Click the nav beacons in order — 1 → last — fast and clean.", gates: "Move your mouse to steer. Fly the marker through each gate's gap." };
+    const ov = document.createElement("div"); ov.id = "ssv-nav-game"; ov.className = "sng-overlay";
+    ov.innerHTML =
+      `<div class="sng"><div class="sng-head"><span class="sng-title">NAV SUPPORT — ${titles[variant]}</span>` +
+      `<span class="sng-score" data-score></span></div>` +
+      `<div class="sng-body" data-body></div>` +
+      `<div class="sng-foot"><span class="sng-msg" data-msg>${hints[variant]}</span><button class="sng-x" data-x>Abort</button></div></div>`;
+    document.body.appendChild(ov);
+    const bodyEl = ov.querySelector("[data-body]"), scoreEl = ov.querySelector("[data-score]"), msgEl = ov.querySelector("[data-msg]");
+    let done = false;
+    const api = {
+      setScore: (t) => { if (!done) scoreEl.textContent = t; },
+      setHint: (t) => { if (!done) msgEl.textContent = t; },
+      addCleanup: (fn) => _ngCleanups.push(fn)
+    };
+    const finish = (perf) => {
+      if (done) return; done = true;
+      const p = _clamp01(perf), mult = Math.round((1.5 + p) * 100) / 100;   // 1.5 (rough) … 2.5 (perfect)
+      _ngCleanups.forEach((fn) => { try { fn(); } catch (e) {} }); _ngCleanups = [];
+      scoreEl.textContent = `${Math.round(p * 100)}%`;
+      msgEl.textContent = `Course locked — Pilot Movement Points ×${mult}`; msgEl.style.color = "#38e1c4";
+      setTimeout(() => { const o = document.getElementById("ssv-nav-game"); if (o) o.remove(); opts.onDone && opts.onDone(p); }, 950);
+    };
+    const cancel = () => { if (done) return; done = true; closeNavGame(); opts.onCancel && opts.onCancel(); };
+    ov.querySelector("[data-x]").onclick = cancel;
+    ov.onclick = (e) => { if (e.target === ov) cancel(); };
+    (variant === "gates" ? navGates : navCourse)(bodyEl, api, finish);
+  };
+
+  // Variant A — Plot the Course: click numbered beacons 1→N in order; graded on completion, speed, mistakes.
+  function navCourse(root, api, finish) {
+    const W = 560, Hh = 350, N = 7, T = 13000;
+    root.innerHTML = `<div class="sng-field" style="width:${W}px;height:${Hh}px;"><svg class="sng-lines" viewBox="0 0 ${W} ${Hh}"></svg></div>`;
+    const field = root.querySelector(".sng-field"), svg = root.querySelector(".sng-lines");
+    const pts = []; let guard = 0;
+    while (pts.length < N && guard++ < 3000) {
+      const x = 40 + _rnd(W - 80), y = 40 + _rnd(Hh - 80);
+      if (pts.every((p) => Math.hypot(p.x - x, p.y - y) > 78)) pts.push({ x, y });
+    }
+    let next = 0, mistakes = 0; const startT = _nowMs();
+    pts.forEach((p, i) => {
+      const b = document.createElement("button");
+      b.className = "sng-node"; b.textContent = String(i + 1);
+      b.style.left = p.x + "px"; b.style.top = p.y + "px";
+      field.appendChild(b);
+      b.onclick = () => {
+        if (done0()) return;
+        if (i === next) {
+          b.classList.add("hit");
+          if (next > 0) {
+            const a = pts[next - 1], ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            ln.setAttribute("x1", a.x); ln.setAttribute("y1", a.y); ln.setAttribute("x2", p.x); ln.setAttribute("y2", p.y); ln.setAttribute("class", "on");
+            svg.appendChild(ln);
+          }
+          next++; api.setScore(`${next}/${N}`);
+          if (next >= N) { stop(); const speed = _clamp01(1 - (_nowMs() - startT) / T); finish(_clamp01(1 - 0.06 * mistakes) * (0.7 + 0.3 * speed)); }
+        } else {
+          mistakes++; b.classList.add("miss"); setTimeout(() => b.classList.remove("miss"), 220);
+          api.setHint(`Wrong beacon — follow the numbers (${mistakes} slip${mistakes > 1 ? "s" : ""}).`);
+        }
+      };
+    });
+    api.setScore(`0/${N}`);
+    let ended = false; const done0 = () => ended;
+    const iv = setInterval(() => {
+      const el = _nowMs() - startT;
+      if (el >= T) { stop(); finish(_clamp01((next / N) * (1 - 0.06 * mistakes))); }
+      else if (mistakes === 0) api.setHint(`${Math.ceil((T - el) / 1000)}s left — reach beacon ${next + 1}.`);
+    }, 250);
+    function stop() { ended = true; clearInterval(iv); }
+    api.addCleanup(stop);
+  }
+
+  // Variant B — Thread the Gates: steer a marker (mouse) so it passes through each scrolling gate's gap.
+  function navGates(root, api, finish) {
+    const W = 520, Hh = 380, G = 8, shipY = Hh - 46, shipR = 14, gap = 96, speed = 155, spacing = 150;
+    root.innerHTML = `<div class="sng-field sng-chan" style="width:${W}px;height:${Hh}px;"><canvas width="${W}" height="${Hh}"></canvas></div>`;
+    const field = root.querySelector(".sng-field"), cv = root.querySelector("canvas"), cx = cv.getContext("2d");
+    let shipX = W / 2;
+    const onMove = (e) => { const r = cv.getBoundingClientRect(); shipX = Math.max(shipR, Math.min(W - shipR, (e.clientX - r.left) * (W / r.width))); };
+    field.addEventListener("mousemove", onMove);
+    api.addCleanup(() => field.removeEventListener("mousemove", onMove));
+    const gates = [];
+    for (let i = 0; i < G; i++) gates.push({ y: -60 - i * spacing, gx: 40 + gap / 2 + _rnd(W - 80 - gap), judged: false, passed: false });
+    let passed = 0, judged = 0, raf = 0, last = _nowMs(), ended = false;
+    api.setScore(`0/${G}`);
+    const step = () => {
+      if (ended) return;
+      const t = _nowMs(), dt = Math.min(0.05, (t - last) / 1000); last = t;
+      cx.clearRect(0, 0, W, Hh);
+      cx.strokeStyle = "rgba(56,225,196,.22)"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(0, shipY); cx.lineTo(W, shipY); cx.stroke();
+      for (const g of gates) {
+        g.y += speed * dt;
+        cx.fillStyle = g.judged ? (g.passed ? "rgba(66,209,106,.55)" : "rgba(224,69,77,.55)") : "#6fb2d6";
+        cx.fillRect(0, g.y - 5, g.gx - gap / 2, 10);
+        cx.fillRect(g.gx + gap / 2, g.y - 5, W - (g.gx + gap / 2), 10);
+        if (!g.judged && g.y >= shipY) {
+          g.judged = true; g.passed = Math.abs(shipX - g.gx) <= gap / 2 - 4; if (g.passed) passed++; judged++;
+          api.setScore(`${passed}/${G}`);
+          if (judged >= G) { ended = true; cancelAnimationFrame(raf); return finish(passed / G); }
+        }
+      }
+      cx.fillStyle = "#38e1c4"; cx.shadowColor = "rgba(56,225,196,.7)"; cx.shadowBlur = 10;
+      cx.beginPath(); cx.moveTo(shipX, shipY - shipR); cx.lineTo(shipX - shipR * 0.72, shipY + shipR * 0.72); cx.lineTo(shipX + shipR * 0.72, shipY + shipR * 0.72); cx.closePath(); cx.fill();
+      cx.shadowBlur = 0;
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    api.addCleanup(() => { ended = true; cancelAnimationFrame(raf); });
+  }
 
   // 1) reactor — Power Routing: rotate pipe tiles to connect source → core (flood-fill).
   PUZZLES.flow = (root, api) => {
@@ -1663,7 +1865,7 @@
     });
   }
 
-  const ctx = () => ({ isGM: game.user.isGM, getState, setState, assetUrl, promptHull, promptNumber });
+  const ctx = () => ({ isGM: game.user.isGM, getState, setState, assetUrl, promptHull, promptNumber, getCombat });
 
   /* -- Full-screen station console (frameless overlay) ------------------- */
 
@@ -1976,9 +2178,29 @@
     const next = getCombat(); const c = next.crew[crewId]; if (!c || c.station !== "pilot") return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && c.controllerUserId !== byUserId) return;
-    c.maneuver = maneuverId; c.mp = m.mp; c.action = true;
+    const full = Math.round(m.mp * (c.navMult || 1));   // Science Nav Support may have pre-boosted this turn
+    c.maneuver = maneuverId; c.mpMax = full; c.mp = full; c.action = true;
     await saveCombat(next);
-    await ChatMessage.create({ content: `<b>${esc(c.name)}</b> · Pilot — <b>${esc(m.label)}</b> (${m.mp} Movement Points)`, speaker: { alias: "SSV Silver Gull" } });
+    const boost = (c.navMult || 1) > 1 ? ` (×${c.navMult} nav support)` : "";
+    await ChatMessage.create({ content: `<b>${esc(c.name)}</b> · Pilot — <b>${esc(m.label)}</b> (${full} Movement Points)${boost}`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  // Science → Nav Support: multiply the Pilot's Movement Points for this turn (retroactive if they've begun moving).
+  async function gmNavSupport(mult, byUserId) {
+    if (!game.user.isGM) return;
+    const m = Math.max(1, Math.min(3, Number(mult) || 1));
+    const next = getCombat();
+    const pilot = Object.values(next.crew).find((c) => c.station === "pilot");
+    if (!pilot) return notifyUser(byUserId || game.user.id, "No pilot aboard to support.");
+    pilot.navMult = m;
+    if (pilot.maneuver) {                                 // retroactively re-scale the base pool, keeping MP already spent
+      const base = S.MANEUVERS[pilot.maneuver]?.mp || 0;
+      const spent = Math.max(0, (pilot.mpMax || base) - pilot.mp);
+      const newMax = Math.round(base * m);
+      pilot.mpMax = newMax;
+      pilot.mp = Math.max(0, newMax - spent);
+    }
+    await saveCombat(next);
+    await ChatMessage.create({ content: `Navigation Support — <b>${esc(pilot.name)}</b>'s Movement Points ×<b>${m}</b>${pilot.maneuver ? ` (now <b>${pilot.mp}</b> left this turn)` : " this turn"}`, speaker: { alias: "SSV Silver Gull" } });
   }
   async function gmPilotMove(crewId, kind, byUserId) {
     if (!game.user.isGM) return;
@@ -2164,6 +2386,8 @@
     }
     // Engineer Repair: pick a system → d20+INT → nat20/nat1/puzzle → +2 HP. Manages its own consume.
     if (a.type === "repair") { await runRepair(crew, isBonus); return; }
+    // Science Nav Support: play the nav mini-game → set the Pilot's Movement-Point multiplier. Own consume.
+    if (a.type === "navsupport") { await runNavSupport(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -2202,6 +2426,21 @@
       timeMs,
       onSolve: () => { doRepair(); announce(true); },
       onFail: () => { announce(false); }
+    });
+  }
+
+  // Science → Nav Support: play the nav mini-game, then set the Pilot's Movement-Point multiplier.
+  async function runNavSupport(crew, isBonus) {
+    const pilot = Object.values(getCombat().crew).find((c) => c.station === "pilot");
+    if (!pilot) return ui.notifications?.info("No pilot aboard — Nav Support has no one to help.");
+    const consume = () => { const which = isBonus ? "bonus" : "action"; if (game.user.isGM) gmConsume(crew.id, which, null); else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id }); };
+    S.openNavGame({
+      onDone: (perf) => {
+        const mult = Math.round((1.5 + Math.max(0, Math.min(1, perf))) * 100) / 100;   // ×1.5 … ×2.5
+        consume();   // spent only once the mini-game is actually played
+        if (game.user.isGM) gmNavSupport(mult, null); else emit({ type: "navSupport", toGM: true, mult, userId: game.user.id });
+      },
+      onCancel: () => {}   // aborted → no action spent
     });
   }
   async function gmRepairSystem(systemId, byUserId) {
@@ -2270,6 +2509,7 @@
       case "pilotManeuver":  gmPilotManeuver(msg.crewId, msg.maneuver, msg.userId); break;
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
       case "repairSystem":   gmRepairSystem(msg.systemId, msg.userId); break;
+      case "navSupport":     gmNavSupport(msg.mult, msg.userId); break;
       case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
       case "useResource":    gmUseResource(msg.itemId, msg.userId); break;
       case "convert":        gmConvert(msg.userId, msg.fuelAmt); break;
@@ -2298,7 +2538,7 @@
     next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
     for (const m of cur.roster) {
       if (!included.has(m.id)) continue;
-      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, prof: {} };
+      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, prof: {} };
     }
     await saveCombat(next);
     emit({ type: "pickPrompt" });
@@ -2312,7 +2552,7 @@
   async function nextTurn() {
     if (!game.user.isGM) return;
     const next = getCombat();
-    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null; c.mp = 0; }
+    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null; c.mp = 0; c.mpMax = 0; c.navMult = 1; }
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
     // Micro-Adjust's secondary shield lasts only until the start of the next turn.
@@ -2424,7 +2664,7 @@
     if (!cid) return;
     const m = combat.roster.find((x) => x.id === cid); if (!m) return;
     const next = getCombat();
-    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, prof: {} };
+    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, prof: {} };
     await saveCombat(next);
   }
   async function editCrewDialog() {
