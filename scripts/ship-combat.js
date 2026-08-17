@@ -1066,7 +1066,7 @@
       : (list.length ? sectionsHtml : `<div class="inv-empty">— empty —</div>`);
     const gmBtns = kctx.isGM
       ? `<button class="con-inv" data-act="additem" title="Add any item to the ship">＋ Add item</button>` +
-        `<button class="con-inv" data-act="tune" title="Set fuel/power amounts">Tune</button>` +
+        `<button class="con-inv" data-act="tune" title="Set fuel/power maximums">Max</button>` +
         `<button class="con-inv" data-act="actor" title="Pick the ship actor">Ship actor</button>`
       : "";
     rightEl.innerHTML =
@@ -1562,21 +1562,18 @@
   }
   async function gmTuneDialog() {
     if (!game.user.isGM) return;
-    const st = getState(), t = st.tuning;
+    const st = getState();
+    // Per-item amounts live on each item now, and conversion is the two fixed buttons — so only the
+    // gauge maximums are tunable here.
     const content = `<div style="display:flex;flex-direction:column;gap:6px;">
-      <label>Fuel per item <input type="number" name="fpi" value="${t.fuelPerItem}" min="0"/></label>
-      <label>Power per item <input type="number" name="ppi" value="${t.powerPerItem}" min="0"/></label>
-      <label>Convert — fuel spent <input type="number" name="cf" value="${t.convertFuel}" min="0"/></label>
-      <label>Convert — power gained <input type="number" name="cp" value="${t.convertPower}" min="0"/></label>
       <label>Fuel max <input type="number" name="fmax" value="${st.fuel.max}" min="1"/></label>
       <label>Power max <input type="number" name="pmax" value="${st.power.max}" min="1"/></label></div>`;
-    const read = (f) => ({ fpi: +f.elements.fpi.value, ppi: +f.elements.ppi.value, cf: +f.elements.cf.value, cp: +f.elements.cp.value, fmax: +f.elements.fmax.value, pmax: +f.elements.pmax.value });
+    const read = (f) => ({ fmax: +f.elements.fmax.value, pmax: +f.elements.pmax.value });
     const d = D2();
     const r = d
-      ? await d.prompt({ window: { title: "Tune fuel & power" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
-      : await new Promise((res) => new Dialog({ title: "Tune fuel & power", content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+      ? await d.prompt({ window: { title: "Fuel & power maximums" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
+      : await new Promise((res) => new Dialog({ title: "Fuel & power maximums", content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
     if (!r) return;
-    st.tuning = { fuelPerItem: r.fpi, powerPerItem: r.ppi, convertFuel: r.cf, convertPower: r.cp };
     st.fuel.max = Math.max(1, r.fmax); st.power.max = Math.max(1, r.pmax);
     st.fuel.cur = Math.min(st.fuel.cur, st.fuel.max); st.power.cur = Math.min(st.power.cur, st.power.max);
     await setState(st);
