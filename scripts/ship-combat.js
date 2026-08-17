@@ -404,10 +404,10 @@
 .sgsc .sc-acdir{position:absolute;z-index:4;min-width:24px;text-align:center;font-size:13px;font-weight:700;color:var(--ink);
   background:rgba(4,10,18,.78);border:1px solid var(--edge2);border-radius:9px;padding:1px 6px;pointer-events:none;transform:translate(-50%,-50%);}
 .sgsc .sc-acdir.shielded{color:#04121c;background:var(--teal);border-color:var(--teal);box-shadow:0 0 10px rgba(56,225,196,.55);}
-.sgsc .sc-acdir.pos-fore{top:5%;left:50%;}
-.sgsc .sc-acdir.pos-aft{top:95%;left:50%;}
-.sgsc .sc-acdir.pos-port{top:55%;left:14%;}
-.sgsc .sc-acdir.pos-starboard{top:55%;left:86%;}
+.sgsc .sc-acdir.pos-fore{top:14%;left:50%;}
+.sgsc .sc-acdir.pos-aft{top:86%;left:50%;}
+.sgsc .sc-acdir.pos-port{top:52%;left:27%;}
+.sgsc .sc-acdir.pos-starboard{top:52%;left:73%;}
 /* Ship + shield sit BEHIND the panels, confined to the central band (clear of the title & hull bar). */
 .sgsc .sc-shipbg{position:absolute;top:-55px;bottom:0;left:-78%;right:-78%;z-index:1;display:flex;align-items:center;justify-content:center;pointer-events:none;}
 .sgsc .sc-shipwrap{position:relative;height:112%;aspect-ratio:1218/1620;pointer-events:auto;}
@@ -2807,7 +2807,15 @@
     const c = cv.getContext("2d");
     const ship = await load(A + `ship/ship-${S.shipVariant(state)}.png`); if (ship) c.drawImage(ship, 0, 0, W, H);
     if (state.shield.on && state.systems.shields !== "destroyed") {
-      const sh = await load(A + `shields/shield-${state.shield.facing}.png`); if (sh) c.drawImage(sh, 0, 0, W, H);
+      const sh = await load(A + `shields/shield-${state.shield.facing}.png`);
+      if (sh) {
+        if (state.systems.shields === "damaged") {
+          // Damaged Shield Generator → the field on the token goes amber/orange (matches the HUD "FAILING" warning).
+          c.save(); c.filter = "hue-rotate(-130deg) saturate(1.6) brightness(1.05)"; c.drawImage(sh, 0, 0, W, H); c.restore();
+        } else {
+          c.drawImage(sh, 0, 0, W, H);
+        }
+      }
     }
     if (state.shield.secondary) {
       const sc = await load(A + `shields/shield-${state.shield.secondary}.png`);
