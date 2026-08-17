@@ -1986,7 +1986,10 @@
   const PHYSICAL_TYPES = new Set(["weapon", "equipment", "consumable", "tool", "loot", "container", "backpack"]);
   function getShipActor() {
     const st = getState();
-    return (st.actorId && game.actors.get(st.actorId)) || game.actors.getName(st.name) || null;
+    if (st.actorId) { const a = game.actors.get(st.actorId); if (a) return a; }
+    // Name fallback must skip the auto-created token-icon actor (also named "SSV Silver Gull") so inventory
+    // ops don't target the throwaway display actor on a world where the cargo actor isn't configured yet.
+    return game.actors?.find((a) => a.name === st.name && !a.getFlag?.(MODULE_ID, "shipIcon")) || null;
   }
   function physicalItems(actor) {
     if (!actor?.items) return [];
@@ -2001,7 +2004,7 @@
     });
   }
   async function promptNumber(title, label, value, max) {
-    const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="number" name="v" value="${value}" min="1"${max != null ? ` max="${max}"` : ""}/></label></div>`;
+    const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="number" name="v" value="${value}" min="0"${max != null ? ` max="${max}"` : ""}/></label></div>`;
     const read = (form) => { const n = Number(form.elements.v.value); return Number.isFinite(n) ? n : null; };
     const d = D2();
     if (d) return d.prompt({ window: { title }, content, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
@@ -2186,6 +2189,10 @@
   }
   // Only players draw on ship resources — anything the GM (or no user) initiates is free.
   const playerSpends = (byUserId) => !!byUserId && !game.users.get(byUserId)?.isGM;
+  // Authority check for a station-scoped action: the GM always passes; a player must control a crew at that station.
+  const controlsStation = (byUserId, station) =>
+    (!byUserId || game.users.get(byUserId)?.isGM) ||
+    Object.values(getCombat().crew).some((c) => c.station === station && c.controllerUserId === byUserId);
   // GM-authoritative: drain `amount` power for a player's action (clamped at 0). GM/zero = no-op.
   async function gmSpendPower(byUserId, amount) {
     if (!game.user.isGM) return;
@@ -2198,6 +2205,9 @@
     const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && c.controllerUserId !== byUserId) return;
+    const amt = Math.max(0, Math.round(Number(power) || 0));   // server-side power gate (mirrors gmAllocateShield)
+    if (amt && playerSpends(byUserId) && getState().power.cur < amt)
+      return notifyUser(byUserId, `Not enough power (need ${amt} — convert fuel to power first).`);
     if (!tryConsume(c, which)) return notifyUser(byUserId || game.user.id, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
     await saveCombat(next);
     await gmSpendPower(byUserId, power);
@@ -2219,6 +2229,7 @@
   // Science → Nav Support: multiply the Pilot's Movement Points for this turn (retroactive if they've begun moving).
   async function gmNavSupport(mult, byUserId) {
     if (!game.user.isGM) return;
+    if (!controlsStation(byUserId, "science")) return notifyUser(byUserId || game.user.id, "Only the Science officer can run Navigation Support.");
     const m = Math.max(1, Math.min(3, Number(mult) || 1));
     const next = getCombat();
     const pilot = Object.values(next.crew).find((c) => c.station === "pilot");
@@ -2310,6 +2321,8 @@
     if (!cap || !tgt) return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && cap.controllerUserId !== byUserId) return;
+    if (playerSpends(byUserId) && getState().power.cur < S.ACTION_POWER.grant)
+      return notifyUser(byUserId, `Not enough power to Grant (need ${S.ACTION_POWER.grant} — convert fuel to power first).`);
     if (!tryConsume(cap, "action")) return notifyUser(byUserId || game.user.id, "You've no Main action left to Grant.");
     tgt.granted = (tgt.granted || 0) + 1;
     await saveCombat(next);
@@ -2414,6 +2427,22 @@
       ui.notifications?.warn("Weapons are down — the gun can't fire until it's repaired.");
       return;
     }
+    // Pilot maneuvers/reposition are driven from the turn-bar panel. If clicked in the full console, route the
+    // maneuver to the real handler (so it grants Movement Points) instead of burning the Main action on a no-op note.
+    if (crew.station === "pilot") {
+      if (S.MANEUVERS[a.id]) {
+        if (game.user.isGM) gmPilotManeuver(crew.id, a.id, null);
+        else emit({ type: "pilotManeuver", toGM: true, crewId: crew.id, maneuver: a.id, userId: game.user.id });
+        return;
+      }
+      if (a.id === "reposition") { ui.notifications?.info("Use the ⟲ / ↑ Fwd / ⟳ buttons in the turn bar to move — repositioning spends Movement Points, not an action."); return; }
+    }
+    // Power check (players only; the GM acts for free). Block up-front so a powered action can't run on empty.
+    const power = S.actionPower(a);
+    if (!game.user.isGM && power > 0 && S.normalize(getState()).power.cur < power) {
+      ui.notifications?.warn(`Not enough power — ${a.name} needs ${power} (convert fuel to power first).`);
+      return;
+    }
     // Grant Actions: pick a target crew who gains a purple-star extra action.
     if (a.type === "grant") {
       const combat = getCombat();
@@ -2423,12 +2452,6 @@
       if (!target) return;
       if (game.user.isGM) gmGrant(crew.id, target, null);
       else emit({ type: "grantAction", toGM: true, captainCrewId: crew.id, targetCrewId: target, userId: game.user.id });
-      return;
-    }
-    // Power check (players only; the GM acts for free). Block up-front so a powered action can't run on empty.
-    const power = S.actionPower(a);
-    if (!game.user.isGM && power > 0 && S.normalize(getState()).power.cur < power) {
-      ui.notifications?.warn(`Not enough power — ${a.name} needs ${power} (convert fuel to power first).`);
       return;
     }
     // Engineer Repair: pick a system → d20+INT → nat20/nat1/puzzle → +2 HP. Manages its own consume.
@@ -2493,6 +2516,7 @@
   }
   async function gmRepairSystem(systemId, byUserId) {
     if (!game.user.isGM) return;
+    if (!controlsStation(byUserId, "engineer")) return notifyUser(byUserId || game.user.id, "Only the Engineer can repair systems.");
     const st = getState(); const hp = st.systemHp?.[systemId]; if (!hp) return;
     if (hp.cur <= 0) return notifyUser(byUserId || game.user.id, "That system is destroyed and can't be repaired.");
     hp.cur = Math.min(hp.max, hp.cur + 2);
@@ -2871,9 +2895,16 @@
     }
     return await new Promise((r) => cv.toBlob(r, "image/webp", 0.9));
   }
-  let _iconBusy = false, _iconAgain = false;
-  async function updateShipIcon() {
+  // Only the shield/hull/variant affect the composite — signature so we skip regen on fuel/power/inventory writes.
+  function shipIconSig(state) {
+    const s = state.shield || {};
+    return [S.shipVariant(state), s.on ? 1 : 0, s.facing || "", s.secondary || "", state.systems?.shields || ""].join("|");
+  }
+  let _iconBusy = false, _iconAgain = false, _iconSig = null;
+  async function updateShipIcon(force) {
     if (!game.user.isGM) return;
+    const sig = shipIconSig(S.normalize(getState()));
+    if (!force && sig === _iconSig) return;              // nothing that changes the token image → skip the upload
     if (_iconBusy) { _iconAgain = true; return; }        // coalesce rapid shield changes
     _iconBusy = true;
     try {
@@ -2889,6 +2920,7 @@
         const ups = scene.tokens.filter((t) => t.actorId === a.id).map((t) => ({ _id: t.id, "texture.src": res.path }));
         if (ups.length) await scene.updateEmbeddedDocuments("Token", ups);
       }
+      _iconSig = sig;   // mark rendered only after the actor + tokens actually updated (a mid-update failure retries)
     } catch (e) { console.error(`${MODULE_ID} | ship icon update failed`, e); }
     finally { _iconBusy = false; if (_iconAgain) { _iconAgain = false; updateShipIcon(); } }
   }
