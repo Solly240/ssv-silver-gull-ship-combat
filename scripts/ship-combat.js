@@ -522,8 +522,18 @@
 .sgcon .inv-tab.active{color:#38e1c4;border-color:#38e1c4;box-shadow:0 0 10px rgba(56,225,196,.28);}
 .sgcon .inv-search{flex:1;min-width:150px;display:flex;align-items:center;gap:8px;background:#0a1c26;border:1px solid #1d6a86;border-radius:9px;padding:7px 12px;}
 .sgcon .inv-search input{flex:1;background:transparent;border:none;outline:none;color:#cfeef0;font-family:inherit;font-size:13px;}
-.sgcon .inv-grid{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;align-content:start;padding:6px 2px;border-radius:10px;}
-.sgcon .inv-grid.inv-drop{outline:2px dashed #38e1c4;outline-offset:-6px;background:rgba(56,225,196,.05);}
+.sgcon .inv-list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:6px 2px;border-radius:10px;}
+.sgcon .inv-list.inv-drop{outline:2px dashed #38e1c4;outline-offset:-6px;background:rgba(56,225,196,.05);}
+.sgcon .inv-sec{display:flex;flex-direction:column;}
+.sgcon .inv-sec-head{display:flex;align-items:center;gap:9px;cursor:pointer;padding:8px 11px;border:1px solid #163b4e;border-radius:9px;user-select:none;
+  background:linear-gradient(180deg,rgba(20,44,60,.7),rgba(10,24,34,.6));transition:border-color .12s,box-shadow .12s;}
+.sgcon .inv-sec-head:hover{border-color:#2b7d99;box-shadow:0 0 12px rgba(56,225,196,.15);}
+.sgcon .inv-caret{color:#38e1c4;font-size:11px;line-height:1;transition:transform .15s;}
+.sgcon .inv-sec.collapsed .inv-caret{transform:rotate(-90deg);}
+.sgcon .inv-sec-name{font-size:12px;font-weight:700;letter-spacing:1.5px;color:#cfeef0;text-transform:uppercase;}
+.sgcon .inv-sec-count{margin-left:auto;font-size:11px;font-weight:700;color:#7fa6b4;background:#0a1c26;border:1px solid #12455a;border-radius:10px;padding:1px 9px;}
+.sgcon .inv-sec-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;padding:10px 4px 6px;}
+.sgcon .inv-sec.collapsed .inv-sec-body{display:none;}
 .sgcon .inv-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 8px 8px;border:1px solid #1d6a86;border-radius:13px;
   background:linear-gradient(180deg,rgba(22,48,64,.65),rgba(9,22,32,.65));transition:border-color .12s,box-shadow .12s,transform .12s;}
 .sgcon .inv-tile:hover{border-color:#38e1c4;box-shadow:0 0 16px rgba(56,225,196,.35);transform:translateY(-2px);}
@@ -995,8 +1005,31 @@
   S.openItemBrowser = openItemBrowser;
   S.closeItemBrowser = closeItemBrowser;
 
+  // Sort items into navigable sections (by dnd5e type + a little name matching).
+  const invCollapsedSecs = new Set();   // collapsed inventory section labels (per-client, this session)
+  const INV_SECTIONS = ["Weapons", "Ammunition", "Explosives", "Medical", "Food", "Drink",
+    "Tools", "Gear & Supplies", "Apparel", "Materials", "Containers", "Valuables", "Other"];
+  function invCategory(it) {
+    const t = it.type, n = (it.name || "").toLowerCase();
+    if (t === "weapon") return "Weapons";
+    if (t === "tool") return "Tools";
+    if (t === "container") return "Containers";
+    if (t === "equipment") return "Apparel";
+    if (t === "loot") return /ore|scrap|crystal|ferrocrystal|verdite|polymer|relay|thermite|titanium|alloy|shard|ingot|fuel|cell/.test(n) ? "Materials" : "Valuables";
+    if (t === "consumable") {
+      if (/bullet|arrow|bolt|needle|cartridge|energy cell|gunpowder|\bammo\b/.test(n)) return "Ammunition";
+      if (/grenade|bomb|explos|dynamite|acid|alchemist.?s fire|incend|thermite/.test(n)) return "Explosives";
+      if (/potion|healer|antitoxin|stim|medkit|med-gel|bandage|medic/.test(n)) return "Medical";
+      if (/tequila|rum|sake|vodka|wine|whisk|\bale\b|lager|cider|brandy|grog|mead|moonshine|fizz|beer|liquor|booze|spirit/.test(n)) return "Drink";
+      if (/ration|paste|meal|nutrient|stew|fruit|caf|coffee|greens|bread|cheese|jerky|snack|\bfood\b|tack/.test(n)) return "Food";
+      if (/torch|candle|oil|lantern|rope|chalk|ink|waterskin|soap|climber|whetstone|tinder|flare|fishing/.test(n)) return "Gear & Supplies";
+      return "Other";
+    }
+    return "Other";
+  }
+
   // Ship inventory panel (right column, when kctx.invMode) — game-style grid with item pictures,
-  // search, ship/you tabs, hover detail popup, per-tile move/use, GM add-item + drag-drop.
+  // search, ship/you tabs, collapsible sections, hover popup, per-tile move/use, GM add-item + drag-drop.
   function renderInventoryPanel(rightEl, kctx) {
     const st = kctx.getState();
     const t = st.tuning;
@@ -1034,9 +1067,21 @@
       `</div>`;
     };
     const list = tab === "ship" ? ship : mine;
+    const isShipTab = tab === "ship";
+    // Group items into ordered sections; render each as a collapsible block.
+    const groups = {};
+    for (const it of list) { const c = invCategory(it); (groups[c] = groups[c] || []).push(it); }
+    const sectionsHtml = INV_SECTIONS.filter((s) => groups[s]?.length).map((s) => {
+      const collapsed = invCollapsedSecs.has(s);
+      const body = groups[s].map((it) => tile(it, isShipTab)).join("");
+      return `<div class="inv-sec${collapsed ? " collapsed" : ""}" data-sec="${esc(s)}">` +
+        `<div class="inv-sec-head"><span class="inv-caret">▾</span><span class="inv-sec-name">${esc(s)}</span>` +
+        `<span class="inv-sec-count">${groups[s].length}</span></div>` +
+        `<div class="inv-sec-body">${body}</div></div>`;
+    }).join("");
     const gridInner = (tab === "you" && !kctx.hasPlayerActor)
       ? `<div class="inv-empty">No character is assigned to you.</div>`
-      : (list.length ? list.map((it) => tile(it, tab === "ship")).join("") : `<div class="inv-empty">— empty —</div>`);
+      : (list.length ? sectionsHtml : `<div class="inv-empty">— empty —</div>`);
     const gmBtns = kctx.isGM
       ? `<button class="con-inv" data-act="additem" title="Add any item to the ship">＋ Add item</button>` +
         `<button class="con-inv" data-act="tune" title="Set fuel/power amounts">Tune</button>` +
@@ -1054,7 +1099,7 @@
           `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
           `<button class="inv-tab${tab === "you" ? " active" : ""}" data-tab="you">YOUR ITEMS</button></div>` +
           `<div class="inv-search"><span>🔎</span><input type="text" placeholder="Search inventory…" data-search="1"></div>${gmBtns}</div>` +
-        `<div class="inv-grid${tab === "ship" ? " drop-ok" : ""}" data-tab="${tab}">${gridInner}</div>` +
+        `<div class="inv-list${tab === "ship" ? " drop-ok" : ""}" data-tab="${tab}">${gridInner}</div>` +
       `</div>`;
 
     rightEl.querySelector(".con-x").onclick = () => { hideInvPop(); kctx.close(); };
@@ -1066,13 +1111,26 @@
     if (kctx.isGM) rightEl.querySelectorAll(".ig.gm").forEach((g) => { g.onclick = () => (g.dataset.edit === "fuel" ? kctx.editFuel() : kctx.editPower()); });
     rightEl.querySelectorAll(".inv-tab").forEach((b) => { b.onclick = () => { hideInvPop(); kctx.setInvTab(b.dataset.tab); }; });
 
-    // Search: filter tiles in-place (no re-render → keeps input focus).
+    // Collapsible sections — toggle the section (DOM + remembered state), no re-render needed.
+    rightEl.querySelectorAll(".inv-sec-head").forEach((h) => {
+      h.onclick = () => {
+        const sec = h.closest(".inv-sec"), label = sec.dataset.sec;
+        if (invCollapsedSecs.has(label)) { invCollapsedSecs.delete(label); sec.classList.remove("collapsed"); }
+        else { invCollapsedSecs.add(label); sec.classList.add("collapsed"); }
+      };
+    });
+
+    // Search: filter tiles in-place (no re-render → keeps input focus); hide empty sections.
     const search = rightEl.querySelector("[data-search]");
-    const grid = rightEl.querySelector(".inv-grid");
+    const grid = rightEl.querySelector(".inv-list");
     if (search && grid) search.oninput = () => {
       const q = search.value.trim().toLowerCase();
       grid.querySelectorAll(".inv-tile").forEach((tl) => {
         tl.style.display = (!q || (tl.dataset.name || "").toLowerCase().includes(q)) ? "" : "none";
+      });
+      grid.querySelectorAll(".inv-sec").forEach((sec) => {
+        const anyVisible = [...sec.querySelectorAll(".inv-tile")].some((t) => t.style.display !== "none");
+        sec.style.display = anyVisible ? "" : "none";
       });
     };
 
