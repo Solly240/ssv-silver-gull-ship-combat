@@ -354,13 +354,11 @@
   drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));animation:sgsc-flicker .5s steps(2,end) infinite;}
 /* Secondary shield (Micro-Adjust): a thin violet arc hugging the allocated side —
    a slimmer, inward-scaled copy of that side's main shield, tinted distinct from the cyan primary. */
+/* Sits at scale 1.0 (same footprint as that side's main shield) so it aligns with the hull;
+   distinguished purely by being violet + much fainter than the cyan primary. */
 .sgsc .sc-shield2img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:3;pointer-events:none;
   filter:hue-rotate(92deg) saturate(1.2) brightness(.72) drop-shadow(0 0 2px rgba(176,107,240,.45));
   opacity:.42;animation:sgsc-pulse2 2.6s ease-in-out infinite;}
-.sgsc .sc-shield2img.face-fore{transform:scale(.78);transform-origin:center top;}
-.sgsc .sc-shield2img.face-aft{transform:scale(.78);transform-origin:center bottom;}
-.sgsc .sc-shield2img.face-port{transform:scale(.78);transform-origin:left center;}
-.sgsc .sc-shield2img.face-starboard{transform:scale(.78);transform-origin:right center;}
 @keyframes sgsc-pulse2{0%,100%{opacity:.3;}50%{opacity:.5;}}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
