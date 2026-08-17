@@ -2051,6 +2051,53 @@
     });
   });
 
+  /* ---- Live ship "icon" actor: its token image mirrors the S-menu ship + shield view ---- */
+  const SHIP_ICON_DIR = "ssv-ship-icon";
+  function shipIconActor() { return game.actors?.find((a) => a.getFlag?.(MODULE_ID, "shipIcon")) || null; }
+  async function ensureShipIconActor() {
+    if (!game.user.isGM) return null;
+    let a = shipIconActor();
+    if (!a) a = await Actor.create({ name: "SSV Silver Gull", type: "vehicle", flags: { [MODULE_ID]: { shipIcon: true } } });
+    return a;
+  }
+  // Composite the ship + shields onto a transparent canvas exactly like the Ship Overview draws them.
+  async function shipIconBlob(state) {
+    const load = (src) => new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+    const A = `modules/${MODULE_ID}/assets/`, W = 1218, H = 1620;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    const c = cv.getContext("2d");
+    const ship = await load(A + `ship/ship-${S.shipVariant(state)}.png`); if (ship) c.drawImage(ship, 0, 0, W, H);
+    if (state.shield.on && state.systems.shields !== "destroyed") {
+      const sh = await load(A + `shields/shield-${state.shield.facing}.png`); if (sh) c.drawImage(sh, 0, 0, W, H);
+    }
+    if (state.shield.secondary) {
+      const sc = await load(A + `shields/shield-${state.shield.secondary}.png`);
+      if (sc) { c.save(); c.globalAlpha = 0.42; c.filter = "hue-rotate(92deg) saturate(1.2) brightness(0.72)"; c.drawImage(sc, 0, 0, W, H); c.restore(); }
+    }
+    return await new Promise((r) => cv.toBlob(r, "image/webp", 0.9));
+  }
+  let _iconBusy = false, _iconAgain = false;
+  async function updateShipIcon() {
+    if (!game.user.isGM) return;
+    if (_iconBusy) { _iconAgain = true; return; }        // coalesce rapid shield changes
+    _iconBusy = true;
+    try {
+      const a = await ensureShipIconActor(); if (!a) return;
+      const blob = await shipIconBlob(S.normalize(getState())); if (!blob) return;
+      const FP = (foundry.applications?.apps?.FilePicker?.implementation) || FilePicker;
+      try { await FP.createDirectory("data", SHIP_ICON_DIR); } catch (e) { /* exists */ }
+      const file = new File([blob], `gull-${Date.now()}.webp`, { type: "image/webp" });   // unique name busts the texture cache
+      const res = await FP.upload("data", SHIP_ICON_DIR, file, {}, { notify: false });
+      if (!res?.path) return;
+      await a.update({ img: res.path, "prototypeToken.texture.src": res.path, "prototypeToken.name": a.name });
+      for (const scene of game.scenes) {
+        const ups = scene.tokens.filter((t) => t.actorId === a.id).map((t) => ({ _id: t.id, "texture.src": res.path }));
+        if (ups.length) await scene.updateEmbeddedDocuments("Token", ups);
+      }
+    } catch (e) { console.error(`${MODULE_ID} | ship icon update failed`, e); }
+    finally { _iconBusy = false; if (_iconAgain) { _iconAgain = false; updateShipIcon(); } }
+  }
+
   Hooks.once("ready", async () => {
     if (game.user.isGM) {
       const stored = game.settings.get(MODULE_ID, SETTING_DATA);
@@ -2064,6 +2111,9 @@
     const itemTouches = (item) => { const p = item?.parent; return p && (p === getShipActor() || p === game.user.character); };
     for (const hook of ["createItem", "updateItem", "deleteItem"]) Hooks.on(hook, (item) => { if (consoleOpen() && invMode && itemTouches(item)) refreshOpen(); });
     Hooks.on("updateActor", (actor) => { if (consoleOpen() && invMode && (actor === getShipActor() || actor === game.user.character)) refreshOpen(); });
+    // Keep the ship "icon" actor's token image in sync with the shields (GM renders + uploads).
+    Hooks.on(`${MODULE_ID}.updated`, () => updateShipIcon());
+    if (game.user.isGM) ensureShipIconActor().then(() => updateShipIcon());
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
