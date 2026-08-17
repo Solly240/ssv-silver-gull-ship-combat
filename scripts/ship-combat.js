@@ -488,6 +488,9 @@
 .sgcon .ig.low .ig-val{color:#ff9c9c;}
 .sgcon .ig.low .ig-ico{color:#ff6b6b;animation:ig-blink 1.1s steps(2,end) infinite;}
 @keyframes ig-blink{0%,100%{opacity:1;}50%{opacity:.4;}}
+.sgcon .inv-convert{flex:0 1 210px;min-width:150px;display:flex;flex-direction:column;gap:6px;}
+.sgcon .inv-convert .con-btn{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;font-size:12px;padding:6px 10px;
+  border-radius:10px;background:linear-gradient(180deg,rgba(14,34,48,.65),rgba(8,20,30,.65));}
 /* Add-item browser (searchable, world + compendiums) */
 .sgib-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.72);display:flex;align-items:center;justify-content:center;
   font-family:'Courier New',monospace;color:#cfeef0;}
@@ -521,17 +524,23 @@
 .sgcon .inv-search input{flex:1;background:transparent;border:none;outline:none;color:#cfeef0;font-family:inherit;font-size:13px;}
 .sgcon .inv-grid{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;align-content:start;padding:6px 2px;border-radius:10px;}
 .sgcon .inv-grid.inv-drop{outline:2px dashed #38e1c4;outline-offset:-6px;background:rgba(56,225,196,.05);}
-.sgcon .inv-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 8px 10px;border:1px solid #1d6a86;border-radius:13px;
-  background:linear-gradient(180deg,rgba(22,48,64,.65),rgba(9,22,32,.65));cursor:pointer;transition:border-color .12s,box-shadow .12s,transform .12s;}
+.sgcon .inv-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 8px 8px;border:1px solid #1d6a86;border-radius:13px;
+  background:linear-gradient(180deg,rgba(22,48,64,.65),rgba(9,22,32,.65));transition:border-color .12s,box-shadow .12s,transform .12s;}
 .sgcon .inv-tile:hover{border-color:#38e1c4;box-shadow:0 0 16px rgba(56,225,196,.35);transform:translateY(-2px);}
-.sgcon .inv-tile img{width:58px;height:58px;object-fit:contain;border-radius:9px;filter:drop-shadow(0 0 5px rgba(0,0,0,.55));background:rgba(4,10,18,.35);}
+.sgcon .inv-tile .it-imgwrap{position:relative;margin-top:2px;}
+.sgcon .inv-tile .it-imgwrap img{display:block;width:56px;height:56px;object-fit:contain;border-radius:9px;filter:drop-shadow(0 0 5px rgba(0,0,0,.55));background:rgba(4,10,18,.35);}
+.sgcon .inv-tile .it-qty{position:absolute;top:-9px;left:50%;transform:translateX(-50%);font-size:12px;font-weight:700;color:#04121c;
+  background:#38e1c4;border-radius:9px;padding:1px 8px;box-shadow:0 0 8px rgba(56,225,196,.55);white-space:nowrap;}
 .sgcon .inv-tile .it-name{font-size:11px;line-height:1.2;text-align:center;color:#cfeef0;max-height:2.5em;overflow:hidden;}
-.sgcon .inv-tile .it-qty{position:absolute;top:5px;right:7px;font-size:11px;font-weight:700;color:#04121c;background:#38e1c4;border-radius:9px;padding:0 6px;box-shadow:0 0 8px rgba(56,225,196,.5);}
-.sgcon .inv-tile .it-acts{position:absolute;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:4px;justify-content:center;padding:6px;
-  background:rgba(4,10,18,.92);border-top:1px solid #12455a;border-radius:0 0 12px 12px;opacity:0;transform:translateY(8px);transition:opacity .12s,transform .12s;pointer-events:none;}
-.sgcon .inv-tile .it-acts .con-mini{padding:3px 6px;}
-.sgcon .con-mini.danger:hover{border-color:#e0454d;color:#e0454d;}
-.sgcon .inv-tile:hover .it-acts{opacity:1;transform:none;pointer-events:auto;}
+.sgcon .inv-tile .it-bottom{display:flex;width:100%;align-items:center;justify-content:space-between;gap:6px;margin-top:1px;min-height:28px;}
+.sgcon .inv-tile .it-bl,.sgcon .inv-tile .it-br{display:flex;}
+/* Uniform icon buttons in every corner/slot */
+.sgcon .it-ib{width:28px;height:28px;flex:none;display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1;padding:0;
+  font-family:inherit;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:8px;cursor:pointer;transition:border-color .12s,color .12s,box-shadow .12s;}
+.sgcon .it-ib:hover{border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 8px rgba(56,225,196,.3);}
+.sgcon .it-ib.danger:hover{border-color:#e0454d;color:#e0454d;box-shadow:0 0 8px rgba(224,69,77,.35);}
+.sgcon .inv-tile .it-tl{position:absolute;top:6px;left:6px;z-index:2;}
+.sgcon .inv-tile .it-tr{position:absolute;top:6px;right:6px;z-index:2;}
 .sgcon .inv-empty{grid-column:1/-1;color:#6f97a6;font-size:12px;letter-spacing:1px;text-align:center;padding:28px 10px;}
 /* Item hover popup (details) — pointer-events:none so tile buttons still work */
 .sgcon-invpop{position:fixed;z-index:90;width:240px;pointer-events:none;font-family:'Courier New',monospace;
@@ -991,6 +1000,7 @@
   function renderInventoryPanel(rightEl, kctx) {
     const st = kctx.getState();
     const t = st.tuning;
+    const ratio = t.convertFuel > 0 ? Math.round(t.convertPower / t.convertFuel) : 5;   // power per 1 fuel
     const ship = kctx.shipItems || [], mine = kctx.playerItems || [];
     const tab = kctx.invTab === "you" ? "you" : "ship";
     const gauge = (label, g, cls, ico) => {
@@ -1001,21 +1011,27 @@
         `<span class="ig-val">${g.cur}<small> / ${g.max}</small></span></div>` +
         `<div class="ig-track"><div class="ig-fill" style="width:${pct}%"></div></div></div>`;
     };
-    const gmEdit = kctx.isGM
-      ? `<button class="con-mini" data-qty title="Set quantity">✏</button>` +
-        `<button class="con-mini danger" data-del title="Delete from ship">🗑</button>`
-      : "";
     const tile = (it, isShip) => {
-      const acts = isShip
-        ? `<button class="con-mini" data-use="fuel" title="Use as fuel (+${t.fuelPerItem})">⛽</button>` +
-          `<button class="con-mini" data-use="power" title="Use as power (+${t.powerPerItem})">⚡</button>` +
-          `<button class="con-mini" data-move title="Move to your inventory">→</button>` + gmEdit
-        : `<button class="con-mini" data-move title="Move to the ship">→ Ship</button>`;
+      // Top corners: GM delete (TL) + edit (TR), ship items only.
+      const corners = (isShip && kctx.isGM)
+        ? `<button class="it-ib it-tl danger" data-del title="Delete from ship">🗑</button>` +
+          `<button class="it-ib it-tr" data-qty title="Edit item">✏</button>`
+        : "";
+      // Bottom-left: resource-use icon, only for a fuel/power item. Bottom-right: move.
+      const resIco = it.resKind === "fuel" ? "⛽" : it.resKind === "power" ? "⚡" : "";
+      const resBtn = (isShip && it.resKind)
+        ? `<button class="it-ib" data-res title="Use as ${it.resKind} (+${it.resAmount} ${it.resKind})">${resIco}</button>`
+        : "";
+      const moveBtn = isShip
+        ? `<button class="it-ib" data-move title="Move to your inventory">→</button>`
+        : `<button class="it-ib" data-move title="Move to the ship">→</button>`;
       return `<div class="inv-tile" data-id="${it.id}" data-name="${esc(it.name)}">` +
-        (it.qty > 1 ? `<span class="it-qty">×${it.qty}</span>` : "") +
-        `<img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.src='${DEFAULT_ITEM_IMG}'">` +
+        corners +
+        `<div class="it-imgwrap"><img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.src='${DEFAULT_ITEM_IMG}'">` +
+          (it.qty > 1 ? `<span class="it-qty">×${it.qty}</span>` : "") + `</div>` +
         `<span class="it-name">${esc(it.name)}</span>` +
-        `<span class="it-acts">${acts}</span></div>`;
+        `<div class="it-bottom"><span class="it-bl">${resBtn}</span><span class="it-br">${moveBtn}</span></div>` +
+      `</div>`;
     };
     const list = tab === "ship" ? ship : mine;
     const gridInner = (tab === "you" && !kctx.hasPlayerActor)
@@ -1032,7 +1048,8 @@
           `<button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button>` +
           `<button class="con-x" title="Close (Esc)">✕</button></div>` +
         `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel", "⛽")}${gauge("POWER", st.power, "power", "⚡")}` +
-          `<button class="con-btn" data-act="convert">Convert ${t.convertFuel}⛽ → ${t.convertPower}⚡</button></div>` +
+          `<div class="inv-convert"><button class="con-btn" data-convert="1">Convert ⛽1 → ${ratio}⚡</button>` +
+          `<button class="con-btn" data-convert="10">Convert ⛽10 → ${ratio * 10}⚡</button></div></div>` +
         `<div class="inv-top">` +
           `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
           `<button class="inv-tab${tab === "you" ? " active" : ""}" data-tab="you">YOUR ITEMS</button></div>` +
@@ -1042,7 +1059,7 @@
 
     rightEl.querySelector(".con-x").onclick = () => { hideInvPop(); kctx.close(); };
     rightEl.querySelector('[data-act="stations"]').onclick = () => { hideInvPop(); kctx.toggleInv(); };
-    rightEl.querySelector('[data-act="convert"]').onclick = () => kctx.convert();
+    rightEl.querySelectorAll("[data-convert]").forEach((b) => { b.onclick = () => kctx.convert(Number(b.dataset.convert)); });
     const tuneB = rightEl.querySelector('[data-act="tune"]'); if (tuneB) tuneB.onclick = () => kctx.tune();
     const actorB = rightEl.querySelector('[data-act="actor"]'); if (actorB) actorB.onclick = () => kctx.setActor();
     const addB = rightEl.querySelector('[data-act="additem"]'); if (addB) addB.onclick = () => kctx.addItem();
@@ -1067,8 +1084,8 @@
       tl.onmouseenter = () => it && showInvPop(it, tl);
       tl.onmouseleave = hideInvPop;
       const mv = tl.querySelector("[data-move]"); if (mv) mv.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.moveItem(fromShip, id); };
-      tl.querySelectorAll("[data-use]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); hideInvPop(); (b.dataset.use === "fuel" ? kctx.useFuel(id) : kctx.usePower(id)); }; });
-      const qtyB = tl.querySelector("[data-qty]"); if (qtyB) qtyB.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.editQty(id); };
+      const res = tl.querySelector("[data-res]"); if (res) res.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.useResource(id); };
+      const qtyB = tl.querySelector("[data-qty]"); if (qtyB) qtyB.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.editItem(id); };
       const delB = tl.querySelector("[data-del]"); if (delB) delB.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.deleteItem(id); };
     });
 
@@ -1306,7 +1323,6 @@
       animateSwap: (() => { const a = swapAnim; swapAnim = false; return a; })(),
       addItem: () => gmAddItemBrowser(),
       dropItemData: (raw) => gmAddDroppedItem(raw),
-      editQty: (id) => gmSetItemQty(id),
       deleteItem: (id) => gmDeleteItem(id),
       getState,
       shipItems: physicalItems(getShipActor()),
@@ -1321,11 +1337,11 @@
         if (game.user.isGM) gmMoveItem(fromShip, itemId, qty, null);
         else emit({ type: "moveItem", toGM: true, fromShip, itemId, qty, userId: game.user.id });
       },
-      useFuel: (itemId) => { if (game.user.isGM) gmUseResource("fuel", itemId, null); else emit({ type: "useResource", toGM: true, kind: "fuel", itemId, userId: game.user.id }); },
-      usePower: (itemId) => { if (game.user.isGM) gmUseResource("power", itemId, null); else emit({ type: "useResource", toGM: true, kind: "power", itemId, userId: game.user.id }); },
-      convert: () => { if (game.user.isGM) gmConvert(null); else emit({ type: "convert", toGM: true, userId: game.user.id }); },
+      useResource: (itemId) => { if (game.user.isGM) gmUseResource(itemId, null); else emit({ type: "useResource", toGM: true, itemId, userId: game.user.id }); },
+      convert: (fuelAmt) => { if (game.user.isGM) gmConvert(null, fuelAmt); else emit({ type: "convert", toGM: true, fuelAmt, userId: game.user.id }); },
       editFuel: () => gmEditGauge("fuel"),
       editPower: () => gmEditGauge("power"),
+      editItem: (id) => gmEditItemDialog(id),
       tune: gmTuneDialog,
       setActor: gmSetActorDialog,
       close: () => closeConsole()
@@ -1344,8 +1360,11 @@
     return actor.items.filter((i) => PHYSICAL_TYPES.has(i.type)).map((i) => {
       const w = i.system?.weight;
       const weight = (w && typeof w === "object") ? (w.value ?? 0) : (w ?? 0);
+      const fl = i.flags?.[MODULE_ID] || {};
+      const resKind = (fl.resKind === "fuel" || fl.resKind === "power") ? fl.resKind : null;
       return { id: i.id, name: i.name, qty: i.system?.quantity ?? 1, img: i.img || DEFAULT_ITEM_IMG,
-        type: i.type, weight, desc: stripHtml(i.system?.description?.value) };
+        type: i.type, weight, desc: stripHtml(i.system?.description?.value),
+        resKind, resAmount: Number(fl.resAmount) || 0 };
     });
   }
   async function promptNumber(title, label, value, max) {
@@ -1373,14 +1392,32 @@
     else await item.delete();
     refreshOpen();
   }
-  async function gmSetItemQty(itemId) {
+  // GM: edit an item's quantity AND its resource role (none/fuel/power) + amount-per-use (stored on the item).
+  async function gmEditItemDialog(itemId) {
     if (!game.user.isGM) return;
     const ship = getShipActor(); const item = ship?.items?.get(itemId); if (!item) return;
-    const cur = item.system?.quantity ?? 1;
-    const n = await promptNumber(`Quantity — ${item.name}`, "Set to (0 deletes)", cur, null);
-    if (n == null) return;
-    if (n <= 0) await item.delete();
-    else await item.update({ "system.quantity": Math.max(1, Math.floor(n)) });
+    const qty = item.system?.quantity ?? 1;
+    const fl = item.flags?.[MODULE_ID] || {};
+    const kind = (fl.resKind === "fuel" || fl.resKind === "power") ? fl.resKind : "none";
+    const amt = Number(fl.resAmount) || 25;
+    const content = `<div style="display:flex;flex-direction:column;gap:10px;min-width:300px;">` +
+      `<label style="display:flex;justify-content:space-between;align-items:center;gap:10px;">Quantity <input type="number" name="qty" value="${qty}" min="0" style="width:100px"></label>` +
+      `<label style="display:flex;justify-content:space-between;align-items:center;gap:10px;">Resource type ` +
+        `<select name="kind" style="width:120px"><option value="none"${kind === "none" ? " selected" : ""}>None</option>` +
+        `<option value="fuel"${kind === "fuel" ? " selected" : ""}>Fuel ⛽</option>` +
+        `<option value="power"${kind === "power" ? " selected" : ""}>Power ⚡</option></select></label>` +
+      `<label style="display:flex;justify-content:space-between;align-items:center;gap:10px;">Amount per use <input type="number" name="amt" value="${amt}" min="0" style="width:100px"></label>` +
+      `<p style="opacity:.7;font-size:12px;margin:0">Fuel/power items show a ⛽ / ⚡ button; using one spends 1 and adds “amount per use” to that gauge. Quantity 0 deletes the item.</p></div>`;
+    const read = (form) => ({ qty: Number(form.elements.qty.value), kind: form.elements.kind.value, amt: Number(form.elements.amt.value) });
+    const D = D2();
+    let v = null;
+    if (D) v = await D.prompt({ window: { title: `Edit — ${item.name}` }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null);
+    else v = await new Promise((res) => new Dialog({ title: `Edit — ${item.name}`, content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+    if (!v) return;
+    if (Number.isFinite(v.qty) && v.qty <= 0) { await item.delete(); refreshOpen(); return; }
+    if (Number.isFinite(v.qty)) await item.update({ "system.quantity": Math.max(1, Math.floor(v.qty)) });
+    if (v.kind === "fuel" || v.kind === "power") await item.update({ [`flags.${MODULE_ID}.resKind`]: v.kind, [`flags.${MODULE_ID}.resAmount`]: Math.max(0, Math.floor(v.amt) || 0) });
+    else await item.update({ [`flags.${MODULE_ID}.-=resKind`]: null, [`flags.${MODULE_ID}.-=resAmount`]: null });
     refreshOpen();
   }
   async function gmDeleteItem(itemId) {
@@ -1391,11 +1428,14 @@
     await item.delete();
     refreshOpen();
   }
-  async function gmUseResource(kind, itemId, byUserId) {
+  // Use a fuel/power item — the kind and amount come from the item itself (set via Edit).
+  async function gmUseResource(itemId, byUserId) {
     if (!game.user.isGM) return;
     const ship = getShipActor(); const item = ship?.items?.get(itemId); if (!item) return;
+    const fl = item.flags?.[MODULE_ID] || {};
+    const kind = fl.resKind; const add = Number(fl.resAmount) || 0;
+    if (kind !== "fuel" && kind !== "power") return notifyUser(byUserId || game.user.id, "That item isn't a fuel or power source.");
     const st = getState();
-    const add = kind === "fuel" ? st.tuning.fuelPerItem : st.tuning.powerPerItem;
     const have = item.system?.quantity ?? 1;
     if (have - 1 > 0) await item.update({ "system.quantity": have - 1 }); else await item.delete();
     st[kind].cur = Math.min(st[kind].max, st[kind].cur + add);
@@ -1455,14 +1495,17 @@
     if (d) return d.prompt({ window: { title }, content, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
     return new Promise((res) => new Dialog({ title, content, buttons: { ok: { label: "OK", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
   }
-  async function gmConvert(byUserId) {
+  async function gmConvert(byUserId, fuelAmt) {
     if (!game.user.isGM) return;
     const st = getState(); const t = st.tuning;
-    if (st.fuel.cur < t.convertFuel) return notifyUser(byUserId || game.user.id, "Not enough fuel to convert.");
-    st.fuel.cur -= t.convertFuel;
-    st.power.cur = Math.min(st.power.max, st.power.cur + t.convertPower);
+    const ratio = t.convertFuel > 0 ? (t.convertPower / t.convertFuel) : 5;
+    const spend = Math.max(1, Math.floor(Number(fuelAmt) || t.convertFuel));   // default to the big batch
+    const gain = Math.round(spend * ratio);
+    if (st.fuel.cur < spend) return notifyUser(byUserId || game.user.id, `Not enough fuel to convert (need ${spend}).`);
+    st.fuel.cur -= spend;
+    st.power.cur = Math.min(st.power.max, st.power.cur + gain);
     await setState(st);
-    await ChatMessage.create({ content: `Converted <b>${t.convertFuel}</b> fuel → <b>${t.convertPower}</b> power`, speaker: { alias: "SSV Silver Gull" } });
+    await ChatMessage.create({ content: `Converted <b>${spend}</b> fuel → <b>${gain}</b> power`, speaker: { alias: "SSV Silver Gull" } });
   }
   async function gmEditGauge(kind) {
     if (!game.user.isGM) return;
@@ -1690,8 +1733,8 @@
       case "consume":        gmConsume(msg.crewId, msg.which, msg.userId); break;
       case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
       case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
-      case "useResource":    gmUseResource(msg.kind, msg.itemId, msg.userId); break;
-      case "convert":        gmConvert(msg.userId); break;
+      case "useResource":    gmUseResource(msg.itemId, msg.userId); break;
+      case "convert":        gmConvert(msg.userId, msg.fuelAmt); break;
       case "notify":         ui.notifications?.warn(msg.text); break;
     }
   }

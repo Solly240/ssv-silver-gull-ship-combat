@@ -1,9 +1,9 @@
 {
   "id": "ssv-silver-gull-ship-combat",
   "title": "SSV Silver Gull — Ship Combat",
-  "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and per-station action consoles for all 15 stations. Shields/Comms is fully built (Allocate Shields, Jam/Hail rolls, violet-arc Micro-Adjust); the Captain's Grant Actions gives a crew a purple-star extra action. A GM-only ⚙ GM Actions panel changes shields directly (no action cost) and announces to chat. Ship Inventory is a game-style grid (item pictures, search, ship/you tabs, hover detail popup) linked to the dnd5e ship actor: move items crew↔ship, FUEL/POWER gauges, use fuel items, convert fuel→power, and GMs can add any item via a searchable browser over all world items + item compendiums (or drag-drop).",
+  "description": "Ship-combat systems for the SSV Silver Gull campaign. Full-screen Ship Overview (press S) with a crew-centric multiplayer turn/action tracker and per-station action consoles for all 15 stations. Shields/Comms is fully built (Allocate Shields, Jam/Hail rolls, violet-arc Micro-Adjust); the Captain's Grant Actions gives a crew a purple-star extra action. A GM-only ⚙ GM Actions panel changes shields directly (no action cost) and announces to chat. Ship Inventory is a game-style grid (item pictures, search, ship/you tabs, hover detail popup) linked to the dnd5e ship actor: move items crew↔ship, FUEL/POWER gauges, per-item fuel/power role+amount, convert fuel→power (1→5 or 10→50), and GMs can add/edit/delete any item (searchable browser over all world items + item compendiums, or drag-drop).",
   "authors": [ { "name": "Solly240" } ],
-  "version": "0.9.2",
+  "version": "0.10.0",
   "compatibility": { "minimum": "12", "verified": "14" },
   "socket": true,
   "esmodules": [ "scripts/ship-combat.js" ],
