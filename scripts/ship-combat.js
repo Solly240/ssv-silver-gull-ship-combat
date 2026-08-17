@@ -355,13 +355,13 @@
 /* Secondary shield (Micro-Adjust): a thin violet arc hugging the allocated side —
    a slimmer, inward-scaled copy of that side's main shield, tinted distinct from the cyan primary. */
 .sgsc .sc-shield2img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:3;pointer-events:none;
-  filter:hue-rotate(92deg) saturate(1.6) brightness(1.1) drop-shadow(0 0 5px rgba(176,107,240,.85)) drop-shadow(0 0 13px rgba(176,107,240,.45));
-  opacity:.9;animation:sgsc-pulse2 2.2s ease-in-out infinite;}
-.sgsc .sc-shield2img.face-fore{transform:scale(.8);transform-origin:center top;}
-.sgsc .sc-shield2img.face-aft{transform:scale(.8);transform-origin:center bottom;}
-.sgsc .sc-shield2img.face-port{transform:scale(.8);transform-origin:left center;}
-.sgsc .sc-shield2img.face-starboard{transform:scale(.8);transform-origin:right center;}
-@keyframes sgsc-pulse2{0%,100%{opacity:.68;}50%{opacity:.96;}}
+  filter:hue-rotate(92deg) saturate(1.2) brightness(.72) drop-shadow(0 0 2px rgba(176,107,240,.45));
+  opacity:.42;animation:sgsc-pulse2 2.6s ease-in-out infinite;}
+.sgsc .sc-shield2img.face-fore{transform:scale(.78);transform-origin:center top;}
+.sgsc .sc-shield2img.face-aft{transform:scale(.78);transform-origin:center bottom;}
+.sgsc .sc-shield2img.face-port{transform:scale(.78);transform-origin:left center;}
+.sgsc .sc-shield2img.face-starboard{transform:scale(.78);transform-origin:right center;}
+@keyframes sgsc-pulse2{0%,100%{opacity:.3;}50%{opacity:.5;}}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
 .sgsc .sc-shipph{position:absolute;inset:20% 15%;border:1.5px dashed var(--edge2);border-radius:40% 40% 20% 20%/30% 30% 12% 12%;
@@ -661,9 +661,9 @@
     root.className = "sgct host";
     const collapseBtn = `<button class="ct-btn" data-act="collapse" title="Hide the tracker">▾ Hide</button>`;
 
-    // Inactive: GM sees Enter + Crew config; players see nothing.
+    // Inactive: GM sees Enter + Crew config (hidden by default — press \ to show); players see nothing.
     if (!combat.active) {
-      if (cctx.isGM) {
+      if (cctx.isGM && !cctx.gmBarHidden) {
         root.style.display = "flex";
         root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP COMBAT</span>` +
           `<button class="ct-btn enter" data-act="enter">⚔ ENTER SHIP COMBAT</button>` +
@@ -1260,6 +1260,10 @@
   const BAR_KEY = `${MODULE_ID}.barCollapsed`;
   const barCollapsed = () => { try { return localStorage.getItem(BAR_KEY) === "1"; } catch (e) { return false; } };
   const setBarCollapsed = (v) => { try { localStorage.setItem(BAR_KEY, v ? "1" : "0"); } catch (e) {} };
+  // The pre-combat GM bar (SHIP COMBAT / Enter / Crew) is HIDDEN by default — press \ to show it.
+  const GMBAR_KEY = `${MODULE_ID}.gmBarHidden`;
+  const gmBarHidden = () => { try { return localStorage.getItem(GMBAR_KEY) !== "0"; } catch (e) { return true; } };
+  const setGMBarHidden = (v) => { try { localStorage.setItem(GMBAR_KEY, v ? "1" : "0"); } catch (e) {} };
 
   const newId = () => "c" + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
 
@@ -1457,6 +1461,7 @@
     users: usersList(),
     getCombat,
     get collapsed() { return barCollapsed(); },
+    get gmBarHidden() { return gmBarHidden(); },
     toggleCollapse: () => { setBarCollapsed(!barCollapsed()); renderBar(); },
     enterCombat, endCombat, nextTurn,
     editCrew: editCrewDialog,
@@ -1512,7 +1517,13 @@
       name: "Show/Hide Ship Combat Bar",
       hint: "Fully hides or reopens the ship-combat turn tracker at the top of the screen. Rebind here if it clashes.",
       editable: [{ key: "Backslash" }],   // was KeyC (conflicted); '\' is rebindable in Configure Controls
-      onDown: () => { setBarCollapsed(!barCollapsed()); renderBar(); return true; }
+      onDown: () => {
+        // Idle → toggle the GM Enter/Crew bar; mid-combat → toggle the turn tracker.
+        if (game.user.isGM && !S.normalizeCombat(getCombat()).active) setGMBarHidden(!gmBarHidden());
+        else setBarCollapsed(!barCollapsed());
+        renderBar();
+        return true;
+      }
     });
   });
 
