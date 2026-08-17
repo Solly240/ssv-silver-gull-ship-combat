@@ -1007,7 +1007,7 @@
 
   // Sort items into navigable sections (by dnd5e type + a little name matching).
   const invCollapsedSecs = new Set();   // collapsed inventory section labels (per-client, this session)
-  const INV_SECTIONS = ["Weapons", "Ammunition", "Explosives", "Medical", "Food", "Drink",
+  const INV_SECTIONS = ["Weapons", "Ammunition", "Explosives", "Medical", "Food", "Gobby's Bar",
     "Tools", "Gear & Supplies", "Apparel", "Materials", "Containers", "Valuables", "Other"];
   function invCategory(it) {
     const t = it.type, n = (it.name || "").toLowerCase();
@@ -1020,7 +1020,7 @@
       if (/bullet|arrow|bolt|needle|cartridge|energy cell|gunpowder|\bammo\b/.test(n)) return "Ammunition";
       if (/grenade|bomb|explos|dynamite|acid|alchemist.?s fire|incend|thermite/.test(n)) return "Explosives";
       if (/potion|healer|antitoxin|stim|medkit|med-gel|bandage|medic/.test(n)) return "Medical";
-      if (/tequila|rum|sake|vodka|wine|whisk|\bale\b|lager|cider|brandy|grog|mead|moonshine|fizz|beer|liquor|booze|spirit/.test(n)) return "Drink";
+      if (/tequila|rum|sake|vodka|wine|whisk|\bale\b|lager|cider|brandy|grog|mead|moonshine|fizz|beer|liquor|booze|spirit/.test(n)) return "Gobby's Bar";
       if (/ration|paste|meal|nutrient|stew|fruit|caf|coffee|greens|bread|cheese|jerky|snack|\bfood\b|tack/.test(n)) return "Food";
       if (/torch|candle|oil|lantern|rope|chalk|ink|waterskin|soap|climber|whetstone|tinder|flare|fishing/.test(n)) return "Gear & Supplies";
       return "Other";
