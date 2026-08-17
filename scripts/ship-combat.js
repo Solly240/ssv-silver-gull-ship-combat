@@ -458,6 +458,17 @@
 .sgcon .con-btn:hover{border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.35);}
 .sgcon .con-btn.armed{border-color:#f2b03d;box-shadow:0 0 14px rgba(242,176,61,.5);color:#f2b03d;}
 .sgcon .con-btn.used,.sgcon .con-btn[disabled]{opacity:.4;cursor:not-allowed;border-style:dashed;box-shadow:none;}
+/* Action row: the button + a little (i) info circle that toggles an inline explanation. */
+.sgcon .con-act{display:flex;flex-direction:column;gap:6px;}
+.sgcon .con-btnrow{display:flex;align-items:stretch;gap:6px;}
+.sgcon .con-btnrow .con-btn{flex:1;}
+.sgcon .con-i{flex:none;align-self:center;width:22px;height:22px;border-radius:50%;border:1px solid #1d6a86;
+  color:#7fbecb;background:#0a1c26;display:flex;align-items:center;justify-content:center;
+  font:italic 700 13px Georgia,'Times New Roman',serif;cursor:pointer;transition:border-color .12s,color .12s,box-shadow .12s;}
+.sgcon .con-i:hover,.sgcon .con-i.open{border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 8px rgba(56,225,196,.35);}
+.sgcon .con-desc{font-size:12px;line-height:1.45;color:#9fc0cc;background:rgba(10,28,38,.55);
+  border-left:2px solid #1d6a86;border-radius:0 6px 6px 0;padding:6px 10px;}
+.sgcon .con-desc[hidden]{display:none;}
 .sgcon .con-hint{font-size:12px;color:#f2b03d;letter-spacing:1px;text-align:center;}
 .sgcon .con-empty{font-size:12px;color:#6f97a6;letter-spacing:1px;}
 /* shield-allocation circles — larger, clustered on the hull (~half on the ship) */
@@ -871,7 +882,13 @@
       const disabled = used && !(crew.granted > 0);   // still usable if a granted ⭐ is available
       const star = used && crew.granted > 0 ? " ⭐" : "";
       const armedThis = (a.type === "shield-allocate" && kctx.armed === "main") || (a.type === "shield-micro" && kctx.armed === "secondary");
-      return `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>`;
+      return `<div class="con-act">` +
+        `<div class="con-btnrow">` +
+          `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>` +
+          `<span class="con-i" data-info="${a.id}" title="What does this do?" role="button">i</span>` +
+        `</div>` +
+        `<div class="con-desc" data-desc="${a.id}" hidden>${esc(a.text)}</div>` +
+      `</div>`;
     };
     rightEl.innerHTML =
       `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
@@ -895,6 +912,16 @@
     };
     acts.main.forEach((a) => wire(a, false));
     acts.bonus.forEach((a) => wire(a, true));
+    // Info circles toggle their inline explanation (works even for used/disabled actions).
+    rightEl.querySelectorAll(".con-i[data-info]").forEach((ic) => {
+      ic.onclick = () => {
+        const desc = rightEl.querySelector(`.con-desc[data-desc="${ic.dataset.info}"]`);
+        if (!desc) return;
+        const show = desc.hasAttribute("hidden");
+        if (show) desc.removeAttribute("hidden"); else desc.setAttribute("hidden", "");
+        ic.classList.toggle("open", show);
+      };
+    });
   };
 
   // Expose for the preview harness and external callers.
