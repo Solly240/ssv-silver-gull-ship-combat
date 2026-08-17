@@ -1003,7 +1003,7 @@
       if (/grenade|bomb|explos|dynamite|acid|alchemist.?s fire|incend|thermite/.test(n)) return "Explosives";
       if (/potion|healer|antitoxin|stim|medkit|med-gel|bandage|medic/.test(n)) return "Medical";
       if (/tequila|rum|sake|vodka|wine|whisk|\bale\b|lager|cider|brandy|grog|mead|moonshine|fizz|beer|liquor|booze|spirit/.test(n)) return "Gobby's Bar";
-      if (/ration|paste|meal|nutrient|stew|fruit|caf|coffee|greens|bread|cheese|jerky|snack|\bfood\b|tack/.test(n)) return "Food";
+      if (/ration|paste|meal|nutrient|stew|fruit|caf|coffee|greens|bread|cheese|jerky|snack|\bfood\b|tack|banana/.test(n)) return "Food";
       if (/torch|candle|oil|lantern|rope|chalk|ink|waterskin|soap|climber|whetstone|tinder|flare|fishing/.test(n)) return "Gear & Supplies";
       return "Other";
     }
