@@ -800,6 +800,26 @@
     });
   }
 
+  // GM Actions panel: a list of direct, GM-only controls (no crew action economy). Extensible.
+  function renderGMPanel(rightEl, kctx) {
+    const st = kctx.getState();
+    const mainOn = st.shield.on, curMain = st.shield.facing, curSec = st.shield.secondary;
+    const lbl = (f) => esc(S.FACING_LABEL[f].toUpperCase());
+    const mainBtns = S.FACINGS.map((f) => `<button class="con-btn${mainOn && f === curMain ? " armed" : ""}" data-main="${f}">${esc(S.FACING_LABEL[f])}</button>`).join("") +
+      `<button class="con-btn${!mainOn ? " armed" : ""}" data-main="off">Shields Off</button>`;
+    const secBtns = S.FACINGS.map((f) => `<button class="con-btn${f === curSec ? " armed" : ""}" data-sec="${f}">${esc(S.FACING_LABEL[f])}</button>`).join("") +
+      `<button class="con-btn${!curSec ? " armed" : ""}" data-sec="off">Clear</button>`;
+    rightEl.innerHTML =
+      `<div class="con-head"><span class="con-title">GM ACTIONS</span><button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-sec"><div class="con-h">MAIN SHIELD · ${mainOn ? lbl(curMain) : "OFF"}</div><div class="con-btns">${mainBtns}</div></div>` +
+      `<div class="con-sec"><div class="con-h">SECONDARY SHIELD · ${curSec ? lbl(curSec) : "NONE"}</div><div class="con-btns">${secBtns}</div></div>` +
+      `<div class="con-hint">GM controls change the ship directly and announce in chat — no action cost.</div>`;
+    rightEl.querySelector(".con-x").onclick = () => kctx.close();
+    rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleGM();
+    rightEl.querySelectorAll("[data-main]").forEach((b) => { b.onclick = () => kctx.gmMainShield(b.dataset.main); });
+    rightEl.querySelectorAll("[data-sec]").forEach((b) => { b.onclick = () => kctx.gmSecondaryShield(b.dataset.sec); });
+  }
+
   S.renderConsole = function (root, kctx) {
     S.ensureStyles();
     root.className = "sgcon";
@@ -824,7 +844,8 @@
       }
     }
 
-    // Right column: inventory mode overrides the station panel.
+    // Right column: GM Actions / inventory modes override the station panel.
+    if (kctx.gmActMode && kctx.isGM) { renderGMPanel(rightEl, kctx); return; }
     if (kctx.invMode) { renderInventoryPanel(rightEl, kctx); return; }
 
     // Right column = station action panel.
@@ -836,10 +857,11 @@
       : "";
 
     if (!stId || !crew) {
-      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
         `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it." : "You're not manning a station yet. Join combat and pick a station to see its controls here."}</div>`;
       rightEl.querySelector(".con-x").onclick = () => kctx.close();
       const inv0 = rightEl.querySelector("[data-inv]"); if (inv0) inv0.onclick = () => kctx.toggleInv();
+      const gm0 = rightEl.querySelector("[data-gm]"); if (gm0) gm0.onclick = () => kctx.toggleGM();
       const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
       return;
     }
@@ -852,7 +874,7 @@
       return `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>`;
     };
     rightEl.innerHTML =
-      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
       `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
       `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}${grantedTokens(crew.granted)}</span></div>` +
       `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
@@ -861,6 +883,7 @@
 
     rightEl.querySelector(".con-x").onclick = () => kctx.close();
     const invBtn = rightEl.querySelector("[data-inv]"); if (invBtn) invBtn.onclick = () => kctx.toggleInv();
+    const gmBtn = rightEl.querySelector("[data-gm]"); if (gmBtn) gmBtn.onclick = () => kctx.toggleGM();
     const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
     const wire = (a, isBonus) => {
       const el = rightEl.querySelector(`[data-act="${a.id}"]`); if (!el || el.disabled) return;
@@ -925,6 +948,7 @@
   let armed = null;            // transient shield-allocation mode: 'main' | 'secondary' | null
   let gmDriveCrewId = null;    // which crew the GM is driving in the console
   let invMode = false;         // console showing the inventory panel instead of the station panel
+  let gmActMode = false;       // console showing the GM Actions panel (GM-only, direct state control)
 
   const consoleOpen = () => _console && _console.style.display !== "none" && document.body.contains(_console);
   function renderConsole() {
@@ -933,7 +957,7 @@
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
     renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; invMode = false; if (_console) _console.style.display = "none"; renderBar(); }
+  function closeConsole() { armed = null; invMode = false; gmActMode = false; if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -968,8 +992,12 @@
         renderConsole();
       },
       runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
+      // GM Actions panel (GM-only, direct control + chat, no action economy)
+      gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; renderConsole(); },
+      gmMainShield: (f) => gmSetMainShieldDirect(f),
+      gmSecondaryShield: (f) => gmSetSecondaryDirect(f),
       // Inventory
-      invMode, toggleInv: () => { invMode = !invMode; armed = null; renderConsole(); },
+      invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; renderConsole(); },
       getState,
       shipItems: physicalItems(getShipActor()),
       playerItems: physicalItems(game.user.character),
@@ -1132,6 +1160,34 @@
     if (slot === "secondary") ship.shield.secondary = facing;
     else { ship.shield.on = true; ship.shield.facing = facing; }
     await setState(ship); await saveCombat(combat);
+    const stn = S.station("shields_officer")?.name || "Shields Officer";
+    await ChatMessage.create({ content: `<b>${esc(stn)}</b> · ${esc(c.name)} — ${slot === "secondary" ? "secondary" : "main"} shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
+  }
+
+  // GM Actions — direct, GM-only shield control (no crew action economy); always announces in chat.
+  async function gmSetMainShieldDirect(facing) {
+    if (!game.user.isGM) return;
+    const ship = getState();
+    if (facing === "off") {
+      ship.shield.on = false; await setState(ship);
+      await ChatMessage.create({ content: `<b>GM</b> — main shields <b>OFFLINE</b>`, speaker: { alias: "SSV Silver Gull" } });
+      return;
+    }
+    if (!S.FACINGS.includes(facing)) return;
+    ship.shield.on = true; ship.shield.facing = facing; await setState(ship);
+    await ChatMessage.create({ content: `<b>GM</b> — main shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  async function gmSetSecondaryDirect(facing) {
+    if (!game.user.isGM) return;
+    const ship = getState();
+    if (facing === "off") {
+      ship.shield.secondary = null; await setState(ship);
+      await ChatMessage.create({ content: `<b>GM</b> — secondary shield <b>cleared</b>`, speaker: { alias: "SSV Silver Gull" } });
+      return;
+    }
+    if (!S.FACINGS.includes(facing)) return;
+    ship.shield.secondary = facing; await setState(ship);
+    await ChatMessage.create({ content: `<b>GM</b> — secondary shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
   }
 
   // Roll dialog: pull the ability mod from the acting player's dnd5e sheet, or manual total.
