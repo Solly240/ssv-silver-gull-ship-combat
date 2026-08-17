@@ -168,6 +168,25 @@
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
   // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk) + a ship-AC modifier. Chosen as the Main action.
   S.MANEUVERS = { evasive: { label: "Evasive", mp: 6, ac: 5 }, steady: { label: "Steady", mp: 4, ac: 0 }, aggressive: { label: "Aggressive", mp: 3, ac: -5 } };
+  // Fuel each move burns (players only — anything the GM drives is free). Rotate 45 = 1, Rotate 90 = 2, Forward = 4.
+  S.MOVE_FUEL = { rotL45: 1, rotR45: 1, rotL90: 2, rotR90: 2, forward: 4 };
+  // Power a station action draws from the reactor (players only; the GM never spends). Keyed by action id; default 0.
+  // Movement is fuel (above), not power; repair/boarding/pilot-maneuvers are free; everything that "runs on power" pays here.
+  S.ACTION_POWER = {
+    // Captain
+    cmd_adv: 8, grant: 6, bc_flee: 8, bc_ram: 12, bc_allhands: 12, rally: 3,
+    // Gunners / turrets
+    attack: 8, called: 10, launch: 6, quickaim: 3, adjust: 2,
+    // Engineer (repair itself is free — it's a hands-on fix)
+    reroute: 6, patch: 4,
+    // Shields / Comms
+    allocate: 10, jam: 6, hail: 2, micro: 4,
+    // Science / Sensors
+    scan: 6, counter: 5, navsupport: 8, ping: 2,
+    // Cloaking
+    engage: 12, burst: 15, phase: 10, decoy: 8, stealth: 6
+  };
+  S.actionPower = (a) => (a && S.ACTION_POWER[a.id]) || 0;
   // Effective per-facing ship AC = base (GM) + pilot maneuver (all sides) + directional shield bonuses.
   S.shipAC = function (state, combat) {
     const raw = Number(state?.ac?.base), base = Number.isFinite(raw) ? raw : 13;
@@ -654,6 +673,7 @@
 .sgcon .con-btn:hover{border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.35);}
 .sgcon .con-btn.armed{border-color:#f2b03d;box-shadow:0 0 14px rgba(242,176,61,.5);color:#f2b03d;}
 .sgcon .con-btn.used,.sgcon .con-btn[disabled]{opacity:.4;cursor:not-allowed;border-style:dashed;box-shadow:none;}
+.sgcon .con-pw{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;color:#38e1c4;background:rgba(56,225,196,.14);border:1px solid rgba(56,225,196,.4);border-radius:7px;padding:0 5px;vertical-align:middle;}
 /* Action row: the button + a little (i) info circle that toggles an inline explanation. */
 .sgcon .con-act{display:flex;flex-direction:column;gap:6px;}
 .sgcon .con-btnrow{display:flex;align-items:stretch;gap:6px;}
@@ -950,9 +970,9 @@
     const mv = (k, t, lbl) => `<button class="pm-btn pm-mv"${dis} data-move="${k}" title="${t}">${lbl}</button>`;
     return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">${esc(man)}</span>${navBadge}` +
       `<span class="pm-mp${onBonus ? " bonus" : ""}" title="Movement Points left${onBonus ? " (bonus action)" : ""}">${remaining} MP${onBonus ? " ⚡" : ""}</span>` +
-      mv("rotL90", "Rotate 90° left (1 MP)", "⟲90") + mv("rotL45", "Rotate 45° left (1 MP)", "⟲45") +
-      mv("forward", "Move forward 1 space (1 MP)", "↑ Fwd") +
-      mv("rotR45", "Rotate 45° right (1 MP)", "⟳45") + mv("rotR90", "Rotate 90° right (1 MP)", "⟳90") +
+      mv("rotL90", "Rotate 90° left — 1 MP · 2 fuel", "⟲90") + mv("rotL45", "Rotate 45° left — 1 MP · 1 fuel", "⟲45") +
+      mv("forward", "Move forward 1 space — 1 MP · 4 fuel", "↑ Fwd") +
+      mv("rotR45", "Rotate 45° right — 1 MP · 1 fuel", "⟳45") + mv("rotR90", "Rotate 90° right — 1 MP · 2 fuel", "⟳90") +
       `</div>`;
   }
   // Wire the pilot panels (maneuver + move buttons) — shared by GM and player views.
@@ -1780,9 +1800,11 @@
       const disabled = used && !(crew.granted > 0);   // still usable if a granted ⭐ is available
       const star = used && crew.granted > 0 ? " ⭐" : "";
       const armedThis = (a.type === "shield-allocate" && kctx.armed === "main") || (a.type === "shield-micro" && kctx.armed === "secondary");
+      const pw = S.actionPower(a);
+      const pwBadge = pw ? ` <span class="con-pw" title="Draws ${pw} power">⚡${pw}</span>` : "";
       return `<div class="con-act">` +
         `<div class="con-btnrow">` +
-          `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${armedThis ? " · pick a side" : star}</button>` +
+          `<button class="con-btn${disabled ? " used" : ""}${armedThis ? " armed" : ""}" data-act="${a.id}" ${disabled ? "disabled" : ""} title="${esc(a.text)}">${esc(a.name)}${pwBadge}${armedThis ? " · pick a side" : star}</button>` +
           `<span class="con-i" data-info="${a.id}" title="What does this do?" role="button">i</span>` +
         `</div>` +
         `<div class="con-desc" data-desc="${a.id}" hidden>${esc(a.text)}</div>` +
@@ -2162,13 +2184,23 @@
     if (c.granted > 0) { c.granted -= 1; return true; }   // spend the extra
     return false;
   }
-  async function gmConsume(crewId, which, byUserId) {
+  // Only players draw on ship resources — anything the GM (or no user) initiates is free.
+  const playerSpends = (byUserId) => !!byUserId && !game.users.get(byUserId)?.isGM;
+  // GM-authoritative: drain `amount` power for a player's action (clamped at 0). GM/zero = no-op.
+  async function gmSpendPower(byUserId, amount) {
+    if (!game.user.isGM) return;
+    const amt = Math.max(0, Math.round(Number(amount) || 0));
+    if (!amt || !playerSpends(byUserId)) return;
+    const ship = getState(); ship.power.cur = Math.max(0, ship.power.cur - amt); await setState(ship);
+  }
+  async function gmConsume(crewId, which, byUserId, power) {
     if (!game.user.isGM) return;
     const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && c.controllerUserId !== byUserId) return;
     if (!tryConsume(c, which)) return notifyUser(byUserId || game.user.id, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
     await saveCombat(next);
+    await gmSpendPower(byUserId, power);
   }
 
   // Pilot: choose a maneuver (Main) → sets Movement Points; then spend them to move/rotate the ship.
@@ -2212,10 +2244,15 @@
     if (!S.systemWorks(ship, "engine") || !S.systemWorks(ship, "thrusters"))
       return notifyUser(byUserId || game.user.id, "Can't move — engines or thrusters are down.");
     if (c.mp <= 0 && c.bonus) return notifyUser(byUserId || game.user.id, "No movement left this turn.");
+    // Fuel cost (players only; the GM moves for free). Block if the tanks are too low.
+    const fuelCost = playerSpends(byUserId) ? (S.MOVE_FUEL[kind] || 0) : 0;
+    if (fuelCost > 0 && ship.fuel.cur < fuelCost)
+      return notifyUser(byUserId, `Not enough fuel — that move needs ${fuelCost} (convert or refuel first).`);
     const moved = await moveShipToken(kind, byUserId);   // abort (don't spend) if there's no ship token
     if (!moved) return;
     if (c.mp > 0) c.mp -= 1; else c.bonus = true;         // spend from the Main pool, then the +1 bonus
     await saveCombat(next);
+    if (fuelCost > 0) { const s2 = getState(); s2.fuel.cur = Math.max(0, s2.fuel.cur - fuelCost); await setState(s2); }
   }
   // Move/rotate the ship-icon actor's token on the active scene. Returns false if it can't.
   async function moveShipToken(kind, byUserId) {
@@ -2276,6 +2313,7 @@
     if (!tryConsume(cap, "action")) return notifyUser(byUserId || game.user.id, "You've no Main action left to Grant.");
     tgt.granted = (tgt.granted || 0) + 1;
     await saveCombat(next);
+    await gmSpendPower(byUserId, S.ACTION_POWER.grant);
     await ChatMessage.create({ content: `<b>${esc(cap.name)}</b> grants <b>${esc(tgt.name)}</b> an extra action ⭐`, speaker: { alias: "SSV Silver Gull" } });
   }
 
@@ -2289,10 +2327,13 @@
     if (!S.FACINGS.includes(facing)) return;
     const ship = getState();
     if (!S.systemWorks(ship, "shields")) return notifyUser(who, "The Shield Generator is down — can't allocate shields.");
+    const power = playerSpends(byUserId) ? (slot === "secondary" ? S.ACTION_POWER.micro : S.ACTION_POWER.allocate) : 0;
+    if (power > 0 && ship.power.cur < power) return notifyUser(who, `Not enough power — shields need ${power} (convert fuel to power first).`);
     const which = slot === "secondary" ? "bonus" : "action";
     if (!tryConsume(c, which)) return notifyUser(who, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
     if (slot === "secondary") ship.shield.secondary = facing;
     else { ship.shield.on = true; ship.shield.facing = facing; }
+    if (power > 0) ship.power.cur = Math.max(0, ship.power.cur - power);
     await setState(ship); await saveCombat(combat);
     const stn = S.station("shields_officer")?.name || "Shields Officer";
     await ChatMessage.create({ content: `<b>${esc(stn)}</b> · ${esc(c.name)} — ${slot === "secondary" ? "secondary" : "main"} shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
@@ -2384,6 +2425,12 @@
       else emit({ type: "grantAction", toGM: true, captainCrewId: crew.id, targetCrewId: target, userId: game.user.id });
       return;
     }
+    // Power check (players only; the GM acts for free). Block up-front so a powered action can't run on empty.
+    const power = S.actionPower(a);
+    if (!game.user.isGM && power > 0 && S.normalize(getState()).power.cur < power) {
+      ui.notifications?.warn(`Not enough power — ${a.name} needs ${power} (convert fuel to power first).`);
+      return;
+    }
     // Engineer Repair: pick a system → d20+INT → nat20/nat1/puzzle → +2 HP. Manages its own consume.
     if (a.type === "repair") { await runRepair(crew, isBonus); return; }
     // Science Nav Support: play the nav mini-game → set the Pilot's Movement-Point multiplier. Own consume.
@@ -2393,8 +2440,8 @@
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
     if (!ok) return;
     const which = isBonus ? "bonus" : "action";
-    if (game.user.isGM) gmConsume(crew.id, which, null);
-    else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id });
+    if (game.user.isGM) gmConsume(crew.id, which, null, 0);
+    else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power });
   }
 
   // Engineer Repair: pick a damaged system → d20+INT → nat 20/1 auto → else timed puzzle → +2 HP.
@@ -2433,7 +2480,8 @@
   async function runNavSupport(crew, isBonus) {
     const pilot = Object.values(getCombat().crew).find((c) => c.station === "pilot");
     if (!pilot) return ui.notifications?.info("No pilot aboard — Nav Support has no one to help.");
-    const consume = () => { const which = isBonus ? "bonus" : "action"; if (game.user.isGM) gmConsume(crew.id, which, null); else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id }); };
+    const navPower = S.ACTION_POWER.navsupport || 0;
+    const consume = () => { const which = isBonus ? "bonus" : "action"; if (game.user.isGM) gmConsume(crew.id, which, null, 0); else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power: navPower }); };
     S.openNavGame({
       onDone: (perf) => {
         const mult = Math.round((1.5 + Math.max(0, Math.min(1, perf))) * 100) / 100;   // ×1.5 … ×2.5
@@ -2504,7 +2552,7 @@
       case "swapConfirm":    promptSwapConfirm(msg); break;
       case "swapResult":     gmResolveSwap(msg.accepted); break;
       case "allocateShield": gmAllocateShield(msg.crewId, msg.facing, msg.slot, msg.userId); break;
-      case "consume":        gmConsume(msg.crewId, msg.which, msg.userId); break;
+      case "consume":        gmConsume(msg.crewId, msg.which, msg.userId, msg.power); break;
       case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
       case "pilotManeuver":  gmPilotManeuver(msg.crewId, msg.maneuver, msg.userId); break;
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
