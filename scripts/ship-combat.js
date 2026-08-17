@@ -347,7 +347,6 @@
 /* Ship + shield sit BEHIND the panels, confined to the central band (clear of the title & hull bar). */
 .sgsc .sc-shipbg{position:absolute;top:-55px;bottom:0;left:-78%;right:-78%;z-index:1;display:flex;align-items:center;justify-content:center;pointer-events:none;}
 .sgsc .sc-shipwrap{position:relative;height:112%;aspect-ratio:1218/1620;pointer-events:auto;}
-.sgsc.gm .sc-shipwrap{cursor:crosshair;}
 .sgsc .sc-shipwrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
 .sgsc .sc-shipimg{filter:drop-shadow(0 0 20px rgba(29,106,134,.5));}
 .sgsc .sc-shieldimg{z-index:2;filter:drop-shadow(0 0 8px rgba(72,232,226,.75)) drop-shadow(0 0 22px rgba(72,232,226,.5));
@@ -456,7 +455,6 @@
 .sgcon .invship .sc-mtitle{font-size:13px;font-weight:700;letter-spacing:2px;color:#38e1c4;text-align:center;text-shadow:0 0 10px rgba(56,225,196,.4);}
 .sgcon .invship .miniwrap{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;}
 .sgcon .invship .sc-shipwrap{position:relative;height:100%;max-height:100%;aspect-ratio:1218/1620;}
-.sgcon.gm .invship .sc-shipwrap,.sgcon .invship.gm .sc-shipwrap{cursor:crosshair;}
 .sgcon .invship .sc-hull{margin:0;max-width:100%;}
 .sgcon .inv-wrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0;}
 .sgcon .inv-gauges{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;}
@@ -708,7 +706,7 @@
         <span><i style="background:var(--red)"></i>Destroyed</span>
         <span><i style="background:var(--dim)"></i>Offline / Not installed</span>
       </div>
-      <div class="sc-foot">${ctx.isGM ? "GM: click a system to change its status · click a side of the ship to move the shield there (click the same side to switch it off) · click the hull bar to set HP" : "Press S to toggle · read-only"}</div>
+      <div class="sc-foot">${ctx.isGM ? "GM: click a system to change its status · click the hull bar to set HP · shields via ⚙ GM Actions" : "Press S to toggle · read-only"}</div>
     `;
 
     if (!ctx.isGM) return;
@@ -721,17 +719,8 @@
         await ctx.setState(next);
       };
     });
-    const wrap = root.querySelector(".sc-shipwrap");
-    if (wrap) wrap.onclick = async (ev) => {
-      const side = sideFromPoint(wrap.getBoundingClientRect(), ev.clientX, ev.clientY);
-      const next = S.normalize(ctx.getState());
-      if (next.shield.on && next.shield.facing === side) {
-        next.shield.on = false;                 // click the active side again → shields off
-      } else {
-        next.shield.on = true; next.shield.facing = side;
-      }
-      await ctx.setState(next);
-    };
+    // (Clicking the ship no longer moves the shield — the GM uses the ⚙ GM Actions toggles,
+    //  and the crew aim shields via their station actions.)
     const hullBar = root.querySelector('[data-hull]');
     if (hullBar && ctx.promptHull) hullBar.onclick = async () => {
       const cur = S.normalize(ctx.getState());
@@ -909,14 +898,7 @@
         `</div>` +
       `</div>`;
     if (!ctx.isGM) return;
-    const wrap = leftEl.querySelector(".sc-shipwrap");
-    if (wrap) wrap.onclick = async (ev) => {
-      const side = sideFromPoint(wrap.getBoundingClientRect(), ev.clientX, ev.clientY);
-      const next = S.normalize(ctx.getState());
-      if (next.shield.on && next.shield.facing === side) next.shield.on = false;
-      else { next.shield.on = true; next.shield.facing = side; }
-      await ctx.setState(next);
-    };
+    // (Ship-click no longer changes the shield — GM uses ⚙ GM Actions; crew aim via station actions.)
     const hullBar = leftEl.querySelector('[data-hull]');
     if (hullBar && ctx.promptHull) hullBar.onclick = async () => {
       const cur = S.normalize(ctx.getState());
@@ -1158,24 +1140,23 @@
     }
   }
 
-  // GM Actions panel: a list of direct, GM-only controls (no crew action economy). Extensible.
+  // GM Actions panel: direct, GM-only controls (no crew action economy). Extensible.
+  // Shields are simple ON/OFF toggles here — the crew set which side they face via their station actions.
   function renderGMPanel(rightEl, kctx) {
     const st = kctx.getState();
-    const mainOn = st.shield.on, curMain = st.shield.facing, curSec = st.shield.secondary;
+    const mainOn = st.shield.on, curMain = st.shield.facing, secOn = !!st.shield.secondary, curSec = st.shield.secondary;
     const lbl = (f) => esc(S.FACING_LABEL[f].toUpperCase());
-    const mainBtns = S.FACINGS.map((f) => `<button class="con-btn${mainOn && f === curMain ? " armed" : ""}" data-main="${f}">${esc(S.FACING_LABEL[f])}</button>`).join("") +
-      `<button class="con-btn${!mainOn ? " armed" : ""}" data-main="off">Shields Off</button>`;
-    const secBtns = S.FACINGS.map((f) => `<button class="con-btn${f === curSec ? " armed" : ""}" data-sec="${f}">${esc(S.FACING_LABEL[f])}</button>`).join("") +
-      `<button class="con-btn${!curSec ? " armed" : ""}" data-sec="off">Clear</button>`;
     rightEl.innerHTML =
       `<div class="con-head"><span class="con-title">GM ACTIONS</span><button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
-      `<div class="con-sec"><div class="con-h">MAIN SHIELD · ${mainOn ? lbl(curMain) : "OFF"}</div><div class="con-btns">${mainBtns}</div></div>` +
-      `<div class="con-sec"><div class="con-h">SECONDARY SHIELD · ${curSec ? lbl(curSec) : "NONE"}</div><div class="con-btns">${secBtns}</div></div>` +
-      `<div class="con-hint">GM controls change the ship directly and announce in chat — no action cost.</div>`;
+      `<div class="con-sec"><div class="con-h">SHIELDS</div><div class="con-btns">` +
+        `<button class="con-btn${mainOn ? " armed" : ""}" data-main-toggle>Shield — ${mainOn ? lbl(curMain) + " · ON" : "OFF"}</button>` +
+        `<button class="con-btn${secOn ? " armed" : ""}" data-sec-toggle>Secondary Shield — ${secOn ? lbl(curSec) + " · ON" : "OFF"}</button>` +
+      `</div></div>` +
+      `<div class="con-hint">Toggle shields on/off. The crew choose which side they face (Allocate Shields / Micro-Adjust). GM changes are free and announced in chat.</div>`;
     rightEl.querySelector(".con-x").onclick = () => kctx.close();
     rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleGM();
-    rightEl.querySelectorAll("[data-main]").forEach((b) => { b.onclick = () => kctx.gmMainShield(b.dataset.main); });
-    rightEl.querySelectorAll("[data-sec]").forEach((b) => { b.onclick = () => kctx.gmSecondaryShield(b.dataset.sec); });
+    rightEl.querySelector("[data-main-toggle]").onclick = () => kctx.gmToggleShield();
+    rightEl.querySelector("[data-sec-toggle]").onclick = () => kctx.gmToggleSecondary();
   }
 
   S.renderConsole = function (root, kctx) {
@@ -1373,8 +1354,8 @@
       runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
       // GM Actions panel (GM-only, direct control + chat, no action economy)
       gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
-      gmMainShield: (f) => gmSetMainShieldDirect(f),
-      gmSecondaryShield: (f) => gmSetSecondaryDirect(f),
+      gmToggleShield: () => gmToggleMainShieldDirect(),
+      gmToggleSecondary: () => gmToggleSecondaryDirect(),
       // Inventory
       invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
       invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
@@ -1651,30 +1632,29 @@
     await ChatMessage.create({ content: `<b>${esc(stn)}</b> · ${esc(c.name)} — ${slot === "secondary" ? "secondary" : "main"} shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
   }
 
-  // GM Actions — direct, GM-only shield control (no crew action economy); always announces in chat.
-  async function gmSetMainShieldDirect(facing) {
+  // GM Actions — simple ON/OFF shield toggles (no crew action economy); always announces in chat.
+  // The crew choose which side a shield faces via their station actions; the GM just powers them.
+  async function gmToggleMainShieldDirect() {
     if (!game.user.isGM) return;
     const ship = getState();
-    if (facing === "off") {
-      ship.shield.on = false; await setState(ship);
-      await ChatMessage.create({ content: `<b>GM</b> — main shields <b>OFFLINE</b>`, speaker: { alias: "SSV Silver Gull" } });
-      return;
-    }
-    if (!S.FACINGS.includes(facing)) return;
-    ship.shield.on = true; ship.shield.facing = facing; await setState(ship);
-    await ChatMessage.create({ content: `<b>GM</b> — main shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
+    ship.shield.on = !ship.shield.on;
+    if (ship.shield.on && !S.FACINGS.includes(ship.shield.facing)) ship.shield.facing = "fore";
+    await setState(ship);
+    await ChatMessage.create({ content: ship.shield.on
+      ? `<b>GM</b> — main shields <b>UP</b> (${esc(S.FACING_LABEL[ship.shield.facing].toUpperCase())})`
+      : `<b>GM</b> — main shields <b>OFFLINE</b>`, speaker: { alias: "SSV Silver Gull" } });
   }
-  async function gmSetSecondaryDirect(facing) {
+  async function gmToggleSecondaryDirect() {
     if (!game.user.isGM) return;
     const ship = getState();
-    if (facing === "off") {
+    if (ship.shield.secondary) {
       ship.shield.secondary = null; await setState(ship);
       await ChatMessage.create({ content: `<b>GM</b> — secondary shield <b>cleared</b>`, speaker: { alias: "SSV Silver Gull" } });
-      return;
+    } else {
+      const side = S.FACINGS.includes(ship.shield.facing) ? ship.shield.facing : "fore";
+      ship.shield.secondary = side; await setState(ship);
+      await ChatMessage.create({ content: `<b>GM</b> — secondary shield <b>UP</b> (${esc(S.FACING_LABEL[side].toUpperCase())})`, speaker: { alias: "SSV Silver Gull" } });
     }
-    if (!S.FACINGS.includes(facing)) return;
-    ship.shield.secondary = facing; await setState(ship);
-    await ChatMessage.create({ content: `<b>GM</b> — secondary shield → <b>${esc(S.FACING_LABEL[facing].toUpperCase())}</b>`, speaker: { alias: "SSV Silver Gull" } });
   }
 
   // Roll dialog: pull the ability mod from the acting player's dnd5e sheet, or manual total.
