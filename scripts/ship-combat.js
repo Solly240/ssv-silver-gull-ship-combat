@@ -459,9 +459,58 @@
 .sgcon.gm .invship .sc-shipwrap,.sgcon .invship.gm .sc-shipwrap{cursor:crosshair;}
 .sgcon .invship .sc-hull{margin:0;max-width:100%;}
 .sgcon .inv-wrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0;}
-.sgcon .inv-gauges{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;}
-.sgcon .inv-gauges .con-gauge{flex:1;min-width:150px;}
-.sgcon .inv-gauges .con-btn{flex:1;min-width:170px;align-self:stretch;display:flex;align-items:center;justify-content:center;}
+.sgcon .inv-gauges{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;}
+.sgcon .inv-gauges .con-btn{flex:1;min-width:170px;align-self:stretch;display:flex;align-items:center;justify-content:center;
+  border-radius:12px;background:linear-gradient(180deg,rgba(14,34,48,.65),rgba(8,20,30,.65));}
+/* Sci-fi fuel/power gauges */
+.sgcon .ig{position:relative;flex:1;min-width:180px;border:1px solid #163b4e;border-radius:12px;padding:10px 13px;
+  background:linear-gradient(180deg,rgba(16,38,52,.7),rgba(8,20,30,.7));overflow:hidden;}
+.sgcon .ig.gm{cursor:pointer;}
+.sgcon .ig.gm:hover{border-color:#2b7d99;box-shadow:0 0 16px rgba(56,225,196,.2);}
+.sgcon .ig-top{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
+.sgcon .ig-ico{font-size:16px;line-height:1;filter:drop-shadow(0 0 5px rgba(0,0,0,.5));}
+.sgcon .ig-label{font-size:12px;letter-spacing:2px;color:#8fb2c0;font-weight:700;}
+.sgcon .ig-val{margin-left:auto;font-size:19px;font-weight:700;color:#eaf7fa;text-shadow:0 0 10px rgba(0,0,0,.4);}
+.sgcon .ig-val small{font-size:12px;color:#7fa6b4;font-weight:700;}
+.sgcon .ig-track{position:relative;height:15px;border-radius:9px;background:#07141d;border:1px solid #103042;overflow:hidden;box-shadow:inset 0 1px 4px rgba(0,0,0,.7);}
+.sgcon .ig-track::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.45;
+  background:repeating-linear-gradient(90deg,transparent 0 13px,rgba(0,0,0,.45) 13px 14px);}
+.sgcon .ig-fill{position:absolute;top:0;left:0;bottom:0;border-radius:9px;transition:width .4s cubic-bezier(.2,.7,.2,1);overflow:hidden;}
+.sgcon .ig-fill::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.32),transparent);
+  transform:translateX(-100%);animation:ig-sheen 3.4s ease-in-out infinite;}
+@keyframes ig-sheen{0%{transform:translateX(-100%);}55%,100%{transform:translateX(240%);}}
+.sgcon .ig.fuel .ig-ico{color:#f2b03d;}
+.sgcon .ig.power .ig-ico{color:#38e1c4;}
+.sgcon .ig.fuel .ig-fill{background:linear-gradient(90deg,#a75f16,#f2b03d,#ffd987);box-shadow:0 0 14px rgba(242,176,61,.75);}
+.sgcon .ig.power .ig-fill{background:linear-gradient(90deg,#0f8f89,#38e1c4,#9dffef);box-shadow:0 0 14px rgba(56,225,196,.75);}
+.sgcon .ig.low .ig-fill{background:linear-gradient(90deg,#7c1c1c,#e0454d,#ff8f8f)!important;box-shadow:0 0 14px rgba(224,69,77,.75)!important;}
+.sgcon .ig.low .ig-val{color:#ff9c9c;}
+.sgcon .ig.low .ig-ico{color:#ff6b6b;animation:ig-blink 1.1s steps(2,end) infinite;}
+@keyframes ig-blink{0%,100%{opacity:1;}50%{opacity:.4;}}
+/* Add-item browser (searchable, world + compendiums) */
+.sgib-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.72);display:flex;align-items:center;justify-content:center;
+  font-family:'Courier New',monospace;color:#cfeef0;}
+.sgib{width:min(780px,94vw);max-height:84vh;display:flex;flex-direction:column;border:1px solid #1d6a86;border-radius:16px;overflow:hidden;
+  background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.72);}
+.sgib-head{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #12455a;flex-wrap:wrap;}
+.sgib-title{font-weight:700;letter-spacing:2px;color:#38e1c4;text-shadow:0 0 10px rgba(56,225,196,.4);white-space:nowrap;}
+.sgib-search{flex:1;min-width:180px;display:flex;align-items:center;gap:8px;background:#0a1c26;border:1px solid #1d6a86;border-radius:9px;padding:8px 12px;}
+.sgib-search input{flex:1;background:transparent;border:none;outline:none;color:#cfeef0;font-family:inherit;font-size:14px;}
+.sgib-x{cursor:pointer;background:#0a1c26;border:1px solid #1d6a86;color:#cfeef0;border-radius:8px;width:32px;height:32px;font-weight:700;}
+.sgib-x:hover{border-color:#f2b03d;color:#f2b03d;}
+.sgib-count{padding:8px 16px 0;font-size:11px;letter-spacing:1px;color:#7fa6b4;}
+.sgib-body{flex:1;min-height:0;overflow:auto;padding:12px 16px 16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;align-content:start;}
+.sgib-card{display:flex;gap:10px;align-items:center;padding:9px;border:1px solid #1d6a86;border-radius:11px;cursor:pointer;
+  background:linear-gradient(180deg,rgba(22,48,64,.55),rgba(9,22,32,.55));transition:border-color .12s,box-shadow .12s,transform .12s;min-width:0;}
+.sgib-card:hover{border-color:#38e1c4;box-shadow:0 0 14px rgba(56,225,196,.3);transform:translateY(-2px);}
+.sgib-card.added{border-color:#42d16a;box-shadow:0 0 14px rgba(66,209,106,.5);}
+.sgib-card img{width:42px;height:42px;flex:none;object-fit:contain;border-radius:8px;background:rgba(4,10,18,.4);}
+.sgib-meta{min-width:0;}
+.sgib-name{font-size:13px;font-weight:700;color:#eaf7fa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sgib-sub{font-size:11px;color:#7fa6b4;text-transform:capitalize;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sgib-empty{grid-column:1/-1;text-align:center;color:#6f97a6;padding:30px;font-size:12px;letter-spacing:1px;}
+.sgib-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:11px 16px;border-top:1px solid #12455a;flex-wrap:wrap;}
+.sgib-hint{flex:1;font-size:11px;color:#6f97a6;text-align:center;min-width:140px;}
 .sgcon .inv-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .sgcon .inv-tabs{display:flex;gap:6px;}
 .sgcon .inv-tab{cursor:pointer;font-family:inherit;font-weight:700;font-size:12px;letter-spacing:1px;color:#7fa6b4;background:#0a1c26;border:1px solid #12455a;border-radius:9px;padding:7px 14px;}
@@ -883,6 +932,57 @@
     p.style.left = `${left}px`; p.style.top = `${top}px`;
   }
 
+  // Searchable "add item" browser (environment-agnostic). items:[{uuid?,name,type,img,source}];
+  // opts: { onAdd(item), onNew(), onClose() }. Stays open for multiple adds.
+  function closeItemBrowser() { const o = document.getElementById("ssv-item-browser"); if (o) o.remove(); }
+  function openItemBrowser(items, opts) {
+    closeItemBrowser();
+    const ov = document.createElement("div");
+    ov.id = "ssv-item-browser"; ov.className = "sgib-overlay";
+    ov.innerHTML =
+      `<div class="sgib" role="dialog">` +
+        `<div class="sgib-head"><span class="sgib-title">ADD ITEM TO SHIP</span>` +
+          `<div class="sgib-search"><span>🔎</span><input type="text" placeholder="Search all items…" data-s></div>` +
+          `<button class="sgib-x" title="Close">✕</button></div>` +
+        `<div class="sgib-count" data-count></div>` +
+        `<div class="sgib-body" data-body></div>` +
+        `<div class="sgib-foot"><button class="con-inv" data-new>＋ New blank loot</button>` +
+          `<span class="sgib-hint">Click an item to add it · drag items onto the grid also works</span>` +
+          `<button class="con-inv" data-done>Done</button></div>` +
+      `</div>`;
+    document.body.appendChild(ov);
+    const body = ov.querySelector("[data-body]"), countEl = ov.querySelector("[data-count]"), input = ov.querySelector("[data-s]");
+    const CAP = 200;
+    let shown = [];
+    const flash = (card) => {
+      card.classList.add("added");
+      const n = card.querySelector(".sgib-name"); const old = n ? n.textContent : "";
+      if (n) n.textContent = "✓ Added";
+      setTimeout(() => { card.classList.remove("added"); if (n) n.textContent = old; }, 900);
+    };
+    const draw = (q) => {
+      q = (q || "").trim().toLowerCase();
+      const matches = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+      shown = matches.slice(0, CAP);
+      countEl.textContent = `${matches.length} item${matches.length === 1 ? "" : "s"}` + (matches.length > CAP ? ` — showing first ${CAP}, refine your search` : "");
+      body.innerHTML = shown.length
+        ? shown.map((it, i) => `<div class="sgib-card" data-i="${i}"><img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.src='${DEFAULT_ITEM_IMG}'">` +
+            `<div class="sgib-meta"><div class="sgib-name">${esc(it.name)}</div><div class="sgib-sub">${esc(it.type || "item")}${it.source ? ` · ${esc(it.source)}` : ""}</div></div></div>`).join("")
+        : `<div class="sgib-empty">No items match “${esc(q)}”.</div>`;
+      body.querySelectorAll(".sgib-card").forEach((c) => { c.onclick = () => { const it = shown[Number(c.dataset.i)]; if (it && opts.onAdd) { opts.onAdd(it); flash(c); } }; });
+    };
+    const done = () => { closeItemBrowser(); opts.onClose && opts.onClose(); };
+    input.oninput = () => draw(input.value);
+    ov.querySelector(".sgib-x").onclick = done;
+    ov.querySelector("[data-done]").onclick = done;
+    ov.querySelector("[data-new]").onclick = () => opts.onNew && opts.onNew();
+    ov.onclick = (e) => { if (e.target === ov) done(); };
+    draw("");
+    setTimeout(() => input.focus(), 30);
+  }
+  S.openItemBrowser = openItemBrowser;
+  S.closeItemBrowser = closeItemBrowser;
+
   // Ship inventory panel (right column, when kctx.invMode) — game-style grid with item pictures,
   // search, ship/you tabs, hover detail popup, per-tile move/use, GM add-item + drag-drop.
   function renderInventoryPanel(rightEl, kctx) {
@@ -890,11 +990,13 @@
     const t = st.tuning;
     const ship = kctx.shipItems || [], mine = kctx.playerItems || [];
     const tab = kctx.invTab === "you" ? "you" : "ship";
-    const gauge = (label, g, cls) => {
+    const gauge = (label, g, cls, ico) => {
       const pct = g.max > 0 ? Math.max(0, Math.min(1, g.cur / g.max)) * 100 : 0;
-      return `<div class="con-gauge ${cls}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${kctx.isGM ? "Click to set" : ""}">` +
-        `<div class="cg-row"><span>${label}</span><span class="cg-val">${g.cur} / ${g.max}</span></div>` +
-        `<div class="cg-bar"><div class="cg-fill" style="width:${pct}%"></div></div></div>`;
+      const low = pct <= 20;
+      return `<div class="ig ${cls}${low ? " low" : ""}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${kctx.isGM ? "Click to set" : ""}">` +
+        `<div class="ig-top"><span class="ig-ico">${ico}</span><span class="ig-label">${label}</span>` +
+        `<span class="ig-val">${g.cur}<small> / ${g.max}</small></span></div>` +
+        `<div class="ig-track"><div class="ig-fill" style="width:${pct}%"></div></div></div>`;
     };
     const tile = (it, isShip) => {
       const acts = isShip
@@ -922,7 +1024,7 @@
         `<div class="con-head"><span class="con-title">SHIP INVENTORY</span>` +
           `<button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button>` +
           `<button class="con-x" title="Close (Esc)">✕</button></div>` +
-        `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel")}${gauge("POWER", st.power, "power")}` +
+        `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel", "⛽")}${gauge("POWER", st.power, "power", "⚡")}` +
           `<button class="con-btn" data-act="convert">Convert ${t.convertFuel}⛽ → ${t.convertPower}⚡</button></div>` +
         `<div class="inv-top">` +
           `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
@@ -937,7 +1039,7 @@
     const tuneB = rightEl.querySelector('[data-act="tune"]'); if (tuneB) tuneB.onclick = () => kctx.tune();
     const actorB = rightEl.querySelector('[data-act="actor"]'); if (actorB) actorB.onclick = () => kctx.setActor();
     const addB = rightEl.querySelector('[data-act="additem"]'); if (addB) addB.onclick = () => kctx.addItem();
-    if (kctx.isGM) rightEl.querySelectorAll(".con-gauge.gm").forEach((g) => { g.onclick = () => (g.dataset.edit === "fuel" ? kctx.editFuel() : kctx.editPower()); });
+    if (kctx.isGM) rightEl.querySelectorAll(".ig.gm").forEach((g) => { g.onclick = () => (g.dataset.edit === "fuel" ? kctx.editFuel() : kctx.editPower()); });
     rightEl.querySelectorAll(".inv-tab").forEach((b) => { b.onclick = () => { hideInvPop(); kctx.setInvTab(b.dataset.tab); }; });
 
     // Search: filter tiles in-place (no re-render → keeps input focus).
@@ -1150,7 +1252,7 @@
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
     renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; invMode = false; gmActMode = false; hideInvPop(); if (_console) _console.style.display = "none"; renderBar(); }
+  function closeConsole() { armed = null; invMode = false; gmActMode = false; hideInvPop(); closeItemBrowser(); if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -1193,7 +1295,7 @@
       invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
       invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
       animateSwap: (() => { const a = swapAnim; swapAnim = false; return a; })(),
-      addItem: () => gmAddItemDialog(),
+      addItem: () => gmAddItemBrowser(),
       dropItemData: (raw) => gmAddDroppedItem(raw),
       getState,
       shipItems: physicalItems(getShipActor()),
@@ -1271,29 +1373,39 @@
     await setState(st);
     await ChatMessage.create({ content: `Used <b>${esc(item.name)}</b> → +${add} ${kind}`, speaker: { alias: "SSV Silver Gull" } });
   }
-  // GM: add any item to the ship — pick a world item (or make a blank loot), or drag items onto the grid.
-  async function gmAddItemDialog() {
+  // GM: add any item to the ship — a searchable browser over ALL world items + every Item compendium.
+  async function gmAddItemBrowser() {
     if (!game.user.isGM) return;
     const ship = getShipActor();
     if (!ship) return ui.notifications?.warn("No ship actor configured — use the “Ship actor” button first.");
-    const world = (game.items?.contents || []).filter((i) => PHYSICAL_TYPES.has(i.type));
-    const options = [{ value: "__new__", label: "＋ Create a new blank loot item…" }]
-      .concat(world.map((i) => ({ value: i.uuid, label: `${i.name} (${i.type})` })));
-    const pick = await chooseDlg("Add item to the ship", "Pick a world item to copy onto the ship — or drag items from the sidebar / a compendium onto the grid.", options);
-    if (!pick) return;
-    if (pick === "__new__") {
+    const items = [];
+    for (const it of (game.items?.contents || [])) if (PHYSICAL_TYPES.has(it.type)) items.push({ uuid: it.uuid, name: it.name, type: it.type, img: it.img, source: "World" });
+    const packs = (game.packs || []).filter((p) => p.documentName === "Item");
+    ui.notifications?.info(`Loading ${packs.length} item compendium(s)…`);
+    await Promise.all(packs.map(async (p) => {
+      let idx; try { idx = await p.getIndex({ fields: ["img", "type"] }); } catch (e) { return; }
+      const label = p.metadata?.label || p.collection;
+      for (const e of idx) {
+        if (!PHYSICAL_TYPES.has(e.type)) continue;
+        items.push({ uuid: e.uuid || `Compendium.${p.collection}.${e._id}`, name: e.name, type: e.type, img: e.img, source: label });
+      }
+    }));
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    const addOne = async (it) => {
+      try {
+        const src = await fromUuid(it.uuid); if (!src) return;
+        const data = src.toObject(); delete data._id;
+        await ship.createEmbeddedDocuments("Item", [data]);
+        refreshOpen();
+      } catch (e) { console.error(`${MODULE_ID} | add item failed`, e); }
+    };
+    const addNew = async () => {
       const name = await promptText("New item", "Item name", "New Cargo");
       if (!name) return;
       await ship.createEmbeddedDocuments("Item", [{ name, type: "loot", img: DEFAULT_ITEM_IMG, system: { quantity: 1 } }]);
-      await ChatMessage.create({ content: `GM added <b>${esc(name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
       refreshOpen();
-      return;
-    }
-    const src = await fromUuid(pick); if (!src) return;
-    const data = src.toObject(); delete data._id;
-    await ship.createEmbeddedDocuments("Item", [data]);
-    await ChatMessage.create({ content: `GM added <b>${esc(src.name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
-    refreshOpen();
+    };
+    openItemBrowser(items, { onAdd: addOne, onNew: addNew, onClose: () => {} });
   }
   async function gmAddDroppedItem(raw) {
     if (!game.user.isGM) return;
