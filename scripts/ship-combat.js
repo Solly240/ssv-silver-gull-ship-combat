@@ -170,8 +170,13 @@
   S.MANEUVERS = { evasive: { label: "Evasive", mp: 6, ac: 5 }, steady: { label: "Steady", mp: 4, ac: 0 }, aggressive: { label: "Aggressive", mp: 3, ac: -5 } };
   // Fuel each move burns (players only — anything the GM drives is free). Rotate 45 = 1, Rotate 90 = 2, Forward = 4.
   S.MOVE_FUEL = { rotL45: 1, rotR45: 1, rotL90: 2, rotR90: 2, forward: 4 };
-  // The ship's two detachable mono-gun turrets. A gunner picks one, then fires / called-shots / launches a boarder.
-  S.GUNS = [{ id: "port", label: "Port Gun", facing: "port" }, { id: "starboard", label: "Starboard Gun", facing: "starboard" }];
+  // The ship's two forward-mounted mono-gun turrets. A gunner (port or starboard seat) picks which gun to fire.
+  // Firing arc is 45° to either side of dead-ahead (90° cone). Ranges are in grid squares.
+  S.GUNS = [
+    { id: "flak",       label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 2, longMax: 4,  longNote: "−5 & half dmg" },
+    { id: "autocannon", label: "Heavy Autocannon",  toHit: 3, damage: "4d6", shortMax: 4, longMax: 10, longNote: "no penalty" }
+  ];
+  S.gun = (id) => S.GUNS.find((g) => g.id === id) || null;
   S.QUICK_AIM_BONUS = 2;   // Quick Aim: spend the Bonus action for +2 to hit
   // Power a station action draws from the reactor (players only; the GM never spends). Keyed by action id; default 0.
   // Movement is fuel (above), not power; repair/boarding/pilot-maneuvers are free; everything that "runs on power" pays here.
@@ -264,7 +269,7 @@
         mp: Number.isFinite(c.mp) && c.mp > 0 ? Math.floor(c.mp) : 0, // pilot: Movement Points left
         mpMax: Number.isFinite(c.mpMax) && c.mpMax > 0 ? Math.floor(c.mpMax) : 0, // pilot: this turn's full pool (after nav mult)
         navMult: Number.isFinite(c.navMult) && c.navMult >= 1 ? c.navMult : 1,     // pilot: Science nav-support multiplier this turn
-        gun: (c.gun === "port" || c.gun === "starboard") ? c.gun : null,           // gunner: which gun is selected in the turn bar
+        gun: S.gun(c.gun) ? c.gun : null,                                          // gunner: which gun is selected in the turn bar
         prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
@@ -488,10 +493,12 @@
 .sgct .ct-seatwrap.mine .ct-seat{border-color:var(--teal);box-shadow:0 0 12px rgba(56,225,196,.25);}
 .sgct .ct-move,.sgct .ct-gun{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:center;padding:6px 10px;
   border:1px solid var(--edge);border-radius:9px;background:rgba(10,28,38,.55);}
-.sgct .ct-gun .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;}
-.sgct .ct-gun .gc-wrap{display:inline-flex;align-items:center;gap:6px;}
+.sgct .ct-gun .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;text-align:center;line-height:1.35;}
+.sgct .ct-gun .pm-h small{font-size:10px;color:var(--teal);letter-spacing:.5px;text-transform:none;}
+.sgct .ct-gun .gc-wrap{display:inline-flex;align-items:center;gap:8px;}
 .sgct .ct-gun .gc-cone{display:block;filter:drop-shadow(0 0 4px rgba(56,225,196,.15));}
-.sgct .ct-gun .gc-legend{font-size:10px;letter-spacing:.5px;color:var(--muted);white-space:nowrap;}
+.sgct .ct-gun .gc-legend{font-size:10px;letter-spacing:.5px;color:var(--muted);white-space:nowrap;line-height:1.5;text-align:left;}
+.sgct .ct-gun .gc-legend small{opacity:.7;}
 .sgct .ct-gun .gc-fire{border-color:#e0885a;color:#ffb98f;}
 .sgct .ct-gun .gc-fire:hover:not([disabled]){border-color:#ff8a4c;box-shadow:0 0 9px rgba(255,138,76,.45);color:#ffb98f;}
 .sgct .ct-move .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;}
@@ -985,31 +992,36 @@
       mv("rotR45", "Rotate 45° right — 1 MP · 1 fuel", "⟳45") + mv("rotR90", "Rotate 90° right — 1 MP · 2 fuel", "⟳90") +
       `</div>`;
   }
-  // A gun's firing arc: a wide red (far) cone with a smaller green (close) cone inside, opening toward the gun's side.
-  function gunConeSVG(facing) {
-    const right = facing === "starboard";
-    const ax = right ? 16 : 124;                       // apex (the gun) sits on the ship's side
-    const redTop = right ? "132,5" : "8,5", redBot = right ? "132,55" : "8,55";
-    const gTop = right ? "80,16" : "60,16", gBot = right ? "80,44" : "60,44";
-    return `<svg class="gc-cone" width="140" height="60" viewBox="0 0 140 60" aria-hidden="true">` +
-      `<polygon points="${ax},30 ${redTop} ${redBot}" fill="rgba(224,69,77,.22)" stroke="rgba(224,69,77,.55)" stroke-width="1"/>` +
-      `<polygon points="${ax},30 ${gTop} ${gBot}" fill="rgba(66,209,106,.34)" stroke="rgba(66,209,106,.8)" stroke-width="1"/>` +
-      `<circle cx="${ax}" cy="30" r="3.6" fill="#cfeef0"/></svg>`;
+  // A gun's forward firing arc off the ship: a 90° cone (45° each side of dead-ahead) with a green close-range
+  // band, a red long-range band, and a rounded far edge. The cone length is scaled to the gun's range.
+  function gunConeSVG(gun) {
+    const cx = 66, cy = 122, PPR = 7.4, maxR = 10;     // apex = ship; px per range square (scaled to the longest gun)
+    const rG = Math.max(6, (gun.shortMax || 2) * PPR), rR = Math.max(rG + 6, (gun.longMax || 4) * PPR);
+    const pt = (r, deg) => { const a = deg * Math.PI / 180; return `${(cx + r * Math.sin(a)).toFixed(1)},${(cy - r * Math.cos(a)).toFixed(1)}`; };
+    const L = -45, R = 45;
+    const gL = pt(rG, L), gR = pt(rG, R), rL = pt(rR, L), rR2 = pt(rR, R);
+    const green = `M${cx},${cy} L${gL} A${rG.toFixed(1)},${rG.toFixed(1)} 0 0 1 ${gR} Z`;
+    const red = `M${gL} L${rL} A${rR.toFixed(1)},${rR.toFixed(1)} 0 0 1 ${rR2} L${gR} A${rG.toFixed(1)},${rG.toFixed(1)} 0 0 0 ${gL} Z`;
+    const ship = `<path d="M${cx},${cy - 9} L${cx - 5.5},${cy + 4} L${cx + 5.5},${cy + 4} Z" fill="#cfeef0"/>`;   // little ship, nose forward
+    return `<svg class="gc-cone" width="132" height="128" viewBox="0 0 132 132" aria-hidden="true">` +
+      `<path d="${red}" fill="rgba(224,69,77,.18)" stroke="rgba(224,69,77,.5)" stroke-width="1" stroke-linejoin="round"/>` +
+      `<path d="${green}" fill="rgba(66,209,106,.30)" stroke="rgba(66,209,106,.75)" stroke-width="1" stroke-linejoin="round"/>` +
+      ship + `</svg>`;
   }
-  // Inline gunner panel (under the seat): pick a gun → firing-arc cone + Back / Fire / Called Shot / Boarding Fire.
+  // Inline gunner panel (under the seat): pick a gun → forward firing-arc cone + Back / Fire / Called Shot / Boarding Fire.
   function gunnerPanel(c) {
     if (c.station !== "gunner_port" && c.station !== "gunner_starboard") return "";
     if (!c.gun) {
-      const btns = S.GUNS.map((g) => `<button class="pm-btn" data-gun="${g.id}">${g.id === "port" ? "◄ " : ""}${esc(g.label)}${g.id === "starboard" ? " ►" : ""}</button>`).join("");
+      const btns = S.GUNS.map((g) => `<button class="pm-btn" data-gun="${g.id}" title="${g.longNote} at long range">${esc(g.label)} <b>+${g.toHit}</b> · <b>${g.damage}</b></button>`).join("");
       return `<div class="ct-gun" data-crew="${c.id}"><span class="pm-h">Gun</span>${btns}</div>`;
     }
-    const g = S.GUNS.find((x) => x.id === c.gun) || S.GUNS[0];
-    return `<div class="ct-gun open" data-crew="${c.id}"><span class="pm-h">${esc(g.label)}</span>` +
-      `<span class="gc-wrap">${gunConeSVG(g.facing)}<span class="gc-legend"><b style="color:#42d16a">close</b> · <b style="color:#e0454d">far</b></span></span>` +
+    const g = S.gun(c.gun) || S.GUNS[0];
+    return `<div class="ct-gun open" data-crew="${c.id}"><span class="pm-h">${esc(g.label)}<br><small>+${g.toHit} · ${g.damage}</small></span>` +
+      `<span class="gc-wrap">${gunConeSVG(g)}<span class="gc-legend"><b style="color:#42d16a">close 1–${g.shortMax}</b><br><b style="color:#e0454d">far ${g.shortMax + 1}–${g.longMax}</b><br><small>${esc(g.longNote)}</small></span></span>` +
       `<button class="pm-btn" data-gunback title="Pick a different gun">← Back</button>` +
-      `<button class="pm-btn gc-fire" data-fire title="Fire — to-hit + damage (STR + bonuses)">🔥 Fire</button>` +
+      `<button class="pm-btn gc-fire" data-fire title="Fire — to-hit + damage (gun bonus + STR + bonuses)">🔥 Fire</button>` +
       `<button class="pm-btn" data-called title="Called Shot — target an enemy system">🎯 Called Shot</button>` +
-      `<button class="pm-btn" data-board title="Fire a crewmate at the enemy hull">🚀 Boarding Fire</button></div>`;
+      `<button class="pm-btn" data-board title="Fire a crewmate at the enemy hull (spends your action)">🚀 Boarding Fire</button></div>`;
   }
   // The inline turn-bar panel for a seat: pilot maneuvers, or gunner guns. Empty for other stations.
   function seatPanel(c) { return pilotPanel(c) || gunnerPanel(c); }
@@ -2579,7 +2591,7 @@
     const next = getCombat(); const c = next.crew[crewId]; if (!isGunner(c)) return;
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && c.controllerUserId !== byUserId) return;
-    c.gun = (gun === "port" || gun === "starboard") ? gun : null;
+    c.gun = S.gun(gun) ? gun : null;
     await saveCombat(next);
   }
   // GM: a Called-Shot natural 1 backfires — 1 damage to our own Weapons / Turrets.
@@ -2591,43 +2603,48 @@
     await setState(st);
   }
 
-  // Roll-or-manual to-hit: adds STR + other bonuses (+ optional Quick Aim). Returns {die,total,bonus,quickAim,roll} or null.
-  async function gunToHitDialog(crew, str, opts) {
+  // Roll-or-manual to-hit: adds the gun's to-hit + STR + other bonuses (+ optional Quick Aim). Returns
+  // {die,total,bonus,quickAim,roll} or null.
+  async function gunToHitDialog(crew, gun, str, opts) {
     opts = opts || {};
     const aimPw = S.ACTION_POWER.quickaim, atkPw = S.ACTION_POWER.attack;
     const canAim = !opts.noAim && !crew.bonus && (game.user.isGM || S.normalize(getState()).power.cur >= atkPw + aimPw);
-    const gunLabel = S.GUNS.find((g) => g.id === crew.gun)?.label || "Gun";
     const aimRow = opts.noAim ? "" :
       `<label style="display:flex;gap:6px;align-items:center;${canAim ? "" : "opacity:.5"}"><input type="checkbox" name="aim" ${canAim ? "" : "disabled"}/> Quick Aim: +${S.QUICK_AIM_BONUS} to hit — spends your Bonus action${aimPw ? ` · ${aimPw}⚡` : ""}${crew.bonus ? " (no Bonus left)" : ""}</label>`;
     const content = `<div style="display:flex;flex-direction:column;gap:8px;">` +
-      `<p style="margin:0;opacity:.8">STR mod <b>${signMod(str)}</b> is added automatically.</p>${aimRow}` +
-      `<label>Other bonuses (Rally, granted buffs…) <input type="number" name="bonus" value="0" style="width:70px"/></label>` +
+      `<p style="margin:0;opacity:.8">${esc(gun.label)} <b>+${gun.toHit}</b> and STR <b>${signMod(str)}</b> are added automatically.</p>${aimRow}` +
+      `<label>Other bonuses (Rally, range −5, granted buffs…) <input type="number" name="bonus" value="0" style="width:70px"/></label>` +
       `<label>Manual d20 (if not rolling here) <input type="number" name="die" min="1" max="20" placeholder="1–20" style="width:70px"/></label></div>`;
     const read = (f) => ({ aim: !!f.elements.aim?.checked, bonus: Number(f.elements.bonus?.value) || 0, die: f.elements.die?.value !== "" ? Number(f.elements.die.value) : null });
-    const choice = await rollChoiceDialog(`To-Hit — ${gunLabel}`, content, "🎲 Roll 1d20", "Use manual d20");
+    const choice = await rollChoiceDialog(`To-Hit — ${gun.label}`, content, "🎲 Roll 1d20", "Use manual d20");
     if (!choice) return null;
     const v = read(choice.form);
     let die, roll = null;
     if (choice.action === "roll") { roll = await (new Roll("1d20")).evaluate(); die = roll.dice?.[0]?.results?.[0]?.result ?? roll.total; }
     else { if (!Number.isFinite(v.die)) { ui.notifications?.warn("Enter your d20 result (1–20)."); return null; } die = Math.max(1, Math.min(20, v.die)); }
     const quickAim = v.aim && canAim;
-    return { die, total: die + str + v.bonus + (quickAim ? S.QUICK_AIM_BONUS : 0), bonus: v.bonus, quickAim, roll };
+    return { die, total: die + gun.toHit + str + v.bonus + (quickAim ? S.QUICK_AIM_BONUS : 0), bonus: v.bonus, quickAim, roll };
   }
-  // Roll-or-manual damage: formula (default 2d6) + STR + other bonuses. Returns {total,formula,bonus,roll} or null.
-  async function gunDamageDialog(str) {
+  // Roll-or-manual damage: formula (default = the gun's die) + STR + other bonuses. Returns {total,formula,bonus,roll} or null.
+  async function gunDamageDialog(defaultFormula, str) {
+    const dflt = defaultFormula || "2d6";
     const content = `<div style="display:flex;flex-direction:column;gap:8px;">` +
       `<p style="margin:0;opacity:.8">STR mod <b>${signMod(str)}</b> is added automatically.</p>` +
-      `<label>Damage dice <input type="text" name="f" value="2d6" style="width:90px"/></label>` +
+      `<label>Damage dice <input type="text" name="f" value="${esc(dflt)}" style="width:90px"/></label>` +
       `<label>Other bonuses <input type="number" name="bonus" value="0" style="width:70px"/></label>` +
       `<label>Manual dice total (if not rolling) <input type="number" name="manual" placeholder="dice only" style="width:90px"/></label></div>`;
-    const read = (f) => ({ f: (f.elements.f?.value || "2d6").trim(), bonus: Number(f.elements.bonus?.value) || 0, manual: f.elements.manual?.value !== "" ? Number(f.elements.manual.value) : null });
+    const read = (f) => ({ f: (f.elements.f?.value || dflt).trim(), bonus: Number(f.elements.bonus?.value) || 0, manual: f.elements.manual?.value !== "" ? Number(f.elements.manual.value) : null });
     const choice = await rollChoiceDialog("Damage", content, "🎲 Roll damage", "Use manual total");
     if (!choice) return null;
     const v = read(choice.form);
     let base, roll = null, formula;
-    if (choice.action === "roll") { try { roll = await (new Roll(v.f || "2d6")).evaluate(); } catch (e) { ui.notifications?.warn("Bad dice formula."); return null; } base = roll.total; formula = v.f; }
+    if (choice.action === "roll") { try { roll = await (new Roll(v.f || dflt)).evaluate(); } catch (e) { ui.notifications?.warn("Bad dice formula."); return null; } base = roll.total; formula = v.f; }
     else { if (!Number.isFinite(v.manual)) { ui.notifications?.warn("Enter your dice total."); return null; } base = v.manual; formula = "manual"; }
     return { total: base + str + v.bonus, formula, bonus: v.bonus, roll };
+  }
+  const gunSpeaker = { alias: "SSV Silver Gull" };
+  async function announceGunDamage(gunnerName, gun, dmg, str) {
+    await ChatMessage.create({ content: `<b>${esc(gunnerName)}</b> — <b>${esc(gun.label)}</b> damage <b>${dmg.total}</b> <span style="opacity:.6">(${dmg.formula === "manual" ? "manual" : esc(dmg.formula)} · STR ${signMod(str)}${dmg.bonus ? ` · +${dmg.bonus}` : ""})</span><br><i>Apply to the target (enemy ships coming soon).</i>`, speaker: gunSpeaker, rolls: dmg.roll ? [dmg.roll] : undefined });
   }
   // Shared two-button (Roll / Manual) + Cancel dialog. Resolves { action:"roll"|"manual", form } or null.
   async function rollChoiceDialog(title, content, rollLabel, manualLabel) {
@@ -2655,31 +2672,51 @@
     return new Promise((res) => new Dialog({ title, content, buttons: { ok: { label: "OK", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
   }
 
-  // Fire: optional Quick Aim (+2, spends Bonus) → to-hit (STR + bonuses) → pick Hit/Miss → damage (STR + bonuses).
+  // Fire: optional Quick Aim (+2, spends Bonus) → to-hit (gun + STR + bonuses) → the GM confirms Hit/Miss → damage.
   async function runGunFire(crewId) {
     const crew = getCombat().crew[crewId]; if (!isGunner(crew)) return;
     if (!S.systemWorks(getState(), "weapons")) return ui.notifications?.warn("Weapons are down — repair them before firing.");
     if (!hasMain(crew)) return ui.notifications?.warn("No Main action left this turn.");
+    const gun = S.gun(crew.gun); if (!gun) return ui.notifications?.warn("Pick a gun first.");
     const atkPw = S.ACTION_POWER.attack;
     if (!game.user.isGM && S.normalize(getState()).power.cur < atkPw) return ui.notifications?.warn(`Not enough power — Fire needs ${atkPw} (convert fuel first).`);
-    const str = strMod(), gun = S.GUNS.find((g) => g.id === crew.gun)?.label || "Gun";
-    const res = await gunToHitDialog(crew, str);
+    const str = strMod();
+    const res = await gunToHitDialog(crew, gun, str);
     if (!res) return;
     consumeSlot(crew, "action", atkPw);
     if (res.quickAim) consumeSlot(crew, "bonus", S.ACTION_POWER.quickaim);
-    const bd = `STR ${signMod(str)}${res.quickAim ? ` · Quick Aim +${S.QUICK_AIM_BONUS}` : ""}${res.bonus ? ` · +${res.bonus}` : ""}`;
-    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun)}</b> Fire<br>To-hit <b>${res.total}</b> (d20 ${res.die}) <span style="opacity:.6">(${bd})</span>`, speaker: { alias: "SSV Silver Gull" }, rolls: res.roll ? [res.roll] : undefined });
-    const hit = await chooseDlg("Result", `To-hit total <b>${res.total}</b>. Did it hit? (enemy AC comparison comes with the enemy-ship system.)`, [{ value: "hit", label: "✓ Hit — roll damage" }, { value: "miss", label: "✗ Miss" }]);
-    if (hit !== "hit") { if (hit === "miss") await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — the shot <b>missed</b>.`, speaker: { alias: "SSV Silver Gull" } }); return; }
-    const dmg = await gunDamageDialog(str);
-    if (!dmg) return;
-    await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(gun)}</b> damage <b>${dmg.total}</b> <span style="opacity:.6">(${dmg.formula === "manual" ? "manual" : esc(dmg.formula)} · STR ${signMod(str)}${dmg.bonus ? ` · +${dmg.bonus}` : ""})</span><br><i>Apply to the target (enemy ships coming soon).</i>`, speaker: { alias: "SSV Silver Gull" }, rolls: dmg.roll ? [dmg.roll] : undefined });
+    const bd = `${gun.label} +${gun.toHit} · STR ${signMod(str)}${res.quickAim ? ` · Quick Aim +${S.QUICK_AIM_BONUS}` : ""}${res.bonus ? ` · +${res.bonus}` : ""}`;
+    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun.label)}</b> Fire<br>To-hit <b>${res.total}</b> (d20 ${res.die}) <span style="opacity:.6">(${bd})</span>`, speaker: gunSpeaker, rolls: res.roll ? [res.roll] : undefined });
+    // The GM adjudicates the hit (auto-compares enemy AC once the enemy-ship system exists). GM firing resolves locally.
+    if (game.user.isGM) await gmResolveGunHit(crew.name, gun, res.total, str);
+    else { emit({ type: "gunHitCheck", toGM: true, gunnerName: crew.name, gunId: gun.id, total: res.total, userId: game.user.id }); ui.notifications?.info("Shot away — waiting for the GM to confirm the hit…"); }
+  }
+  // GM: was it a hit? (asked on the GM's screen). On hit, damage is rolled — by the GM if the GM fired, else by the shooter.
+  async function gmResolveGunHit(gunnerName, gun, total, str) {
+    const hit = await chooseDlg("Did it hit?", `<b>${esc(gunnerName)}</b>'s <b>${esc(gun.label)}</b> — to-hit <b>${total}</b>. Did it hit the target?`, [{ value: "hit", label: "✓ Hit — roll damage" }, { value: "miss", label: "✗ Miss" }]);
+    if (hit !== "hit") { if (hit === "miss") await ChatMessage.create({ content: `<b>${esc(gunnerName)}</b> — the <b>${esc(gun.label)}</b> shot <b>missed</b>.`, speaker: gunSpeaker }); return; }
+    const dmg = await gunDamageDialog(gun.damage, str);
+    if (dmg) await announceGunDamage(gunnerName, gun, dmg, str);
+  }
+  async function gmGunHitCheck(msg) {
+    if (!game.user.isGM) return;
+    const gun = S.gun(msg.gunId) || { label: "Gun", damage: "2d6" };
+    const hit = await chooseDlg("Did it hit?", `<b>${esc(msg.gunnerName)}</b>'s <b>${esc(gun.label)}</b> — to-hit <b>${msg.total}</b>. Did it hit the target?`, [{ value: "hit", label: "✓ Hit" }, { value: "miss", label: "✗ Miss" }]);
+    if (hit === "hit") emit({ type: "gunDoDamage", toUser: msg.userId, gunnerName: msg.gunnerName, gunId: msg.gunId });
+    else if (hit === "miss") await ChatMessage.create({ content: `<b>${esc(msg.gunnerName)}</b> — the <b>${esc(gun.label)}</b> shot <b>missed</b>.`, speaker: gunSpeaker });
+  }
+  // Player side: the GM confirmed a hit → roll damage here (uses this player's STR).
+  async function runGunDamageRoll(gunnerName, gun) {
+    const str = strMod();
+    const dmg = await gunDamageDialog(gun.damage, str);
+    if (dmg) await announceGunDamage(gunnerName, gun, dmg, str);
   }
   // Called Shot: pick an enemy system → to-hit; nat 20 = 2 dmg, nat 1 = 1 dmg to our Weapons, else 1 dmg.
   async function runCalledShot(crewId) {
     const crew = getCombat().crew[crewId]; if (!isGunner(crew)) return;
     if (!S.systemWorks(getState(), "weapons")) return ui.notifications?.warn("Weapons are down — repair them before firing.");
     if (!hasMain(crew)) return ui.notifications?.warn("No Main action left this turn.");
+    const gun = S.gun(crew.gun); if (!gun) return ui.notifications?.warn("Pick a gun first.");
     const calledPw = S.ACTION_POWER.called;
     if (!game.user.isGM && S.normalize(getState()).power.cur < calledPw) return ui.notifications?.warn(`Not enough power — Called Shot needs ${calledPw} (convert fuel first).`);
     const opts = S.SYSTEMS.filter((s) => s.installed !== false).map((s) => ({ value: s.id, label: s.label }));
@@ -2688,31 +2725,26 @@
     if (!target) return;
     let targetLabel = S.SYSTEMS.find((s) => s.id === target)?.label || null;
     if (target === "__other") { targetLabel = await promptText("Called Shot — target", "Name the system you're targeting"); if (!targetLabel) return; }
-    const str = strMod(), gun = S.GUNS.find((g) => g.id === crew.gun)?.label || "Gun";
-    const res = await gunToHitDialog(crew, str, { noAim: true });   // Called Shot: no Quick Aim
+    const str = strMod();
+    const res = await gunToHitDialog(crew, gun, str, { noAim: true });   // Called Shot: no Quick Aim
     if (!res) return;
     consumeSlot(crew, "action", calledPw);
     let outcome, apply = "";
     if (res.die === 20) { outcome = `<b style="color:#42d16a">CRITICAL — 2 damage</b> to <b>${esc(targetLabel)}</b>`; apply = `<br><i>Apply 2 to the enemy system (enemy ships coming soon).</i>`; }
     else if (res.die === 1) { outcome = `<b style="color:#e0454d">MISFIRE — 1 damage to your own Weapons / Turrets</b>`; }
     else { outcome = `<b>1 damage</b> to <b>${esc(targetLabel)}</b>`; apply = `<br><i>Apply 1 to the enemy system (enemy ships coming soon).</i>`; }
-    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun)}</b> Called Shot on <b>${esc(targetLabel)}</b><br>To-hit <b>${res.total}</b> (d20 ${res.die}) — ${outcome}${apply}`, speaker: { alias: "SSV Silver Gull" }, rolls: res.roll ? [res.roll] : undefined });
+    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun.label)}</b> Called Shot on <b>${esc(targetLabel)}</b><br>To-hit <b>${res.total}</b> (d20 ${res.die}) — ${outcome}${apply}`, speaker: gunSpeaker, rolls: res.roll ? [res.roll] : undefined });
     if (res.die === 1) { if (game.user.isGM) gmWeaponsMishap(null); else emit({ type: "weaponsMishap", toGM: true, userId: game.user.id }); }
   }
-  // Boarding Fire: fire a crewmate at the enemy hull (full boarding resolves later; announce + consume for now).
+  // Boarding Fire: placeholder — spends the Main action and announces a launch (full boarding flow comes later).
   async function runBoardingFire(crewId) {
-    const combat = getCombat(); const crew = combat.crew[crewId]; if (!isGunner(crew)) return;
+    const crew = getCombat().crew[crewId]; if (!isGunner(crew)) return;
     if (!hasMain(crew)) return ui.notifications?.warn("No Main action left this turn.");
     const launchPw = S.ACTION_POWER.launch;
     if (!game.user.isGM && S.normalize(getState()).power.cur < launchPw) return ui.notifications?.warn(`Not enough power — Boarding Fire needs ${launchPw} (convert fuel first).`);
-    const opts = Object.values(combat.crew).filter((c) => c.id !== crew.id).map((c) => ({ value: c.id, label: `${c.name}${c.station ? ` — ${stationName(c.station)}` : ""}` }));
-    opts.push({ value: "__self", label: `${crew.name} (launch yourself)` });
-    const who = await chooseDlg("Boarding Fire", "Fire which crewmate at the enemy hull?", opts);
-    if (!who) return;
-    const boarder = who === "__self" ? crew.name : (combat.crew[who]?.name || "a crewmate");
     consumeSlot(crew, "action", launchPw);
-    const gun = S.GUNS.find((g) => g.id === crew.gun)?.label || "Gun";
-    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} fires <b>${esc(boarder)}</b> from the <b>${esc(gun)}</b> at the enemy hull! 🚀<br><i>Boarding resolves once you're alongside — GM adjudicates (full flow coming later).</i>`, speaker: { alias: "SSV Silver Gull" } });
+    const gun = S.gun(crew.gun);
+    await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} launches a boarder from the <b>${esc(gun?.label || "gun")}</b> at the enemy hull! 🚀<br><i>Boarding resolves later — GM adjudicates for now.</i>`, speaker: gunSpeaker });
   }
 
   async function gmRepairSystem(systemId, byUserId) {
@@ -2783,6 +2815,8 @@
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
       case "selectGun":      gmSelectGun(msg.crewId, msg.gun, msg.userId); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
+      case "gunHitCheck":    gmGunHitCheck(msg); break;
+      case "gunDoDamage":    runGunDamageRoll(msg.gunnerName, S.gun(msg.gunId) || { label: "Gun", damage: "2d6" }); break;
       case "repairSystem":   gmRepairSystem(msg.systemId, msg.userId); break;
       case "navSupport":     gmNavSupport(msg.mult, msg.userId); break;
       case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
