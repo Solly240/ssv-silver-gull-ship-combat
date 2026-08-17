@@ -495,10 +495,6 @@
   border:1px solid var(--edge);border-radius:9px;background:rgba(10,28,38,.55);}
 .sgct .ct-gun .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;text-align:center;line-height:1.35;}
 .sgct .ct-gun .pm-h small{font-size:10px;color:var(--teal);letter-spacing:.5px;text-transform:none;}
-.sgct .ct-gun .gc-wrap{display:inline-flex;align-items:center;gap:8px;}
-.sgct .ct-gun .gc-cone{display:block;filter:drop-shadow(0 0 4px rgba(56,225,196,.15));}
-.sgct .ct-gun .gc-legend{font-size:10px;letter-spacing:.5px;color:var(--muted);white-space:nowrap;line-height:1.5;text-align:left;}
-.sgct .ct-gun .gc-legend small{opacity:.7;}
 .sgct .ct-gun .gc-fire{border-color:#e0885a;color:#ffb98f;}
 .sgct .ct-gun .gc-fire:hover:not([disabled]){border-color:#ff8a4c;box-shadow:0 0 9px rgba(255,138,76,.45);color:#ffb98f;}
 .sgct .ct-move .pm-h{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase;}
@@ -992,32 +988,16 @@
       mv("rotR45", "Rotate 45° right — 1 MP · 1 fuel", "⟳45") + mv("rotR90", "Rotate 90° right — 1 MP · 2 fuel", "⟳90") +
       `</div>`;
   }
-  // A gun's forward firing arc off the ship: a 90° cone (45° each side of dead-ahead) with a green close-range
-  // band, a red long-range band, and a rounded far edge. The cone length is scaled to the gun's range.
-  function gunConeSVG(gun) {
-    const cx = 66, cy = 122, PPR = 7.4, maxR = 10;     // apex = ship; px per range square (scaled to the longest gun)
-    const rG = Math.max(6, (gun.shortMax || 2) * PPR), rR = Math.max(rG + 6, (gun.longMax || 4) * PPR);
-    const pt = (r, deg) => { const a = deg * Math.PI / 180; return `${(cx + r * Math.sin(a)).toFixed(1)},${(cy - r * Math.cos(a)).toFixed(1)}`; };
-    const L = -45, R = 45;
-    const gL = pt(rG, L), gR = pt(rG, R), rL = pt(rR, L), rR2 = pt(rR, R);
-    const green = `M${cx},${cy} L${gL} A${rG.toFixed(1)},${rG.toFixed(1)} 0 0 1 ${gR} Z`;
-    const red = `M${gL} L${rL} A${rR.toFixed(1)},${rR.toFixed(1)} 0 0 1 ${rR2} L${gR} A${rG.toFixed(1)},${rG.toFixed(1)} 0 0 0 ${gL} Z`;
-    const ship = `<path d="M${cx},${cy - 9} L${cx - 5.5},${cy + 4} L${cx + 5.5},${cy + 4} Z" fill="#cfeef0"/>`;   // little ship, nose forward
-    return `<svg class="gc-cone" width="132" height="128" viewBox="0 0 132 132" aria-hidden="true">` +
-      `<path d="${red}" fill="rgba(224,69,77,.18)" stroke="rgba(224,69,77,.5)" stroke-width="1" stroke-linejoin="round"/>` +
-      `<path d="${green}" fill="rgba(66,209,106,.30)" stroke="rgba(66,209,106,.75)" stroke-width="1" stroke-linejoin="round"/>` +
-      ship + `</svg>`;
-  }
-  // Inline gunner panel (under the seat): pick a gun → forward firing-arc cone + Back / Fire / Called Shot / Boarding Fire.
+  // Inline gunner panel (under the seat): pick a gun → Back / Fire / Called Shot / Boarding Fire.
+  // The firing-arc cone itself is drawn on the ship TOKEN on the map (drawGunCone), not here.
   function gunnerPanel(c) {
     if (c.station !== "gunner_port" && c.station !== "gunner_starboard") return "";
     if (!c.gun) {
-      const btns = S.GUNS.map((g) => `<button class="pm-btn" data-gun="${g.id}" title="${g.longNote} at long range">${esc(g.label)} <b>+${g.toHit}</b> · <b>${g.damage}</b></button>`).join("");
+      const btns = S.GUNS.map((g) => `<button class="pm-btn" data-gun="${g.id}" title="${g.longNote} at long range — arc shows on the ship token">${esc(g.label)} <b>+${g.toHit}</b> · <b>${g.damage}</b></button>`).join("");
       return `<div class="ct-gun" data-crew="${c.id}"><span class="pm-h">Gun</span>${btns}</div>`;
     }
     const g = S.gun(c.gun) || S.GUNS[0];
-    return `<div class="ct-gun open" data-crew="${c.id}"><span class="pm-h">${esc(g.label)}<br><small>+${g.toHit} · ${g.damage}</small></span>` +
-      `<span class="gc-wrap">${gunConeSVG(g)}<span class="gc-legend"><b style="color:#42d16a">close 1–${g.shortMax}</b><br><b style="color:#e0454d">far ${g.shortMax + 1}–${g.longMax}</b><br><small>${esc(g.longNote)}</small></span></span>` +
+    return `<div class="ct-gun open" data-crew="${c.id}"><span class="pm-h">${esc(g.label)} <small>+${g.toHit} · ${g.damage} · <b style="color:#42d16a">close ${g.shortMax}</b>/<b style="color:#e0454d">far ${g.longMax}</b></small></span>` +
       `<button class="pm-btn" data-gunback title="Pick a different gun">← Back</button>` +
       `<button class="pm-btn gc-fire" data-fire title="Fire — to-hit + damage (gun bonus + STR + bonuses)">🔥 Fire</button>` +
       `<button class="pm-btn" data-called title="Called Shot — target an enemy system">🎯 Called Shot</button>` +
@@ -3080,7 +3060,7 @@
   Hooks.once("init", () => {
     // onChange fires on every client when a world setting replicates → our cross-client refresh.
     // Both the bar AND the console read combat + ship state, so refresh both on either change.
-    const refreshUI = () => { renderBar(); refreshOpen(); };
+    const refreshUI = () => { renderBar(); refreshOpen(); try { drawGunCone(); } catch (e) {} };
     game.settings.register(MODULE_ID, SETTING_DATA, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.keybindings.register(MODULE_ID, "open", {
@@ -3166,6 +3146,43 @@
     finally { _iconBusy = false; if (_iconAgain) { _iconAgain = false; updateShipIcon(); } }
   }
 
+  /* ---- Firing-arc cone drawn on the ship token on the canvas (every client) ---- */
+  let _coneGfx = null;
+  function clearGunCone() { if (_coneGfx) { try { _coneGfx.parent?.removeChild(_coneGfx); _coneGfx.destroy(); } catch (e) {} _coneGfx = null; } }
+  function drawGunCone() {
+    clearGunCone();
+    if (typeof canvas === "undefined" || !canvas?.ready || typeof PIXI === "undefined") return;
+    const combat = getCombat(); if (!combat.active) return;
+    // Which guns are currently selected by a gunner? (deduped)
+    const gunIds = [...new Set(Object.values(combat.crew)
+      .filter((c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.gun)
+      .map((c) => c.gun))];
+    if (!gunIds.length) return;
+    const a = shipIconActor(); const scene = canvas.scene; if (!a || !scene) return;
+    const tdoc = scene.tokens.find((t) => t.actorId === a.id); if (!tdoc) return;
+    const grid = scene.grid?.size || 100;
+    const cx = tdoc.x + (tdoc.width * grid) / 2, cy = tdoc.y + (tdoc.height * grid) / 2;
+    const rot = ((tdoc.rotation || 0)) * Math.PI / 180;          // 0 = nose up
+    const fwd = Math.atan2(-Math.cos(rot), Math.sin(rot));       // forward vector angle in y-down canvas coords
+    const half = Math.PI / 4, a0 = fwd - half, a1 = fwd + half, STEPS = 20;
+    const arcPts = (r, from, to) => { const out = []; for (let i = 0; i <= STEPS; i++) { const t = from + (to - from) * (i / STEPS); out.push(cx + r * Math.cos(t), cy + r * Math.sin(t)); } return out; };
+    const g = new PIXI.Graphics();
+    // Fill+stroke a polygon, working under both PIXI v7 (beginFill/drawPolygon) and v8 (poly/fill/stroke).
+    const fillPoly = (pts, color, alpha, la) => {
+      if (typeof g.beginFill === "function") { g.beginFill(color, alpha); g.lineStyle(2, color, la); g.drawPolygon(pts); g.endFill(); }
+      else { g.poly(pts).fill({ color, alpha }).stroke({ width: 2, color, alpha: la }); }
+    };
+    // draw longest range first so shorter guns' bands stay visible on top
+    for (const id of gunIds.sort((x, y) => (S.gun(y)?.longMax || 0) - (S.gun(x)?.longMax || 0))) {
+      const gun = S.gun(id); if (!gun) continue;
+      const rG = Math.max(1, gun.shortMax) * grid, rR = Math.max(gun.shortMax + 0.5, gun.longMax) * grid;
+      fillPoly([...arcPts(rR, a0, a1), ...arcPts(rG, a1, a0)], 0xe0454d, 0.12, 0.45);   // red (long) band
+      fillPoly([cx, cy, ...arcPts(rG, a0, a1)], 0x42d16a, 0.16, 0.6);                    // green (close) band
+    }
+    _coneGfx = g;
+    (canvas.interface || canvas.controls || canvas.stage)?.addChild(g);
+  }
+
   Hooks.once("ready", async () => {
     if (game.user.isGM) {
       const stored = game.settings.get(MODULE_ID, SETTING_DATA);
@@ -3182,6 +3199,13 @@
     // Keep the ship "icon" actor's token image in sync with the shields (GM renders + uploads).
     Hooks.on(`${MODULE_ID}.updated`, () => updateShipIcon());
     if (game.user.isGM) ensureShipIconActor().then(() => updateShipIcon());
+    // Firing-arc cone on the map: redraw when the canvas is ready and whenever the ship token moves/rotates.
+    Hooks.on("canvasReady", () => { try { drawGunCone(); } catch (e) {} });
+    Hooks.on("updateToken", (doc, change) => {
+      if (doc.actorId === shipIconActor()?.id && ("x" in change || "y" in change || "rotation" in change || "width" in change || "height" in change)) { try { drawGunCone(); } catch (e) {} }
+    });
+    Hooks.on("deleteToken", () => { try { drawGunCone(); } catch (e) {} });
+    try { drawGunCone(); } catch (e) {}
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
