@@ -50,6 +50,16 @@
   S.FACING_LABEL = { fore: "Fore", starboard: "Starboard", aft: "Aft", port: "Port" };
 
   S.SYSTEM_STATES = ["working", "damaged", "destroyed"];
+  // Each system has HP. 5 = working; 1–4 = damaged (doesn't work); ≤0 = destroyed (can't be repaired).
+  S.SYSTEM_HP_MAX = 5;
+  S.systemState = (hp) => {
+    const cur = Number(hp?.cur), max = Number(hp?.max) || S.SYSTEM_HP_MAX;
+    if (!(cur > 0)) return "destroyed";
+    if (cur >= max) return "working";
+    return "damaged";
+  };
+  // A system "works" only at full HP; damaged/destroyed = doesn't work.
+  S.systemWorks = (state, id) => state?.systems?.[id] === "working";
 
   S.STATE_META = {
     working:   { label: "ONLINE",       c: "#38e1c4" },
@@ -123,7 +133,7 @@
       bonus: [N("repel", "Repel Boarders", "Leave your station to fight enemy boarders (you lose this station's Main this round).")]
     },
     engineer: {
-      main: [N("repair", "Repair", "Int DC 15 → 2d6 + Int Hull (+1d6 per 5 over)."), N("reroute", "Reroute Power", "Buff an ally (+1d4 roll, +5 temp AC to Pilot, or +1d6 damage); risk of a self-mishap.")],
+      main: [{ id: "repair", name: "Repair System", type: "repair", text: "Pick a damaged system and roll d20 + INT. Nat 20 = auto-fix; nat 1 = auto-fail; otherwise solve a timed repair puzzle (the roll sets your time) to restore +2 HP. Can't repair a destroyed (0 HP) system." }, N("reroute", "Reroute Power", "Buff an ally (+1d4 roll, +5 temp AC to Pilot, or +1d6 damage); risk of a self-mishap.")],
       bonus: [N("patch", "Patch Job", "Flat 1d4 Hull or Shield back, or clear one negative status.")]
     },
     shields_officer: {
@@ -235,14 +245,18 @@
   /* ---------------------------------------------------------------------- */
 
   S.defaultState = function () {
-    const systems = {};
-    for (const sys of S.SYSTEMS) systems[sys.id] = sys.installed === false ? "offline" : "working";
+    const systems = {}, systemHp = {};
+    for (const sys of S.SYSTEMS) {
+      systems[sys.id] = sys.installed === false ? "offline" : "working";
+      systemHp[sys.id] = { cur: S.SYSTEM_HP_MAX, max: S.SYSTEM_HP_MAX };
+    }
     return {
       name: "SSV Silver Gull",
       plating: "Titanium-Aegis Matrix Plating",
       hull: { cur: 150, max: 150 },
       ship: "auto", // auto | intact | damaged | cloaked
       systems,
+      systemHp,   // { [id]: { cur, max } } — drives the systems[] status strings above
       // Main directional shield (on/off + facing) plus an optional smaller SECONDARY
       // facing (the Shields Officer's Micro-Adjust bonus, +2 AC, cleared each turn).
       shield: { on: true, facing: "fore", secondary: null },
@@ -267,6 +281,7 @@
       },
       ship: stored.ship || d.ship,
       systems: { ...d.systems },
+      systemHp: {},
       shield: { ...d.shield },
       fuel:  { max: Number(stored.fuel?.max  ?? d.fuel.max),  cur: Number(stored.fuel?.cur  ?? d.fuel.cur)  },
       power: { max: Number(stored.power?.max ?? d.power.max), cur: Number(stored.power?.cur ?? d.power.cur) },
@@ -278,10 +293,17 @@
       },
       actorId: String(stored.actorId ?? d.actorId)
     };
+    // Per-system HP drives the status string. Use stored HP if present, else migrate from the old string.
+    const strToHp = { working: S.SYSTEM_HP_MAX, damaged: 3, destroyed: 0 };
     for (const sys of S.SYSTEMS) {
-      const v = stored.systems?.[sys.id];
-      if (sys.installed === false) out.systems[sys.id] = "offline";
-      else if (S.SYSTEM_STATES.includes(v)) out.systems[sys.id] = v;
+      const M = S.SYSTEM_HP_MAX;
+      if (sys.installed === false) { out.systemHp[sys.id] = { cur: M, max: M }; out.systems[sys.id] = "offline"; continue; }
+      const sh = stored.systemHp?.[sys.id];
+      let cur = Number.isFinite(Number(sh?.cur)) ? Number(sh.cur)
+        : (S.SYSTEM_STATES.includes(stored.systems?.[sys.id]) ? strToHp[stored.systems[sys.id]] : M);
+      cur = Math.max(0, Math.min(cur, M));
+      out.systemHp[sys.id] = { cur, max: M };
+      out.systems[sys.id] = S.systemState(out.systemHp[sys.id]);
     }
     const sh = stored.shield;
     if (sh && typeof sh === "object") {
@@ -352,6 +374,7 @@
 .sgsc .sc-card.st-offline{opacity:.6;border-style:dashed;}
 .sgsc .sc-name{font-size:14px;font-weight:700;color:var(--ink);line-height:1.15;}
 .sgsc .sc-pill{display:inline-block;margin-top:3px;font-size:10px;font-weight:700;letter-spacing:1px;padding:1px 7px;border-radius:10px;border:1px solid currentColor;}
+.sgsc .sc-hp{margin-left:6px;font-size:11px;font-weight:700;letter-spacing:.5px;opacity:.9;}
 /* Ship + shield sit BEHIND the panels, confined to the central band (clear of the title & hull bar). */
 .sgsc .sc-shipbg{position:absolute;top:-55px;bottom:0;left:-78%;right:-78%;z-index:1;display:flex;align-items:center;justify-content:center;pointer-events:none;}
 .sgsc .sc-shipwrap{position:relative;height:112%;aspect-ratio:1218/1620;pointer-events:auto;}
@@ -620,6 +643,45 @@
 .sgsc .con-circle.pos-port{top:56%;left:41%;}
 .sgsc .con-circle.pos-starboard{top:56%;left:59%;}
 @media (max-width:820px){.sgcon{flex-direction:column;}.sgcon .con-right{flex-basis:auto;border-left:none;border-top:1px solid #12455a;}}
+/* ===== Repair puzzle overlay ===== */
+.srp-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;
+  font-family:'Courier New',monospace;color:#cfeef0;}
+.srp{width:min(560px,94vw);border:1px solid #1d6a86;border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.75);}
+.srp-head{padding:13px 16px 8px;}
+.srp-title{font-weight:700;letter-spacing:2px;color:#38e1c4;text-shadow:0 0 10px rgba(56,225,196,.4);}
+.srp-timerwrap{height:8px;margin:2px 16px 0;background:#07141d;border:1px solid #103042;border-radius:6px;overflow:hidden;}
+.srp-timer{height:100%;width:100%;border-radius:6px;background:#42d16a;transition:background .3s;}
+.srp-body{padding:14px 16px;min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;}
+.srp-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:10px 16px;border-top:1px solid #12455a;}
+.srp-msg{flex:1;font-size:12px;color:#9fc0cc;}
+.srp-x{cursor:pointer;font-family:inherit;font-weight:700;font-size:12px;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:8px;padding:5px 12px;}
+.srp-x:hover{border-color:#e0454d;color:#e0454d;}
+/* shared puzzle bits */
+.srp-btn{cursor:pointer;font-family:inherit;font-weight:700;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:8px;padding:7px 12px;}
+.srp-btn:hover:not([disabled]){border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 8px rgba(56,225,196,.3);}
+.srp-btn[disabled]{opacity:.4;cursor:not-allowed;}
+.srp-row{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;}
+.srp-canvas{border:1px solid #163b4e;border-radius:10px;background:#07141d;touch-action:none;}
+/* flow (pipes) */
+.srp-grid{display:grid;gap:4px;}
+.srp-tile{width:52px;height:52px;background:#0a1c26;border:1px solid #163b4e;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s;position:relative;}
+.srp-tile:hover{border-color:#2b7d99;}
+.srp-tile.lit{border-color:#38e1c4;box-shadow:0 0 10px rgba(56,225,196,.4) inset;}
+.srp-tile.src{border-color:#f2b03d;}
+.srp-tile.core{border-color:#e0454d;}
+.srp-tile svg{width:100%;height:100%;display:block;}
+/* simon coils */
+.srp-coil{width:64px;height:64px;border-radius:14px;background:#0a1c26;border:2px solid #163b4e;cursor:pointer;transition:all .12s;}
+.srp-coil.on{box-shadow:0 0 22px 4px currentColor;transform:scale(1.06);}
+/* phase / lights-out */
+.srp-cell{width:46px;height:46px;border-radius:8px;background:#0a1c26;border:1px solid #163b4e;cursor:pointer;transition:all .12s;}
+.srp-cell.on{background:#0f6f66;border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.5) inset;}
+/* sliders (waveform/valves) */
+.srp-slider{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:#7fa6b4;}
+.srp-slider input[type=range]{writing-mode:vertical-lr;direction:rtl;width:22px;height:120px;accent-color:#38e1c4;}
+.srp-gauge{width:26px;height:120px;border:1px solid #163b4e;border-radius:6px;background:#07141d;position:relative;overflow:hidden;}
+.srp-gauge .fill{position:absolute;left:0;right:0;bottom:0;background:#38e1c4;transition:height .1s,background .1s;}
+.srp-gauge .band{position:absolute;left:0;right:0;background:rgba(66,209,106,.22);border-top:1px solid #42d16a;border-bottom:1px solid #42d16a;}
 `;
     document.head.appendChild(st);
   };
@@ -648,8 +710,10 @@
     const st = state.systems[sys.id];
     const meta = S.STATE_META[st] || S.STATE_META.working;
     const gm = ctx.isGM && sys.installed !== false ? "gm" : "";
+    const hp = state.systemHp?.[sys.id];
+    const hpTxt = (hp && sys.installed !== false) ? `<span class="sc-hp" style="color:${meta.c}">${hp.cur} / ${hp.max}</span>` : "";
     const info = `<div class="sc-info"><div class="sc-name">${esc(sys.label)}</div>` +
-      `<span class="sc-pill" style="color:${meta.c}">${meta.label}</span></div>`;
+      `<span class="sc-pill" style="color:${meta.c}">${meta.label}</span>${hpTxt}</div>`;
     return `<div class="sc-card ${sys.side} st-${st} ${gm}" data-sys="${sys.id}" title="${esc(sys.blurb)}">` +
       iconEl(ctx, sys, st) + info + `</div>`;
   }
@@ -732,11 +796,17 @@
 
     if (!ctx.isGM) return;
 
+    // GM: click a system to set its HP (0–5). HP drives working / damaged / destroyed.
     root.querySelectorAll(".sc-card.gm").forEach((el) => {
       el.onclick = async () => {
         const id = el.dataset.sys;
+        if (!ctx.promptNumber) return;
+        const cur = S.normalize(ctx.getState()).systemHp?.[id]?.cur ?? S.SYSTEM_HP_MAX;
+        const v = await ctx.promptNumber(`${S.SYSTEMS.find((s) => s.id === id)?.label || id} HP`, `0–${S.SYSTEM_HP_MAX}`, cur, S.SYSTEM_HP_MAX);
+        if (v == null || isNaN(v)) return;
         const next = S.normalize(ctx.getState());
-        next.systems[id] = cycle(S.SYSTEM_STATES, next.systems[id]);
+        next.systemHp[id] = { cur: Math.max(0, Math.min(Number(v), S.SYSTEM_HP_MAX)), max: S.SYSTEM_HP_MAX };
+        next.systems[id] = S.systemState(next.systemHp[id]);
         await ctx.setState(next);
       };
     });
@@ -1052,6 +1122,229 @@
   }
   S.openItemBrowser = openItemBrowser;
   S.closeItemBrowser = closeItemBrowser;
+
+  /* ===== Repair puzzle engine + mini-games (environment-agnostic, exposed on S) ===== */
+  const _rnd = (n) => Math.floor(Math.random() * n);
+  const _shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = _rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const SYS_PUZZLE = { reactor: "flow", engine: "simon", shields: "waveform", weapons: "targeting", sensors: "signal", lifesupport: "valves", cloak: "phase", thrusters: "sync" };
+  const PUZZLE_HINT = {
+    flow: "Rotate the conduits to link the amber source to the red core.",
+    simon: "Repeat the fold-coil sequence — it grows by one each round.",
+    waveform: "Match the dashed target wave with the three sliders.",
+    targeting: "Destroy every target before time runs out.",
+    signal: "Move the probe to find the hidden signal, then LOCK while it's HOT.",
+    valves: "Balance the valves so every gauge sits in its green band at once.",
+    phase: "Toggle emitters (each flips itself + its neighbours) until all are lit.",
+    sync: "Lock each thruster bar while its marker is in the green zone."
+  };
+  const PUZZLES = {};
+  let _rpCleanups = [];
+  function closeRepairPuzzle() {
+    _rpCleanups.forEach((fn) => { try { fn(); } catch (e) {} });
+    _rpCleanups = [];
+    const o = document.getElementById("ssv-repair-puzzle"); if (o) o.remove();
+  }
+  S.closeRepairPuzzle = closeRepairPuzzle;
+  S.openRepairPuzzle = function (systemId, opts) {
+    opts = opts || {};
+    closeRepairPuzzle();
+    S.ensureStyles();
+    const sys = S.SYSTEMS.find((s) => s.id === systemId) || { label: systemId };
+    const key = SYS_PUZZLE[systemId] || "flow";
+    const ov = document.createElement("div"); ov.id = "ssv-repair-puzzle"; ov.className = "srp-overlay";
+    ov.innerHTML =
+      `<div class="srp"><div class="srp-head"><span class="srp-title">REPAIRING — ${esc(String(sys.label).toUpperCase())}</span></div>` +
+      `<div class="srp-timerwrap"><div class="srp-timer" data-timer></div></div>` +
+      `<div class="srp-body" data-body></div>` +
+      `<div class="srp-foot"><span class="srp-msg" data-msg>${PUZZLE_HINT[key] || ""}</span><button class="srp-x" data-x>Abort</button></div></div>`;
+    document.body.appendChild(ov);
+    const bodyEl = ov.querySelector("[data-body]"), timerEl = ov.querySelector("[data-timer]"), msgEl = ov.querySelector("[data-msg]");
+    let done = false;
+    const finish = (win) => { if (done) return; done = true; closeRepairPuzzle(); if (win) opts.onSolve && opts.onSolve(); else opts.onFail && opts.onFail(); };
+    const api = {
+      win: () => { if (done) return; msgEl.textContent = "✓ SYSTEM RESTORED"; msgEl.style.color = "#42d16a"; setTimeout(() => finish(true), 450); },
+      fail: () => { if (done) return; msgEl.textContent = "✗ REPAIR FAILED"; msgEl.style.color = "#e0454d"; setTimeout(() => finish(false), 450); },
+      setHint: (t) => { if (!done) msgEl.textContent = t; },
+      addCleanup: (fn) => _rpCleanups.push(fn)
+    };
+    ov.querySelector("[data-x]").onclick = () => finish(false);
+    ov.onclick = (e) => { if (e.target === ov) finish(false); };
+    const total = Math.max(3000, opts.timeMs || 15000);
+    const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const start = now();
+    // setInterval (not rAF) so the countdown keeps running even if the player's tab is backgrounded.
+    const iv = setInterval(() => {
+      if (done) return;
+      const frac = Math.max(0, 1 - (now() - start) / total);
+      timerEl.style.width = (frac * 100) + "%";
+      timerEl.style.background = frac > 0.5 ? "#42d16a" : frac > 0.2 ? "#f2b03d" : "#e0454d";
+      if (frac <= 0) { msgEl.textContent = "✗ OUT OF TIME"; msgEl.style.color = "#e0454d"; finish(false); }
+    }, 100);
+    api.addCleanup(() => clearInterval(iv));
+    (PUZZLES[key] || PUZZLES.flow)(bodyEl, api);
+  };
+
+  // 1) reactor — Power Routing: rotate pipe tiles to connect source → core (flood-fill).
+  PUZZLES.flow = (root, api) => {
+    const N = 5, U = 1, R = 2, D = 4, L = 8;
+    const nb = [{ b: U, dr: -1, dc: 0, opp: D }, { b: R, dr: 0, dc: 1, opp: L }, { b: D, dr: 1, dc: 0, opp: U }, { b: L, dr: 0, dc: -1, opp: R }];
+    const rot = (m) => ((m << 1) & 15) | ((m >> 3) & 1);
+    const ix = (r, c) => r * N + c;
+    const src = { r: _rnd(N), c: 0 }, core = { r: _rnd(N), c: N - 1 };
+    const base = new Array(N * N).fill(0), path = [], seen = new Set();
+    const dfs = (r, c) => {
+      path.push({ r, c }); seen.add(ix(r, c));
+      if (r === core.r && c === core.c) return true;
+      for (const d of _shuffle(nb.slice())) { const nr = r + d.dr, nc = c + d.dc; if (nr < 0 || nr >= N || nc < 0 || nc >= N || seen.has(ix(nr, nc))) continue; if (dfs(nr, nc)) return true; }
+      path.pop(); seen.delete(ix(r, c)); return false;
+    };
+    dfs(src.r, src.c);
+    for (let i = 0; i < path.length; i++) { const cur = path[i]; let m = 0;
+      if (i > 0) for (const d of nb) if (path[i - 1].r === cur.r + d.dr && path[i - 1].c === cur.c + d.dc) m |= d.b;
+      if (i < path.length - 1) for (const d of nb) if (path[i + 1].r === cur.r + d.dr && path[i + 1].c === cur.c + d.dc) m |= d.b;
+      base[ix(cur.r, cur.c)] = m; }
+    const shapes = [U | D, U | R, U | R | D];
+    for (let i = 0; i < N * N; i++) if (!base[i]) base[i] = shapes[_rnd(shapes.length)];
+    const cell = base.map((m) => { let k = 1 + _rnd(3), mm = m; while (k--) mm = rot(mm); return mm; });
+    const grid = document.createElement("div"); grid.className = "srp-grid"; grid.style.gridTemplateColumns = `repeat(${N},52px)`; root.appendChild(grid);
+    const svg = (m, lit) => { const col = lit ? "#38e1c4" : "#5f7b88"; let p = "";
+      if (m & U) p += `<line x1="26" y1="26" x2="26" y2="0"/>`; if (m & R) p += `<line x1="26" y1="26" x2="52" y2="26"/>`;
+      if (m & D) p += `<line x1="26" y1="26" x2="26" y2="52"/>`; if (m & L) p += `<line x1="26" y1="26" x2="0" y2="26"/>`;
+      return `<svg viewBox="0 0 52 52"><g stroke="${col}" stroke-width="6" stroke-linecap="round">${p}</g><circle cx="26" cy="26" r="4" fill="${col}"/></svg>`; };
+    const powered = () => { const lit = new Array(N * N).fill(false); const q = [ix(src.r, src.c)]; lit[q[0]] = true;
+      while (q.length) { const i = q.pop(), r = (i / N | 0), c = i % N;
+        for (const d of nb) { const nr = r + d.dr, nc = c + d.dc; if (nr < 0 || nr >= N || nc < 0 || nc >= N) continue; const j = ix(nr, nc);
+          if (!lit[j] && (cell[i] & d.b) && (cell[j] & d.opp)) { lit[j] = true; q.push(j); } } }
+      return lit; };
+    const draw = () => { const lit = powered(); grid.innerHTML = "";
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) { const i = ix(r, c);
+        const t = document.createElement("div"); t.className = "srp-tile" + (lit[i] ? " lit" : "");
+        if (r === src.r && c === src.c) t.classList.add("src"); if (r === core.r && c === core.c) t.classList.add("core");
+        t.innerHTML = svg(cell[i], lit[i]); t.onclick = () => { cell[i] = rot(cell[i]); draw(); }; grid.appendChild(t); }
+      if (lit[ix(core.r, core.c)]) api.win(); };
+    draw();
+  };
+
+  // 2) engine — Fold Sequence (Simon): repeat the growing sequence.
+  PUZZLES.simon = (root, api) => {
+    const cols = ["#e0454d", "#42d16a", "#38e1c4", "#f2b03d"];
+    const target = 4 + _rnd(2);
+    const seq = []; let idx = 0, accepting = false;
+    const wrap = document.createElement("div"); wrap.className = "srp-row"; wrap.style.gap = "14px"; root.appendChild(wrap);
+    const coils = cols.map((c) => { const d = document.createElement("div"); d.className = "srp-coil"; d.style.color = c; d.style.borderColor = c; wrap.appendChild(d); return d; });
+    const flash = (i, ms) => new Promise((res) => { const c = coils[i]; c.classList.add("on"); c.style.background = cols[i]; setTimeout(() => { c.classList.remove("on"); c.style.background = "#0a1c26"; setTimeout(res, 120); }, ms || 360); });
+    const play = async () => { accepting = false; api.setHint("Watch the sequence…"); await new Promise((r) => setTimeout(r, 350)); for (const i of seq) await flash(i); accepting = true; idx = 0; api.setHint("Your turn — repeat it."); };
+    const next = async () => { seq.push(_rnd(4)); await play(); };
+    coils.forEach((c, i) => c.onclick = async () => {
+      if (!accepting) return;
+      c.classList.add("on"); c.style.background = cols[i]; setTimeout(() => { c.classList.remove("on"); c.style.background = "#0a1c26"; }, 150);
+      if (i === seq[idx]) { idx++; if (idx >= seq.length) { if (seq.length >= target) api.win(); else { accepting = false; setTimeout(next, 350); } } }
+      else api.fail();
+    });
+    next();
+  };
+
+  // 3) shields — Waveform Match: 3 sliders overlay the target sine.
+  PUZZLES.waveform = (root, api) => {
+    const W = 440, H = 170;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H; cv.className = "srp-canvas"; root.appendChild(cv);
+    const ctx = cv.getContext("2d");
+    const tgt = { amp: 18 + _rnd(48), freq: 1 + _rnd(4), phase: _rnd(100) }, cur = { amp: 40, freq: 3, phase: 50 };
+    const wave = (o, col, dash) => { ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash || []); ctx.beginPath();
+      for (let x = 0; x <= W; x++) { const t = x / W, y = H / 2 - o.amp * Math.sin(2 * Math.PI * o.freq * t + o.phase / 100 * 2 * Math.PI); x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+      ctx.stroke(); ctx.setLineDash([]); };
+    const draw = () => { ctx.clearRect(0, 0, W, H); ctx.strokeStyle = "#12303f"; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+      wave(tgt, "#f2b03d", [6, 5]); wave(cur, "#38e1c4");
+      const pd = Math.abs(cur.phase - tgt.phase), ph = Math.min(pd, 100 - pd);
+      if (Math.abs(cur.amp - tgt.amp) <= 6 && cur.freq === tgt.freq && ph <= 8) api.win(); };
+    const row = document.createElement("div"); row.className = "srp-row"; row.style.cssText = "gap:20px;margin-top:8px"; root.appendChild(row);
+    const mk = (label, min, max, key) => { const w = document.createElement("label"); w.className = "srp-slider"; const inp = document.createElement("input"); inp.type = "range"; inp.min = min; inp.max = max; inp.value = cur[key]; inp.oninput = () => { cur[key] = Number(inp.value); draw(); }; const t = document.createElement("span"); t.textContent = label; w.appendChild(inp); w.appendChild(t); row.appendChild(w); };
+    mk("AMP", 5, 80, "amp"); mk("FREQ", 1, 6, "freq"); mk("PHASE", 0, 99, "phase");
+    draw();
+  };
+
+  // 4) weapons — Targeting: destroy every moving target.
+  PUZZLES.targeting = (root, api) => {
+    const W = 440, H = 210;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H; cv.className = "srp-canvas"; root.appendChild(cv);
+    const ctx = cv.getContext("2d");
+    const total = 5 + _rnd(3), targets = [];
+    for (let i = 0; i < total; i++) targets.push({ x: 24 + _rnd(W - 48), y: 24 + _rnd(H - 48), r: 15, vx: (Math.random() - 0.5) * 1.8, vy: (Math.random() - 0.5) * 1.8, dead: false });
+    let hits = 0; api.setHint(`0 / ${total} destroyed`);
+    cv.onclick = (e) => { const b = cv.getBoundingClientRect(), mx = (e.clientX - b.left) * W / b.width, my = (e.clientY - b.top) * H / b.height;
+      for (const t of targets) { if (t.dead) continue; if ((mx - t.x) ** 2 + (my - t.y) ** 2 <= (t.r + 3) ** 2) { t.dead = true; hits++; api.setHint(`${hits} / ${total} destroyed`); if (hits >= total) api.win(); break; } } };
+    let raf; const loop = () => { ctx.clearRect(0, 0, W, H);
+      for (const t of targets) { if (t.dead) continue; t.x += t.vx; t.y += t.vy; if (t.x < t.r || t.x > W - t.r) t.vx *= -1; if (t.y < t.r || t.y > H - t.r) t.vy *= -1;
+        ctx.strokeStyle = "#e0454d"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, 7); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(t.x - t.r, t.y); ctx.lineTo(t.x + t.r, t.y); ctx.moveTo(t.x, t.y - t.r); ctx.lineTo(t.x, t.y + t.r); ctx.stroke(); }
+      raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop); api.addCleanup(() => cancelAnimationFrame(raf));
+  };
+
+  // 5) sensors — Signal Lock: hot/cold search for a hidden point, then LOCK.
+  PUZZLES.signal = (root, api) => {
+    const W = 440, H = 200, lockR = 28;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H; cv.className = "srp-canvas"; root.appendChild(cv);
+    const ctx = cv.getContext("2d");
+    const tx = 40 + _rnd(W - 80), ty = 40 + _rnd(H - 80); let px = W / 2, py = H / 2;
+    const dist = () => Math.hypot(px - tx, py - ty);
+    const draw = () => { const d = dist(), hot = d < lockR, near = Math.max(0, 1 - d / 320);
+      ctx.clearRect(0, 0, W, H); ctx.fillStyle = `rgba(${Math.round(60 + 190 * near)},${Math.round(120 * (1 - near))},60,0.12)`; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = hot ? "#42d16a" : near > 0.6 ? "#f2b03d" : "#38e1c4"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 9, 0, 7); ctx.stroke(); ctx.globalAlpha = .3; ctx.beginPath(); ctx.arc(px, py, lockR, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+      api.setHint(hot ? "SIGNAL HOT — press LOCK!" : near > 0.6 ? "warmer…" : near > 0.3 ? "cold…" : "very cold…"); };
+    cv.onpointerdown = (e) => { const b = cv.getBoundingClientRect(); px = (e.clientX - b.left) * W / b.width; py = (e.clientY - b.top) * H / b.height; draw(); };
+    const btn = document.createElement("button"); btn.className = "srp-btn"; btn.textContent = "LOCK SIGNAL"; btn.style.marginTop = "8px";
+    btn.onclick = () => { if (dist() < lockR) api.win(); else api.setHint("No lock — reposition the probe."); };
+    root.appendChild(btn); draw();
+  };
+
+  // 6) lifesupport — Valve Balance: cross-coupled sliders, all gauges into the green band.
+  PUZZLES.valves = (root, api) => {
+    const n = 3, s = [50, 50, 50], centers = []; for (let i = 0; i < n; i++) centers.push(30 + _rnd(40));
+    const band = 12, fills = [];
+    const wrap = document.createElement("div"); wrap.className = "srp-row"; wrap.style.cssText = "gap:22px;align-items:flex-end"; root.appendChild(wrap);
+    const gval = (i) => Math.max(0, Math.min(100, s[i] - 0.45 * s[(i + n - 1) % n] + 22.5));
+    for (let i = 0; i < n; i++) {
+      const col = document.createElement("div"); col.style.cssText = "display:flex;flex-direction:row;gap:6px;align-items:flex-end";
+      const inp = document.createElement("input"); inp.type = "range"; inp.min = 0; inp.max = 100; inp.value = s[i]; inp.oninput = () => { s[i] = Number(inp.value); draw(); };
+      inp.style.cssText = "writing-mode:vertical-lr;direction:rtl;width:22px;height:120px;accent-color:#38e1c4";
+      const g = document.createElement("div"); g.className = "srp-gauge"; const bd = document.createElement("div"); bd.className = "band"; bd.style.bottom = (centers[i] - band / 2) + "%"; bd.style.height = band + "%";
+      const fill = document.createElement("div"); fill.className = "fill"; g.appendChild(bd); g.appendChild(fill); fills.push(fill);
+      col.appendChild(inp); col.appendChild(g); wrap.appendChild(col);
+    }
+    const draw = () => { let ok = true; for (let i = 0; i < n; i++) { const v = gval(i); fills[i].style.height = v + "%"; const good = Math.abs(v - centers[i]) <= band / 2; fills[i].style.background = good ? "#42d16a" : "#38e1c4"; if (!good) ok = false; } if (ok) api.win(); };
+    draw();
+  };
+
+  // 7) cloak — Phase Grid (lights-out): flip cells until all lit.
+  PUZZLES.phase = (root, api) => {
+    const M = 3, on = new Array(M * M).fill(true);
+    const toggle = (r, c) => [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]].forEach(([dr, dc]) => { const nr = r + dr, nc = c + dc; if (nr >= 0 && nr < M && nc >= 0 && nc < M) on[nr * M + nc] = !on[nr * M + nc]; });
+    for (let k = 0, p = 3 + _rnd(4); k < p; k++) toggle(_rnd(M), _rnd(M));
+    const grid = document.createElement("div"); grid.className = "srp-grid"; grid.style.gridTemplateColumns = `repeat(${M},46px)`; root.appendChild(grid);
+    const draw = () => { grid.innerHTML = ""; for (let r = 0; r < M; r++) for (let c = 0; c < M; c++) { const cell = document.createElement("div"); cell.className = "srp-cell" + (on[r * M + c] ? " on" : ""); cell.onclick = () => { toggle(r, c); draw(); }; grid.appendChild(cell); } if (on.every((v) => v)) api.win(); };
+    draw();
+  };
+
+  // 8) thrusters — Sync Timing: lock each bar while its marker is in the green zone.
+  PUZZLES.sync = (root, api) => {
+    const n = 3 + _rnd(2), bars = [];
+    const wrap = document.createElement("div"); wrap.style.cssText = "width:100%;display:flex;flex-direction:column;gap:12px"; root.appendChild(wrap);
+    for (let i = 0; i < n; i++) {
+      const gz = 15 + _rnd(52), gw = 18;
+      const el = document.createElement("div"); el.style.cssText = "position:relative;height:26px;border-radius:8px;background:#07141d;border:1px solid #163b4e;cursor:pointer;overflow:hidden";
+      const green = document.createElement("div"); green.style.cssText = `position:absolute;top:0;bottom:0;left:${gz}%;width:${gw}%;background:rgba(66,209,106,.25);border-left:1px solid #42d16a;border-right:1px solid #42d16a`; el.appendChild(green);
+      const marker = document.createElement("div"); marker.style.cssText = "position:absolute;top:2px;bottom:2px;width:6px;border-radius:3px;background:#38e1c4"; el.appendChild(marker);
+      const bar = { el, marker, gz, gw, pos: _rnd(100), dir: Math.random() < .5 ? 1 : -1, speed: 0.6 + Math.random() * 1.2, locked: false };
+      el.onclick = () => { if (bar.locked) return;
+        if (bar.pos >= bar.gz && bar.pos <= bar.gz + bar.gw) { bar.locked = true; marker.style.background = "#42d16a"; el.style.borderColor = "#42d16a"; if (bars.every((b) => b.locked)) api.win(); }
+        else { el.style.borderColor = "#e0454d"; setTimeout(() => { if (!bar.locked) el.style.borderColor = "#163b4e"; }, 200); } };
+      wrap.appendChild(el); bars.push(bar);
+    }
+    let raf; const loop = () => { for (const b of bars) { if (b.locked) continue; b.pos += b.dir * b.speed; if (b.pos <= 0) { b.pos = 0; b.dir = 1; } if (b.pos >= 100) { b.pos = 100; b.dir = -1; } b.marker.style.left = `calc(${b.pos}% - 3px)`; } raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop); api.addCleanup(() => cancelAnimationFrame(raf));
+  };
 
   // Sort items into navigable sections (by dnd5e type + a little name matching).
   const invCollapsedSecs = new Set();   // collapsed inventory section labels (per-client, this session)
@@ -1370,7 +1663,7 @@
     });
   }
 
-  const ctx = () => ({ isGM: game.user.isGM, getState, setState, assetUrl, promptHull });
+  const ctx = () => ({ isGM: game.user.isGM, getState, setState, assetUrl, promptHull, promptNumber });
 
   /* -- Full-screen station console (frameless overlay) ------------------- */
 
@@ -1693,6 +1986,9 @@
     const gmActor = !byUserId || game.users.get(byUserId)?.isGM;
     if (!gmActor && c.controllerUserId !== byUserId) return;
     if (!c.maneuver) return notifyUser(byUserId || game.user.id, "Pick a maneuver first.");
+    const ship = getState();   // Engine/Thrusters must work to move.
+    if (!S.systemWorks(ship, "engine") || !S.systemWorks(ship, "thrusters"))
+      return notifyUser(byUserId || game.user.id, "Can't move — engines or thrusters are down.");
     if (c.mp <= 0 && c.bonus) return notifyUser(byUserId || game.user.id, "No movement left this turn.");
     const moved = await moveShipToken(kind, byUserId);   // abort (don't spend) if there's no ship token
     if (!moved) return;
@@ -1770,7 +2066,7 @@
     if (c.station !== "shields_officer") return notifyUser(who, "Only the Shields Officer can allocate shields.");
     if (!S.FACINGS.includes(facing)) return;
     const ship = getState();
-    if (ship.systems.shields === "destroyed") return notifyUser(who, "The Shield Generator is destroyed.");
+    if (!S.systemWorks(ship, "shields")) return notifyUser(who, "The Shield Generator is down — can't allocate shields.");
     const which = slot === "secondary" ? "bonus" : "action";
     if (!tryConsume(c, which)) return notifyUser(who, `No ${which === "bonus" ? "Bonus" : "Main"} action left.`);
     if (slot === "secondary") ship.shield.secondary = facing;
@@ -1850,6 +2146,11 @@
   }
   async function runStationAction(a, isBonus, crew, stName) {
     if (!crew) return;
+    // Enforcement: broken Weapons → gunners can't fire.
+    if ((crew.station === "gunner_port" || crew.station === "gunner_starboard") && ["attack", "called", "launch"].includes(a.id) && !S.systemWorks(getState(), "weapons")) {
+      ui.notifications?.warn("Weapons are down — the gun can't fire until it's repaired.");
+      return;
+    }
     // Grant Actions: pick a target crew who gains a purple-star extra action.
     if (a.type === "grant") {
       const combat = getCombat();
@@ -1861,6 +2162,8 @@
       else emit({ type: "grantAction", toGM: true, captainCrewId: crew.id, targetCrewId: target, userId: game.user.id });
       return;
     }
+    // Engineer Repair: pick a system → d20+INT → nat20/nat1/puzzle → +2 HP. Manages its own consume.
+    if (a.type === "repair") { await runRepair(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -1868,6 +2171,46 @@
     const which = isBonus ? "bonus" : "action";
     if (game.user.isGM) gmConsume(crew.id, which, null);
     else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id });
+  }
+
+  // Engineer Repair: pick a damaged system → d20+INT → nat 20/1 auto → else timed puzzle → +2 HP.
+  async function runRepair(crew, isBonus) {
+    const st = getState();
+    const repairable = S.SYSTEMS.filter((s) => s.installed !== false)
+      .map((s) => ({ id: s.id, label: s.label, hp: st.systemHp?.[s.id] }))
+      .filter((s) => s.hp && s.hp.cur > 0 && s.hp.cur < s.hp.max);
+    if (!repairable.length) return ui.notifications?.info("No damaged systems to repair (destroyed systems can't be repaired).");
+    const systemId = await chooseDlg("Repair System", "Which system are you repairing?", repairable.map((s) => ({ value: s.id, label: `${s.label} (${s.hp.cur}/${s.hp.max})` })));
+    if (!systemId) return;   // cancelled → no action spent
+    const sysLabel = S.SYSTEMS.find((s) => s.id === systemId)?.label || systemId;
+    const consume = () => { const which = isBonus ? "bonus" : "action"; if (game.user.isGM) gmConsume(crew.id, which, null); else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id }); };
+    const doRepair = () => { if (game.user.isGM) gmRepairSystem(systemId, null); else emit({ type: "repairSystem", toGM: true, systemId, userId: game.user.id }); };
+    const actor = game.user.character;
+    const intMod = Number(actor?.system?.abilities?.int?.mod) || 0;
+    const roll = await (new Roll(`1d20 + ${intMod}`)).evaluate();
+    const die = roll.dice?.[0]?.results?.[0]?.result ?? (roll.total - intMod);
+    const total = roll.total;
+    const announce = async (win) => {
+      const color = win ? "#42d16a" : "#e0454d", label = win ? "REPAIRED +2 HP" : "REPAIR FAILED";
+      await ChatMessage.create({ content: `<b>Engineer</b> · ${esc(crew.name)} — Repair <b>${esc(sysLabel)}</b>: d20+INT = <b>${total}</b> (die ${die}) — <b style="color:${color}">${label}</b>`, speaker: { alias: "SSV Silver Gull" }, rolls: [roll] });
+    };
+    consume();   // attempting the repair spends the Main action
+    if (die === 20) { doRepair(); return announce(true); }
+    if (die === 1) { return announce(false); }
+    const timeMs = Math.round(Math.max(10, Math.min(35, 8 + total)) * 1000);   // roll total → puzzle time
+    S.openRepairPuzzle(systemId, {
+      timeMs,
+      onSolve: () => { doRepair(); announce(true); },
+      onFail: () => { announce(false); }
+    });
+  }
+  async function gmRepairSystem(systemId, byUserId) {
+    if (!game.user.isGM) return;
+    const st = getState(); const hp = st.systemHp?.[systemId]; if (!hp) return;
+    if (hp.cur <= 0) return notifyUser(byUserId || game.user.id, "That system is destroyed and can't be repaired.");
+    hp.cur = Math.min(hp.max, hp.cur + 2);
+    st.systems[systemId] = S.systemState(hp);
+    await setState(st);
   }
 
   /* -- Ship combat: setting, socket, dialogs, handlers ------------------- */
@@ -1926,6 +2269,7 @@
       case "grantAction":    gmGrant(msg.captainCrewId, msg.targetCrewId, msg.userId); break;
       case "pilotManeuver":  gmPilotManeuver(msg.crewId, msg.maneuver, msg.userId); break;
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
+      case "repairSystem":   gmRepairSystem(msg.systemId, msg.userId); break;
       case "moveItem":       gmMoveItem(msg.fromShip, msg.itemId, msg.qty, msg.userId); break;
       case "useResource":    gmUseResource(msg.itemId, msg.userId); break;
       case "convert":        gmConvert(msg.userId, msg.fuelAmt); break;
