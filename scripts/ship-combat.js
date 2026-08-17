@@ -460,11 +460,12 @@
 .sgcon .invship .sc-hull{margin:0;max-width:100%;}
 .sgcon .inv-wrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0;}
 .sgcon .inv-gauges{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;}
-.sgcon .inv-gauges .con-btn{flex:1;min-width:170px;align-self:stretch;display:flex;align-items:center;justify-content:center;
+.sgcon .inv-gauges > *{min-height:74px;}
+.sgcon .inv-gauges .con-btn{flex:0 1 210px;min-width:150px;align-self:stretch;display:flex;align-items:center;justify-content:center;
   border-radius:12px;background:linear-gradient(180deg,rgba(14,34,48,.65),rgba(8,20,30,.65));}
-/* Sci-fi fuel/power gauges */
-.sgcon .ig{position:relative;flex:1;min-width:180px;border:1px solid #163b4e;border-radius:12px;padding:10px 13px;
-  background:linear-gradient(180deg,rgba(16,38,52,.7),rgba(8,20,30,.7));overflow:hidden;}
+/* Sci-fi fuel/power gauges — wider than the Convert button */
+.sgcon .ig{position:relative;flex:1 1 260px;min-width:200px;border:1px solid #163b4e;border-radius:12px;padding:10px 13px;
+  display:flex;flex-direction:column;justify-content:center;background:linear-gradient(180deg,rgba(16,38,52,.7),rgba(8,20,30,.7));overflow:hidden;}
 .sgcon .ig.gm{cursor:pointer;}
 .sgcon .ig.gm:hover{border-color:#2b7d99;box-shadow:0 0 16px rgba(56,225,196,.2);}
 .sgcon .ig-top{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
@@ -526,8 +527,10 @@
 .sgcon .inv-tile img{width:58px;height:58px;object-fit:contain;border-radius:9px;filter:drop-shadow(0 0 5px rgba(0,0,0,.55));background:rgba(4,10,18,.35);}
 .sgcon .inv-tile .it-name{font-size:11px;line-height:1.2;text-align:center;color:#cfeef0;max-height:2.5em;overflow:hidden;}
 .sgcon .inv-tile .it-qty{position:absolute;top:5px;right:7px;font-size:11px;font-weight:700;color:#04121c;background:#38e1c4;border-radius:9px;padding:0 6px;box-shadow:0 0 8px rgba(56,225,196,.5);}
-.sgcon .inv-tile .it-acts{position:absolute;left:0;right:0;bottom:0;display:flex;gap:5px;justify-content:center;padding:6px;
-  background:rgba(4,10,18,.9);border-top:1px solid #12455a;border-radius:0 0 12px 12px;opacity:0;transform:translateY(8px);transition:opacity .12s,transform .12s;pointer-events:none;}
+.sgcon .inv-tile .it-acts{position:absolute;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:4px;justify-content:center;padding:6px;
+  background:rgba(4,10,18,.92);border-top:1px solid #12455a;border-radius:0 0 12px 12px;opacity:0;transform:translateY(8px);transition:opacity .12s,transform .12s;pointer-events:none;}
+.sgcon .inv-tile .it-acts .con-mini{padding:3px 6px;}
+.sgcon .con-mini.danger:hover{border-color:#e0454d;color:#e0454d;}
 .sgcon .inv-tile:hover .it-acts{opacity:1;transform:none;pointer-events:auto;}
 .sgcon .inv-empty{grid-column:1/-1;color:#6f97a6;font-size:12px;letter-spacing:1px;text-align:center;padding:28px 10px;}
 /* Item hover popup (details) — pointer-events:none so tile buttons still work */
@@ -998,11 +1001,15 @@
         `<span class="ig-val">${g.cur}<small> / ${g.max}</small></span></div>` +
         `<div class="ig-track"><div class="ig-fill" style="width:${pct}%"></div></div></div>`;
     };
+    const gmEdit = kctx.isGM
+      ? `<button class="con-mini" data-qty title="Set quantity">✏</button>` +
+        `<button class="con-mini danger" data-del title="Delete from ship">🗑</button>`
+      : "";
     const tile = (it, isShip) => {
       const acts = isShip
         ? `<button class="con-mini" data-use="fuel" title="Use as fuel (+${t.fuelPerItem})">⛽</button>` +
           `<button class="con-mini" data-use="power" title="Use as power (+${t.powerPerItem})">⚡</button>` +
-          `<button class="con-mini" data-move title="Move to your inventory">→</button>`
+          `<button class="con-mini" data-move title="Move to your inventory">→</button>` + gmEdit
         : `<button class="con-mini" data-move title="Move to the ship">→ Ship</button>`;
       return `<div class="inv-tile" data-id="${it.id}" data-name="${esc(it.name)}">` +
         (it.qty > 1 ? `<span class="it-qty">×${it.qty}</span>` : "") +
@@ -1061,6 +1068,8 @@
       tl.onmouseleave = hideInvPop;
       const mv = tl.querySelector("[data-move]"); if (mv) mv.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.moveItem(fromShip, id); };
       tl.querySelectorAll("[data-use]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); hideInvPop(); (b.dataset.use === "fuel" ? kctx.useFuel(id) : kctx.usePower(id)); }; });
+      const qtyB = tl.querySelector("[data-qty]"); if (qtyB) qtyB.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.editQty(id); };
+      const delB = tl.querySelector("[data-del]"); if (delB) delB.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.deleteItem(id); };
     });
 
     // GM drag-drop: drop any Foundry Item onto the SHIP grid to add it.
@@ -1297,6 +1306,8 @@
       animateSwap: (() => { const a = swapAnim; swapAnim = false; return a; })(),
       addItem: () => gmAddItemBrowser(),
       dropItemData: (raw) => gmAddDroppedItem(raw),
+      editQty: (id) => gmSetItemQty(id),
+      deleteItem: (id) => gmDeleteItem(id),
       getState,
       shipItems: physicalItems(getShipActor()),
       playerItems: physicalItems(game.user.character),
@@ -1360,6 +1371,24 @@
     else { const data = item.toObject(); if (data.system) data.system.quantity = move; delete data._id; await dst.createEmbeddedDocuments("Item", [data]); }
     if (have - move > 0) await item.update({ "system.quantity": have - move });
     else await item.delete();
+    refreshOpen();
+  }
+  async function gmSetItemQty(itemId) {
+    if (!game.user.isGM) return;
+    const ship = getShipActor(); const item = ship?.items?.get(itemId); if (!item) return;
+    const cur = item.system?.quantity ?? 1;
+    const n = await promptNumber(`Quantity — ${item.name}`, "Set to (0 deletes)", cur, null);
+    if (n == null) return;
+    if (n <= 0) await item.delete();
+    else await item.update({ "system.quantity": Math.max(1, Math.floor(n)) });
+    refreshOpen();
+  }
+  async function gmDeleteItem(itemId) {
+    if (!game.user.isGM) return;
+    const ship = getShipActor(); const item = ship?.items?.get(itemId); if (!item) return;
+    const ok = await confirmDlg("Delete item", `Delete <b>${esc(item.name)}</b> from the ship?`);
+    if (!ok) return;
+    await item.delete();
     refreshOpen();
   }
   async function gmUseResource(kind, itemId, byUserId) {
