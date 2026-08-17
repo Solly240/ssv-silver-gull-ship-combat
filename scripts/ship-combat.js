@@ -158,12 +158,9 @@
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
   // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk). Chosen as the Main action.
   S.MANEUVERS = { evasive: { label: "Evasive", mp: 6 }, steady: { label: "Steady", mp: 4 }, aggressive: { label: "Aggressive", mp: 3 } };
-  // Every named d20 roll a crew can be proficient in (scanned from the station table).
-  S.rollActions = () => {
-    const out = [];
-    for (const st of Object.values(S.STATION_ACTIONS)) for (const a of [...(st.main || []), ...(st.bonus || [])]) if (a.type === "roll") out.push({ id: a.id, name: a.name, ability: a.ability });
-    return out;
-  };
+  // Roles a crew can be proficient in — the active bridge stations (each makes rolls), EXCEPT Boarding.
+  // A crew proficient in a role adds their character's proficiency bonus to that station's rolls.
+  S.profRoles = () => S.STATIONS.filter((st) => st.defaultUnlocked && st.id !== "boarding").map((st) => ({ id: st.id, name: st.name }));
 
   // The crew — a persistent roster of characters, each normally played by one user.
   // Combat participants are drawn from this roster; the GM can reassign who controls
@@ -809,9 +806,9 @@
     const mv = (k, t, lbl) => `<button class="pm-btn pm-mv"${dis} data-move="${k}" title="${t}">${lbl}</button>`;
     return `<div class="ct-move" data-crew="${c.id}"><span class="pm-h">${esc(man)}</span>` +
       `<span class="pm-mp${onBonus ? " bonus" : ""}" title="Movement Points left${onBonus ? " (bonus action)" : ""}">${remaining} MP${onBonus ? " ⚡" : ""}</span>` +
+      mv("rotL90", "Rotate 90° left (1 MP)", "⟲90") + mv("rotL45", "Rotate 45° left (1 MP)", "⟲45") +
       mv("forward", "Move forward 1 space (1 MP)", "↑ Fwd") +
-      mv("rotL45", "Rotate 45° left (1 MP)", "⟲45") + mv("rotR45", "Rotate 45° right (1 MP)", "⟳45") +
-      mv("rotL90", "Rotate 90° left (1 MP)", "⟲90") + mv("rotR90", "Rotate 90° right (1 MP)", "⟳90") +
+      mv("rotR45", "Rotate 45° right (1 MP)", "⟳45") + mv("rotR90", "Rotate 90° right (1 MP)", "⟳90") +
       `</div>`;
   }
   // Wire the pilot panels (maneuver + move buttons) — shared by GM and player views.
@@ -1733,18 +1730,19 @@
     }
     await saveCombat(next);
   }
-  // GM editor: a crew × named-roll checkbox grid → per-crew proficiency map.
+  // GM editor: per crew, tick the station rolls they're proficient in (all stations except Boarding).
   async function gmProficiencyDialog() {
     if (!game.user.isGM) return;
     const crew = Object.values(getCombat().crew);
-    const rolls = S.rollActions();
+    const roles = S.profRoles();
     if (!crew.length) return ui.notifications?.warn("No crew in this fight yet.");
-    if (!rolls.length) return ui.notifications?.warn("No roll-type station actions to be proficient in.");
-    const head = `<tr><th style="text-align:left;padding:4px 8px">Crew</th>${rolls.map((r) => `<th style="padding:4px 8px">${esc(r.name)}${r.ability ? ` (${r.ability.toUpperCase()})` : ""}</th>`).join("")}</tr>`;
-    const rows = crew.map((c) => `<tr><td style="padding:4px 8px;white-space:nowrap">${esc(c.name)}</td>` +
-      rolls.map((r) => `<td style="text-align:center;padding:4px 8px"><input type="checkbox" name="p-${c.id}-${r.id}" ${c.prof?.[r.id] ? "checked" : ""}></td>`).join("") + `</tr>`).join("");
-    const content = `<div style="max-height:60vh;overflow:auto"><table style="border-collapse:collapse;width:100%">${head}${rows}</table></div>`;
-    const read = (form) => { const map = {}; for (const c of crew) { map[c.id] = {}; for (const r of rolls) map[c.id][r.id] = !!form.elements[`p-${c.id}-${r.id}`]?.checked; } return map; };
+    const rows = crew.map((c) => {
+      const boxes = roles.map((r) => `<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;white-space:nowrap;">` +
+        `<input type="checkbox" name="p-${c.id}-${r.id}" ${c.prof?.[r.id] ? "checked" : ""}> ${esc(r.name)}</label>`).join("");
+      return `<div style="padding:8px 2px;border-bottom:1px solid #12455a;"><div style="font-weight:700;margin-bottom:4px;">${esc(c.name)}</div><div>${boxes}</div></div>`;
+    }).join("");
+    const content = `<div style="max-height:60vh;overflow:auto;min-width:360px;"><p style="opacity:.75;margin:0 0 6px;">Tick each roll a crew member is proficient in — adds their character's proficiency bonus.</p>${rows}</div>`;
+    const read = (form) => { const map = {}; for (const c of crew) { map[c.id] = {}; for (const r of roles) map[c.id][r.id] = !!form.elements[`p-${c.id}-${r.id}`]?.checked; } return map; };
     const d = D2();
     const result = d
       ? await d.prompt({ window: { title: "Crew proficiencies" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
@@ -1814,8 +1812,8 @@
     const actor = game.user.character;
     const mod = actor?.system?.abilities?.[abil]?.mod;
     const hasMod = Number.isFinite(mod);
-    // Proficiency: if the GM marked this crew proficient in this roll, add their character's prof bonus.
-    const profOn = !!crew?.prof?.[a.id];
+    // Proficiency: if the GM marked this crew proficient in their station's rolls, add their prof bonus.
+    const profOn = !!crew?.prof?.[crew?.station];
     const rawProf = actor?.system?.attributes?.prof;
     const prof = (profOn && Number.isFinite(rawProf)) ? rawProf : 0;
     const bonusExpr = `${mod}${prof ? ` + ${prof}` : ""}`;
