@@ -296,6 +296,8 @@
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  const stripHtml = (h) => String(h ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  const DEFAULT_ITEM_IMG = "icons/svg/item-bag.svg";
 
   // Which ship image to show. Variants: intact | damaged | cloaked (no "destroyed" art).
   // "auto" derives from hull + system health. "cloaked" is only shown when set explicitly
@@ -446,6 +448,53 @@
 .sgcon .con-item .ci-btns{display:inline-flex;gap:5px;flex:none;}
 .sgcon .con-mini{cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;color:#cfeef0;background:#0a1c26;border:1px solid #1d6a86;border-radius:6px;padding:3px 7px;white-space:nowrap;}
 .sgcon .con-mini:hover{border-color:#38e1c4;color:#38e1c4;}
+/* ---- Game-style inventory (inv-mode): narrow ship on the left, big item grid on the right ---- */
+.sgcon.inv-mode .con-left{flex:0 0 30%;display:flex;flex-direction:column;overflow:hidden;}
+.sgcon.inv-mode .con-left > div{flex:1;min-height:0;}
+.sgcon.inv-mode .con-right{flex:1 1 auto;padding:16px 18px 20px;}
+.sgcon .invship{display:flex;flex-direction:column;height:100%;gap:8px;padding:6px 4px;background:transparent;}
+.sgcon .invship .sc-mtitle{font-size:13px;font-weight:700;letter-spacing:2px;color:#38e1c4;text-align:center;text-shadow:0 0 10px rgba(56,225,196,.4);}
+.sgcon .invship .miniwrap{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;}
+.sgcon .invship .sc-shipwrap{position:relative;height:100%;max-height:100%;aspect-ratio:1218/1620;}
+.sgcon.gm .invship .sc-shipwrap,.sgcon .invship.gm .sc-shipwrap{cursor:crosshair;}
+.sgcon .invship .sc-hull{margin:0;max-width:100%;}
+.sgcon .inv-wrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0;}
+.sgcon .inv-gauges{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;}
+.sgcon .inv-gauges .con-gauge{flex:1;min-width:150px;}
+.sgcon .inv-gauges .con-btn{flex:1;min-width:170px;align-self:stretch;display:flex;align-items:center;justify-content:center;}
+.sgcon .inv-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.sgcon .inv-tabs{display:flex;gap:6px;}
+.sgcon .inv-tab{cursor:pointer;font-family:inherit;font-weight:700;font-size:12px;letter-spacing:1px;color:#7fa6b4;background:#0a1c26;border:1px solid #12455a;border-radius:9px;padding:7px 14px;}
+.sgcon .inv-tab:hover{border-color:#1d6a86;color:#cfeef0;}
+.sgcon .inv-tab.active{color:#38e1c4;border-color:#38e1c4;box-shadow:0 0 10px rgba(56,225,196,.28);}
+.sgcon .inv-search{flex:1;min-width:150px;display:flex;align-items:center;gap:8px;background:#0a1c26;border:1px solid #1d6a86;border-radius:9px;padding:7px 12px;}
+.sgcon .inv-search input{flex:1;background:transparent;border:none;outline:none;color:#cfeef0;font-family:inherit;font-size:13px;}
+.sgcon .inv-grid{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;align-content:start;padding:6px 2px;border-radius:10px;}
+.sgcon .inv-grid.inv-drop{outline:2px dashed #38e1c4;outline-offset:-6px;background:rgba(56,225,196,.05);}
+.sgcon .inv-tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 8px 10px;border:1px solid #1d6a86;border-radius:13px;
+  background:linear-gradient(180deg,rgba(22,48,64,.65),rgba(9,22,32,.65));cursor:pointer;transition:border-color .12s,box-shadow .12s,transform .12s;}
+.sgcon .inv-tile:hover{border-color:#38e1c4;box-shadow:0 0 16px rgba(56,225,196,.35);transform:translateY(-2px);}
+.sgcon .inv-tile img{width:58px;height:58px;object-fit:contain;border-radius:9px;filter:drop-shadow(0 0 5px rgba(0,0,0,.55));background:rgba(4,10,18,.35);}
+.sgcon .inv-tile .it-name{font-size:11px;line-height:1.2;text-align:center;color:#cfeef0;max-height:2.5em;overflow:hidden;}
+.sgcon .inv-tile .it-qty{position:absolute;top:5px;right:7px;font-size:11px;font-weight:700;color:#04121c;background:#38e1c4;border-radius:9px;padding:0 6px;box-shadow:0 0 8px rgba(56,225,196,.5);}
+.sgcon .inv-tile .it-acts{position:absolute;left:0;right:0;bottom:0;display:flex;gap:5px;justify-content:center;padding:6px;
+  background:rgba(4,10,18,.9);border-top:1px solid #12455a;border-radius:0 0 12px 12px;opacity:0;transform:translateY(8px);transition:opacity .12s,transform .12s;pointer-events:none;}
+.sgcon .inv-tile:hover .it-acts{opacity:1;transform:none;pointer-events:auto;}
+.sgcon .inv-empty{grid-column:1/-1;color:#6f97a6;font-size:12px;letter-spacing:1px;text-align:center;padding:28px 10px;}
+/* Item hover popup (details) — pointer-events:none so tile buttons still work */
+.sgcon-invpop{position:fixed;z-index:90;width:240px;pointer-events:none;font-family:'Courier New',monospace;
+  background:linear-gradient(180deg,#0d2334,#081521);border:1px solid #1d6a86;border-radius:13px;box-shadow:0 16px 46px rgba(0,0,0,.65);padding:13px;opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s;}
+.sgcon-invpop.show{opacity:1;transform:none;}
+.sgcon-invpop img{width:66px;height:66px;object-fit:contain;float:left;margin:0 11px 6px 0;border-radius:9px;background:rgba(4,10,18,.4);}
+.sgcon-invpop .ip-name{font-size:14px;font-weight:700;color:#38e1c4;line-height:1.2;}
+.sgcon-invpop .ip-type{font-size:11px;color:#7fa6b4;text-transform:capitalize;margin:2px 0 7px;}
+.sgcon-invpop .ip-meta{font-size:11px;color:#9fc0cc;margin-bottom:7px;}
+.sgcon-invpop .ip-desc{clear:both;font-size:12px;line-height:1.45;color:#bcd7df;max-height:150px;overflow:hidden;}
+/* Mode-swap transition (stations ↔ inventory ↔ GM) */
+@keyframes sgcon-swap{from{opacity:0;transform:translateX(26px);}to{opacity:1;transform:none;}}
+@keyframes sgcon-fade{from{opacity:.25;}to{opacity:1;}}
+.sgcon.do-swap .con-right{animation:sgcon-swap .3s cubic-bezier(.2,.75,.25,1) both;}
+.sgcon.do-swap .con-left{animation:sgcon-fade .32s ease both;}
 .sgcon .con-crew{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #12455a;border-radius:9px;padding:8px 12px;background:rgba(14,34,48,.5);}
 .sgcon .con-cname{font-size:15px;font-weight:700;}
 .sgcon .con-toks{display:inline-flex;align-items:center;gap:8px;}
@@ -770,45 +819,157 @@
   /*  }                                                                       */
   /* ---------------------------------------------------------------------- */
 
-  // Ship inventory panel (right column, when kctx.invMode). Reads gauges from kctx.getState()
-  // and item lists from kctx.shipItems / kctx.playerItems; all mutations go through kctx intents.
+  // Simplified ship for inventory mode: ship + shields + a small HP bar (no system cards).
+  function renderMiniShip(leftEl, kctx) {
+    const ctx = kctx.overviewCtx;
+    const state = S.normalize(ctx.getState());
+    const shipFile = ctx.assetUrl(`assets/ship/ship-${S.shipVariant(state)}.png`);
+    const hullPct = state.hull.max ? clamp(state.hull.cur / state.hull.max, 0, 1) * 100 : 0;
+    const hullColor = hullPct > 50 ? "var(--teal)" : hullPct > 20 ? "var(--amber)" : "var(--red)";
+    leftEl.innerHTML =
+      `<div class="sgsc invship ${ctx.isGM ? "gm" : ""}">` +
+        `<div class="sc-mtitle">${esc(state.name)}</div>` +
+        `<div class="miniwrap"><div class="sc-shipwrap">` +
+          `<img class="sc-shipimg" src="${shipFile}" alt="" onerror="this.style.display='none'">${shieldEl(ctx, state)}` +
+        `</div></div>` +
+        `<div class="sc-hull ${ctx.isGM ? "gm" : ""}">` +
+          `<div class="row"><span>HULL</span><span class="hp">${state.hull.cur} / ${state.hull.max} HP</span></div>` +
+          `<div class="bar" data-hull="1"><div class="fill" style="width:${hullPct}%;background:${hullColor};box-shadow:0 0 12px ${hullColor}"></div></div>` +
+        `</div>` +
+      `</div>`;
+    if (!ctx.isGM) return;
+    const wrap = leftEl.querySelector(".sc-shipwrap");
+    if (wrap) wrap.onclick = async (ev) => {
+      const side = sideFromPoint(wrap.getBoundingClientRect(), ev.clientX, ev.clientY);
+      const next = S.normalize(ctx.getState());
+      if (next.shield.on && next.shield.facing === side) next.shield.on = false;
+      else { next.shield.on = true; next.shield.facing = side; }
+      await ctx.setState(next);
+    };
+    const hullBar = leftEl.querySelector('[data-hull]');
+    if (hullBar && ctx.promptHull) hullBar.onclick = async () => {
+      const cur = S.normalize(ctx.getState());
+      const v = await ctx.promptHull(cur.hull.cur, cur.hull.max);
+      if (v == null || isNaN(v)) return;
+      const next = S.normalize(ctx.getState());
+      next.hull.cur = clamp(Number(v), 0, next.hull.max);
+      await ctx.setState(next);
+    };
+  }
+
+  // A single shared hover popup element (lives on <body> so it escapes the console's overflow).
+  function invPopEl() {
+    let p = document.getElementById("ssv-inv-pop");
+    if (!p) { p = document.createElement("div"); p.id = "ssv-inv-pop"; p.className = "sgcon-invpop"; document.body.appendChild(p); }
+    return p;
+  }
+  function hideInvPop() { const p = document.getElementById("ssv-inv-pop"); if (p) p.classList.remove("show"); }
+  function showInvPop(it, tileEl) {
+    const p = invPopEl();
+    const meta = [it.qty > 1 ? `Qty ${it.qty}` : "", it.weight ? `${it.weight} lb` : ""].filter(Boolean).join(" · ");
+    p.innerHTML =
+      `<img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.style.display='none'">` +
+      `<div class="ip-name">${esc(it.name)}</div><div class="ip-type">${esc(it.type || "item")}</div>` +
+      (meta ? `<div class="ip-meta">${esc(meta)}</div>` : "") +
+      `<div class="ip-desc">${esc(it.desc || "No description.")}</div>`;
+    p.classList.add("show");
+    const r = tileEl.getBoundingClientRect(), pw = 240, ph = p.offsetHeight || 180, gap = 12;
+    let left = r.right + gap;
+    if (left + pw > window.innerWidth - 8) left = r.left - pw - gap;       // flip to the left if off-screen
+    if (left < 8) left = 8;
+    let top = r.top;
+    if (top + ph > window.innerHeight - 8) top = window.innerHeight - ph - 8;
+    if (top < 8) top = 8;
+    p.style.left = `${left}px`; p.style.top = `${top}px`;
+  }
+
+  // Ship inventory panel (right column, when kctx.invMode) — game-style grid with item pictures,
+  // search, ship/you tabs, hover detail popup, per-tile move/use, GM add-item + drag-drop.
   function renderInventoryPanel(rightEl, kctx) {
     const st = kctx.getState();
-    const t = st.tuning, ship = kctx.shipItems || [], mine = kctx.playerItems || [];
+    const t = st.tuning;
+    const ship = kctx.shipItems || [], mine = kctx.playerItems || [];
+    const tab = kctx.invTab === "you" ? "you" : "ship";
     const gauge = (label, g, cls) => {
       const pct = g.max > 0 ? Math.max(0, Math.min(1, g.cur / g.max)) * 100 : 0;
       return `<div class="con-gauge ${cls}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${kctx.isGM ? "Click to set" : ""}">` +
         `<div class="cg-row"><span>${label}</span><span class="cg-val">${g.cur} / ${g.max}</span></div>` +
         `<div class="cg-bar"><div class="cg-fill" style="width:${pct}%"></div></div></div>`;
     };
-    const qty = (it) => it.qty > 1 ? ` <span class="ci-qty">×${it.qty}</span>` : "";
-    const shipRow = (it) => `<div class="con-item" data-id="${it.id}"><span class="ci-name">${esc(it.name)}${qty(it)}</span>` +
-      `<span class="ci-btns"><button class="con-mini" data-use="fuel" title="Use as fuel (+${t.fuelPerItem})">⛽</button>` +
-      `<button class="con-mini" data-use="power" title="Use as power (+${t.powerPerItem})">⚡</button>` +
-      `<button class="con-mini" data-move title="Move to your inventory">→ Me</button></span></div>`;
-    const myRow = (it) => `<div class="con-item" data-id="${it.id}"><span class="ci-name">${esc(it.name)}${qty(it)}</span>` +
-      `<span class="ci-btns"><button class="con-mini" data-move title="Move to the ship">→ Ship</button></span></div>`;
-    const gmRow = kctx.isGM ? `<div class="con-gmrow"><button class="con-mini" data-act="tune" title="Set fuel/power amounts">Tune</button><button class="con-mini" data-act="actor" title="Pick the ship actor">Ship actor</button></div>` : "";
+    const tile = (it, isShip) => {
+      const acts = isShip
+        ? `<button class="con-mini" data-use="fuel" title="Use as fuel (+${t.fuelPerItem})">⛽</button>` +
+          `<button class="con-mini" data-use="power" title="Use as power (+${t.powerPerItem})">⚡</button>` +
+          `<button class="con-mini" data-move title="Move to your inventory">→</button>`
+        : `<button class="con-mini" data-move title="Move to the ship">→ Ship</button>`;
+      return `<div class="inv-tile" data-id="${it.id}" data-name="${esc(it.name)}">` +
+        (it.qty > 1 ? `<span class="it-qty">×${it.qty}</span>` : "") +
+        `<img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.src='${DEFAULT_ITEM_IMG}'">` +
+        `<span class="it-name">${esc(it.name)}</span>` +
+        `<span class="it-acts">${acts}</span></div>`;
+    };
+    const list = tab === "ship" ? ship : mine;
+    const gridInner = (tab === "you" && !kctx.hasPlayerActor)
+      ? `<div class="inv-empty">No character is assigned to you.</div>`
+      : (list.length ? list.map((it) => tile(it, tab === "ship")).join("") : `<div class="inv-empty">— empty —</div>`);
+    const gmBtns = kctx.isGM
+      ? `<button class="con-inv" data-act="additem" title="Add any item to the ship">＋ Add item</button>` +
+        `<button class="con-inv" data-act="tune" title="Set fuel/power amounts">Tune</button>` +
+        `<button class="con-inv" data-act="actor" title="Pick the ship actor">Ship actor</button>`
+      : "";
     rightEl.innerHTML =
-      `<div class="con-head"><span class="con-title">SHIP INVENTORY</span><button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
-      `<div class="con-sec">${gauge("FUEL", st.fuel, "fuel")}${gauge("POWER", st.power, "power")}` +
-      `<button class="con-btn" data-act="convert">Convert ${t.convertFuel} fuel → ${t.convertPower} power ⚡</button>${gmRow}</div>` +
-      `<div class="con-sec"><div class="con-h">SHIP CARGO</div><div class="con-items">${ship.length ? ship.map(shipRow).join("") : `<span class="con-empty">— empty —</span>`}</div></div>` +
-      `<div class="con-sec"><div class="con-h">YOUR ITEMS</div><div class="con-items">${kctx.hasPlayerActor ? (mine.length ? mine.map(myRow).join("") : `<span class="con-empty">— empty —</span>`) : `<span class="con-empty">No character is assigned to you.</span>`}</div></div>`;
-    rightEl.querySelector(".con-x").onclick = () => kctx.close();
-    rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleInv();
+      `<div class="inv-wrap">` +
+        `<div class="con-head"><span class="con-title">SHIP INVENTORY</span>` +
+          `<button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button>` +
+          `<button class="con-x" title="Close (Esc)">✕</button></div>` +
+        `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel")}${gauge("POWER", st.power, "power")}` +
+          `<button class="con-btn" data-act="convert">Convert ${t.convertFuel}⛽ → ${t.convertPower}⚡</button></div>` +
+        `<div class="inv-top">` +
+          `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
+          `<button class="inv-tab${tab === "you" ? " active" : ""}" data-tab="you">YOUR ITEMS</button></div>` +
+          `<div class="inv-search"><span>🔎</span><input type="text" placeholder="Search inventory…" data-search="1"></div>${gmBtns}</div>` +
+        `<div class="inv-grid${tab === "ship" ? " drop-ok" : ""}" data-tab="${tab}">${gridInner}</div>` +
+      `</div>`;
+
+    rightEl.querySelector(".con-x").onclick = () => { hideInvPop(); kctx.close(); };
+    rightEl.querySelector('[data-act="stations"]').onclick = () => { hideInvPop(); kctx.toggleInv(); };
     rightEl.querySelector('[data-act="convert"]').onclick = () => kctx.convert();
-    const tune = rightEl.querySelector('[data-act="tune"]'); if (tune) tune.onclick = () => kctx.tune();
-    const actor = rightEl.querySelector('[data-act="actor"]'); if (actor) actor.onclick = () => kctx.setActor();
+    const tuneB = rightEl.querySelector('[data-act="tune"]'); if (tuneB) tuneB.onclick = () => kctx.tune();
+    const actorB = rightEl.querySelector('[data-act="actor"]'); if (actorB) actorB.onclick = () => kctx.setActor();
+    const addB = rightEl.querySelector('[data-act="additem"]'); if (addB) addB.onclick = () => kctx.addItem();
     if (kctx.isGM) rightEl.querySelectorAll(".con-gauge.gm").forEach((g) => { g.onclick = () => (g.dataset.edit === "fuel" ? kctx.editFuel() : kctx.editPower()); });
-    rightEl.querySelectorAll(".con-sec .con-items").forEach((list, idx) => {
-      const fromShip = idx === 0;   // list 0 = ship cargo, list 1 = your items
-      list.querySelectorAll(".con-item").forEach((row) => {
-        const id = row.dataset.id;
-        const mv = row.querySelector("[data-move]"); if (mv) mv.onclick = () => kctx.moveItem(fromShip, id);
-        row.querySelectorAll("[data-use]").forEach((b) => { b.onclick = () => (b.dataset.use === "fuel" ? kctx.useFuel(id) : kctx.usePower(id)); });
+    rightEl.querySelectorAll(".inv-tab").forEach((b) => { b.onclick = () => { hideInvPop(); kctx.setInvTab(b.dataset.tab); }; });
+
+    // Search: filter tiles in-place (no re-render → keeps input focus).
+    const search = rightEl.querySelector("[data-search]");
+    const grid = rightEl.querySelector(".inv-grid");
+    if (search && grid) search.oninput = () => {
+      const q = search.value.trim().toLowerCase();
+      grid.querySelectorAll(".inv-tile").forEach((tl) => {
+        tl.style.display = (!q || (tl.dataset.name || "").toLowerCase().includes(q)) ? "" : "none";
       });
+    };
+
+    // Tiles: hover popup + per-tile actions.
+    const byId = Object.fromEntries(list.map((it) => [it.id, it]));
+    const fromShip = tab === "ship";
+    rightEl.querySelectorAll(".inv-tile").forEach((tl) => {
+      const id = tl.dataset.id, it = byId[id];
+      tl.onmouseenter = () => it && showInvPop(it, tl);
+      tl.onmouseleave = hideInvPop;
+      const mv = tl.querySelector("[data-move]"); if (mv) mv.onclick = (e) => { e.stopPropagation(); hideInvPop(); kctx.moveItem(fromShip, id); };
+      tl.querySelectorAll("[data-use]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); hideInvPop(); (b.dataset.use === "fuel" ? kctx.useFuel(id) : kctx.usePower(id)); }; });
     });
+
+    // GM drag-drop: drop any Foundry Item onto the SHIP grid to add it.
+    if (kctx.isGM && fromShip && grid && kctx.dropItemData) {
+      grid.ondragover = (e) => { e.preventDefault(); grid.classList.add("inv-drop"); };
+      grid.ondragleave = () => grid.classList.remove("inv-drop");
+      grid.ondrop = (e) => {
+        e.preventDefault(); grid.classList.remove("inv-drop");
+        const raw = e.dataTransfer?.getData("text/plain"); if (raw) kctx.dropItemData(raw);
+      };
+    }
   }
 
   // GM Actions panel: a list of direct, GM-only controls (no crew action economy). Extensible.
@@ -833,25 +994,28 @@
 
   S.renderConsole = function (root, kctx) {
     S.ensureStyles();
-    root.className = "sgcon";
+    root.className = "sgcon" + (kctx.invMode ? " inv-mode" : "") + (kctx.animateSwap ? " do-swap" : "");
     root.innerHTML = `<div class="con-left"></div><div class="con-right"></div>`;
     const leftEl = root.querySelector(".con-left");
     const rightEl = root.querySelector(".con-right");
 
-    // Left column = the existing overview.
+    // Left column: inventory mode → a slimmed ship (no system cards); otherwise the full overview.
     const leftInner = document.createElement("div");
     leftEl.appendChild(leftInner);
-    S.render(leftInner, kctx.overviewCtx);
-
-    // Shield-allocation circles overlaid on the ship when armed.
-    if (kctx.armed) {
-      const wrap = leftInner.querySelector(".sc-shipwrap");
-      if (wrap) for (const f of S.FACINGS) {
-        const c = document.createElement("div");
-        c.className = `con-circle pos-${f}${kctx.armed === "secondary" ? " secondary" : ""}`;
-        c.title = `Allocate to ${S.FACING_LABEL[f]}`;
-        c.onclick = () => kctx.allocate(f, kctx.armed);
-        wrap.appendChild(c);
+    if (kctx.invMode) {
+      renderMiniShip(leftInner, kctx);
+    } else {
+      S.render(leftInner, kctx.overviewCtx);
+      // Shield-allocation circles overlaid on the ship when armed.
+      if (kctx.armed) {
+        const wrap = leftInner.querySelector(".sc-shipwrap");
+        if (wrap) for (const f of S.FACINGS) {
+          const c = document.createElement("div");
+          c.className = `con-circle pos-${f}${kctx.armed === "secondary" ? " secondary" : ""}`;
+          c.title = `Allocate to ${S.FACING_LABEL[f]}`;
+          c.onclick = () => kctx.allocate(f, kctx.armed);
+          wrap.appendChild(c);
+        }
       }
     }
 
@@ -976,6 +1140,8 @@
   let gmDriveCrewId = null;    // which crew the GM is driving in the console
   let invMode = false;         // console showing the inventory panel instead of the station panel
   let gmActMode = false;       // console showing the GM Actions panel (GM-only, direct state control)
+  let invTab = "ship";         // inventory active tab: 'ship' | 'you'
+  let swapAnim = false;        // one-shot: play the mode-swap animation on the next render
 
   const consoleOpen = () => _console && _console.style.display !== "none" && document.body.contains(_console);
   function renderConsole() {
@@ -984,7 +1150,7 @@
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
     renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; invMode = false; gmActMode = false; if (_console) _console.style.display = "none"; renderBar(); }
+  function closeConsole() { armed = null; invMode = false; gmActMode = false; hideInvPop(); if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -1020,11 +1186,15 @@
       },
       runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
       // GM Actions panel (GM-only, direct control + chat, no action economy)
-      gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; renderConsole(); },
+      gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
       gmMainShield: (f) => gmSetMainShieldDirect(f),
       gmSecondaryShield: (f) => gmSetSecondaryDirect(f),
       // Inventory
-      invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; renderConsole(); },
+      invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
+      invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
+      animateSwap: (() => { const a = swapAnim; swapAnim = false; return a; })(),
+      addItem: () => gmAddItemDialog(),
+      dropItemData: (raw) => gmAddDroppedItem(raw),
       getState,
       shipItems: physicalItems(getShipActor()),
       playerItems: physicalItems(game.user.character),
@@ -1058,7 +1228,12 @@
   }
   function physicalItems(actor) {
     if (!actor?.items) return [];
-    return actor.items.filter((i) => PHYSICAL_TYPES.has(i.type)).map((i) => ({ id: i.id, name: i.name, qty: i.system?.quantity ?? 1 }));
+    return actor.items.filter((i) => PHYSICAL_TYPES.has(i.type)).map((i) => {
+      const w = i.system?.weight;
+      const weight = (w && typeof w === "object") ? (w.value ?? 0) : (w ?? 0);
+      return { id: i.id, name: i.name, qty: i.system?.quantity ?? 1, img: i.img || DEFAULT_ITEM_IMG,
+        type: i.type, weight, desc: stripHtml(i.system?.description?.value) };
+    });
   }
   async function promptNumber(title, label, value, max) {
     const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="number" name="v" value="${value}" min="1"${max != null ? ` max="${max}"` : ""}/></label></div>`;
@@ -1095,6 +1270,49 @@
     st[kind].cur = Math.min(st[kind].max, st[kind].cur + add);
     await setState(st);
     await ChatMessage.create({ content: `Used <b>${esc(item.name)}</b> → +${add} ${kind}`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  // GM: add any item to the ship — pick a world item (or make a blank loot), or drag items onto the grid.
+  async function gmAddItemDialog() {
+    if (!game.user.isGM) return;
+    const ship = getShipActor();
+    if (!ship) return ui.notifications?.warn("No ship actor configured — use the “Ship actor” button first.");
+    const world = (game.items?.contents || []).filter((i) => PHYSICAL_TYPES.has(i.type));
+    const options = [{ value: "__new__", label: "＋ Create a new blank loot item…" }]
+      .concat(world.map((i) => ({ value: i.uuid, label: `${i.name} (${i.type})` })));
+    const pick = await chooseDlg("Add item to the ship", "Pick a world item to copy onto the ship — or drag items from the sidebar / a compendium onto the grid.", options);
+    if (!pick) return;
+    if (pick === "__new__") {
+      const name = await promptText("New item", "Item name", "New Cargo");
+      if (!name) return;
+      await ship.createEmbeddedDocuments("Item", [{ name, type: "loot", img: DEFAULT_ITEM_IMG, system: { quantity: 1 } }]);
+      await ChatMessage.create({ content: `GM added <b>${esc(name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
+      refreshOpen();
+      return;
+    }
+    const src = await fromUuid(pick); if (!src) return;
+    const data = src.toObject(); delete data._id;
+    await ship.createEmbeddedDocuments("Item", [data]);
+    await ChatMessage.create({ content: `GM added <b>${esc(src.name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
+    refreshOpen();
+  }
+  async function gmAddDroppedItem(raw) {
+    if (!game.user.isGM) return;
+    const ship = getShipActor(); if (!ship) return ui.notifications?.warn("No ship actor configured.");
+    let data; try { data = JSON.parse(raw); } catch (e) { return; }
+    if (data?.type !== "Item") return;
+    const src = data.uuid ? await fromUuid(data.uuid) : null;
+    if (!src) return;
+    const obj = src.toObject(); delete obj._id;
+    await ship.createEmbeddedDocuments("Item", [obj]);
+    await ChatMessage.create({ content: `GM added <b>${esc(src.name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
+    refreshOpen();
+  }
+  async function promptText(title, label, value) {
+    const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="text" name="v" value="${esc(value || "")}"/></label></div>`;
+    const read = (form) => { const s = String(form.elements.v.value || "").trim(); return s || null; };
+    const d = D2();
+    if (d) return d.prompt({ window: { title }, content, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
+    return new Promise((res) => new Dialog({ title, content, buttons: { ok: { label: "OK", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
   }
   async function gmConvert(byUserId) {
     if (!game.user.isGM) return;
