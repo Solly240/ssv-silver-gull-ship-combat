@@ -308,8 +308,8 @@
       // Base ship AC (GM-editable). Effective per-facing AC adds maneuver + shield bonuses.
       ac: { base: 13 },
       // Ship resources for the inventory screen (GM-tunable).
-      fuel:  { cur: 100, max: 100 },
-      power: { cur: 100, max: 100 },
+      fuel:  { cur: 500, max: 500 },   // baseline tank; GM can raise it (upgrades) via Tune
+      power: { cur: 500, max: 500 },
       tuning: { fuelPerItem: 25, powerPerItem: 25, convertFuel: 10, convertPower: 50 },
       actorId: ""   // GM-selected ship (dnd5e vehicle) actor; falls back to a name lookup
     };
@@ -596,6 +596,10 @@
 .sgcon .ig.low .ig-val{color:#ff9c9c;}
 .sgcon .ig.low .ig-ico{color:#ff6b6b;animation:ig-blink 1.1s steps(2,end) infinite;}
 @keyframes ig-blink{0%,100%{opacity:1;}50%{opacity:.4;}}
+.sgcon .ig.over{box-shadow:0 0 16px rgba(242,176,61,.55);border-color:#f2b03d;}
+.sgcon .ig.over .ig-track{box-shadow:0 0 10px rgba(242,176,61,.8) inset;}
+.sgcon .ig.over .ig-val{color:#ffd987;}
+.sgcon .ig.over .ig-ico{animation:ig-blink 1.1s steps(2,end) infinite;}
 .sgcon .inv-convert{flex:0 1 210px;min-width:150px;display:flex;flex-direction:column;gap:6px;}
 .sgcon .inv-convert .con-btn{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;font-size:12px;padding:6px 10px;
   border-radius:10px;background:linear-gradient(180deg,rgba(14,34,48,.65),rgba(8,20,30,.65));}
@@ -650,6 +654,8 @@
 .sgcon .inv-tile .it-qty{position:absolute;top:-9px;left:50%;transform:translateX(-50%);font-size:12px;font-weight:700;color:#04121c;
   background:#38e1c4;border-radius:9px;padding:1px 8px;box-shadow:0 0 8px rgba(56,225,196,.55);white-space:nowrap;}
 .sgcon .inv-tile .it-name{font-size:11px;line-height:1.2;text-align:center;color:#cfeef0;max-height:2.5em;overflow:hidden;}
+.sgcon .inv-tile .it-tier{font-size:8.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;border:1px solid;border-radius:5px;padding:0 5px;margin-top:2px;opacity:.9;}
+.sgcon .inv-tile .it-ib.over{border-color:#f2b03d;color:#ffd987;box-shadow:0 0 8px rgba(242,176,61,.5);}
 .sgcon .inv-tile .it-bottom{display:flex;width:100%;align-items:center;justify-content:space-between;gap:6px;margin-top:1px;min-height:28px;}
 .sgcon .inv-tile .it-bl,.sgcon .inv-tile .it-br{display:flex;}
 /* Uniform icon buttons in every corner/slot */
@@ -1638,13 +1644,15 @@
     const ship = kctx.shipItems || [], mine = kctx.playerItems || [];
     const tab = kctx.invTab === "you" ? "you" : "ship";
     const gauge = (label, g, cls, ico) => {
+      const over = g.cur > g.max;                       // overcharged / over-fuelled past max
       const pct = g.max > 0 ? Math.max(0, Math.min(1, g.cur / g.max)) * 100 : 0;
-      const low = pct <= 20;
-      return `<div class="ig ${cls}${low ? " low" : ""}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${kctx.isGM ? "Click to set" : ""}">` +
+      const low = pct <= 20 && !over;
+      return `<div class="ig ${cls}${low ? " low" : ""}${over ? " over" : ""}${kctx.isGM ? " gm" : ""}" ${kctx.isGM ? `data-edit="${cls}"` : ""} title="${over ? `Over max — running hot (${g.cur}/${g.max})` : kctx.isGM ? "Click to set" : ""}">` +
         `<div class="ig-top"><span class="ig-ico">${ico}</span><span class="ig-label">${label}</span>` +
-        `<span class="ig-val">${g.cur}<small> / ${g.max}</small></span></div>` +
+        `<span class="ig-val">${g.cur}<small> / ${g.max}${over ? " ⚡" : ""}</small></span></div>` +
         `<div class="ig-track"><div class="ig-fill" style="width:${pct}%"></div></div></div>`;
     };
+    const RARITY = { common: { t: "Common", c: "#9fb2bd" }, uncommon: { t: "Uncommon", c: "#42d16a" }, rare: { t: "Rare", c: "#3aa0ff" }, veryRare: { t: "Very Rare", c: "#b06bf0" }, legendary: { t: "Legendary", c: "#f2b03d" }, artifact: { t: "Exotic", c: "#ff8a4c" } };
     const tile = (it, isShip) => {
       // Top corners: GM delete (TL) + edit (TR), ship items only.
       const corners = (isShip && kctx.isGM)
@@ -1654,16 +1662,18 @@
       // Bottom-left: resource-use icon, only for a fuel/power item. Bottom-right: move.
       const resIco = it.resKind === "fuel" ? "⛽" : it.resKind === "power" ? "⚡" : "";
       const resBtn = (isShip && it.resKind)
-        ? `<button class="it-ib" data-res title="Use as ${it.resKind} (+${it.resAmount} ${it.resKind})">${resIco}</button>`
+        ? `<button class="it-ib${it.overcharge ? " over" : ""}" data-res title="Use as ${it.resKind} (+${it.resAmount} ${it.resKind}${it.overcharge ? " · ⚡ overcharges past max" : ""})">${resIco}</button>`
         : "";
       const moveBtn = isShip
         ? `<button class="it-ib" data-move title="Move to your inventory">→</button>`
         : `<button class="it-ib" data-move title="Move to the ship">→</button>`;
+      const r = RARITY[it.rarity];
+      const tierBadge = r ? `<span class="it-tier" style="color:${r.c};border-color:${r.c}">${r.t}</span>` : "";
       return `<div class="inv-tile" data-id="${it.id}" data-name="${esc(it.name)}">` +
         corners +
         `<div class="it-imgwrap"><img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.src='${DEFAULT_ITEM_IMG}'">` +
           (it.qty > 1 ? `<span class="it-qty">×${it.qty}</span>` : "") + `</div>` +
-        `<span class="it-name">${esc(it.name)}</span>` +
+        `<span class="it-name">${esc(it.name)}</span>${tierBadge}` +
         `<div class="it-bottom"><span class="it-bl">${resBtn}</span><span class="it-br">${moveBtn}</span></div>` +
       `</div>`;
     };
@@ -2037,8 +2047,8 @@
       const fl = i.flags?.[MODULE_ID] || {};
       const resKind = (fl.resKind === "fuel" || fl.resKind === "power") ? fl.resKind : null;
       return { id: i.id, name: i.name, qty: i.system?.quantity ?? 1, img: i.img || DEFAULT_ITEM_IMG,
-        type: i.type, weight, desc: stripHtml(i.system?.description?.value),
-        resKind, resAmount: Number(fl.resAmount) || 0 };
+        type: i.type, weight, desc: stripHtml(i.system?.description?.value), rarity: i.system?.rarity || "",
+        resKind, resAmount: Number(fl.resAmount) || 0, overcharge: !!fl.overcharge };
     });
   }
   async function promptNumber(title, label, value, max) {
@@ -2081,8 +2091,9 @@
         `<option value="fuel"${kind === "fuel" ? " selected" : ""}>Fuel ⛽</option>` +
         `<option value="power"${kind === "power" ? " selected" : ""}>Power ⚡</option></select></label>` +
       `<label style="display:flex;justify-content:space-between;align-items:center;gap:10px;">Amount per use <input type="number" name="amt" value="${amt}" min="0" style="width:100px"></label>` +
-      `<p style="opacity:.7;font-size:12px;margin:0">Fuel/power items show a ⛽ / ⚡ button; using one spends 1 and adds “amount per use” to that gauge. Quantity 0 deletes the item.</p></div>`;
-    const read = (form) => ({ qty: Number(form.elements.qty.value), kind: form.elements.kind.value, amt: Number(form.elements.amt.value) });
+      `<label style="display:flex;justify-content:space-between;align-items:center;gap:10px;">Overcharge (push past max) <input type="checkbox" name="over" ${fl.overcharge ? "checked" : ""}></label>` +
+      `<p style="opacity:.7;font-size:12px;margin:0">Fuel/power items show a ⛽ / ⚡ button; using one spends 1 and adds “amount per use” to that gauge. Overcharge lets it exceed the max (running hot). Quantity 0 deletes the item.</p></div>`;
+    const read = (form) => ({ qty: Number(form.elements.qty.value), kind: form.elements.kind.value, amt: Number(form.elements.amt.value), over: !!form.elements.over?.checked });
     const D = D2();
     let v = null;
     if (D) v = await D.prompt({ window: { title: `Edit — ${item.name}` }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null);
@@ -2090,8 +2101,8 @@
     if (!v) return;
     if (Number.isFinite(v.qty) && v.qty <= 0) { await item.delete(); refreshOpen(); return; }
     if (Number.isFinite(v.qty)) await item.update({ "system.quantity": Math.max(1, Math.floor(v.qty)) });
-    if (v.kind === "fuel" || v.kind === "power") await item.update({ [`flags.${MODULE_ID}.resKind`]: v.kind, [`flags.${MODULE_ID}.resAmount`]: Math.max(0, Math.floor(v.amt) || 0) });
-    else await item.update({ [`flags.${MODULE_ID}.-=resKind`]: null, [`flags.${MODULE_ID}.-=resAmount`]: null });
+    if (v.kind === "fuel" || v.kind === "power") await item.update({ [`flags.${MODULE_ID}.resKind`]: v.kind, [`flags.${MODULE_ID}.resAmount`]: Math.max(0, Math.floor(v.amt) || 0), [`flags.${MODULE_ID}.overcharge`]: !!v.over });
+    else await item.update({ [`flags.${MODULE_ID}.-=resKind`]: null, [`flags.${MODULE_ID}.-=resAmount`]: null, [`flags.${MODULE_ID}.-=overcharge`]: null });
     refreshOpen();
   }
   async function gmDeleteItem(itemId) {
@@ -2112,9 +2123,12 @@
     const st = getState();
     const have = item.system?.quantity ?? 1;
     if (have - 1 > 0) await item.update({ "system.quantity": have - 1 }); else await item.delete();
-    st[kind].cur = Math.min(st[kind].max, st[kind].cur + add);
+    // Overcharge items (exotic/ancient) push the gauge PAST its max — a "running hot" buffer; others cap at max.
+    const over = !!fl.overcharge;
+    st[kind].cur = over ? (st[kind].cur + add) : Math.min(st[kind].max, st[kind].cur + add);
     await setState(st);
-    await ChatMessage.create({ content: `Used <b>${esc(item.name)}</b> → +${add} ${kind}`, speaker: { alias: "SSV Silver Gull" } });
+    const hot = st[kind].cur > st[kind].max ? ` <b style="color:#f2b03d">(OVERCHARGED — ${st[kind].cur}/${st[kind].max})</b>` : "";
+    await ChatMessage.create({ content: `Used <b>${esc(item.name)}</b> → +${add} ${kind}${hot}`, speaker: { alias: "SSV Silver Gull" } });
   }
   // GM: add any item to the ship — a searchable browser over ALL world items + every Item compendium.
   async function gmAddItemBrowser() {
