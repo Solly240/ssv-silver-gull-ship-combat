@@ -3146,41 +3146,59 @@
     finally { _iconBusy = false; if (_iconAgain) { _iconAgain = false; updateShipIcon(); } }
   }
 
-  /* ---- Firing-arc cone drawn on the ship token on the canvas (every client) ---- */
+  /* ---- Firing-arc cone drawn ON the ship token (only the gunners + the GM see it) ---- */
   let _coneGfx = null;
   function clearGunCone() { if (_coneGfx) { try { _coneGfx.parent?.removeChild(_coneGfx); _coneGfx.destroy(); } catch (e) {} _coneGfx = null; } }
+  // Only the GM and any user controlling a gunner should see the firing arc.
+  function canSeeGunCone(combat) {
+    if (game.user.isGM) return true;
+    return Object.values(combat.crew).some((c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.controllerUserId === game.user.id);
+  }
+  function shipTokenObject() {
+    const a = shipIconActor(); if (!a || typeof canvas === "undefined" || !canvas?.tokens) return null;
+    return canvas.tokens.placeables.find((t) => t.document?.actorId === a.id) || null;
+  }
+  // Move/rotate the cone to sit on the ship token — uses the token's live mesh transform so it follows animation.
+  function positionGunCone(tok) {
+    if (!_coneGfx) return;
+    tok = tok || shipTokenObject(); if (!tok) return;
+    const m = tok.mesh;
+    if (m && m.position && Number.isFinite(m.position.x)) { _coneGfx.position.set(m.position.x, m.position.y); _coneGfx.rotation = Number.isFinite(m.rotation) ? m.rotation : 0; }
+    else {
+      const grid = canvas.scene?.grid?.size || 100, w = (tok.document.width || 1) * grid, h = (tok.document.height || 1) * grid;
+      _coneGfx.position.set(tok.document.x + w / 2, tok.document.y + h / 2);
+      _coneGfx.rotation = (tok.document.rotation || 0) * Math.PI / 180;
+    }
+  }
   function drawGunCone() {
     clearGunCone();
     if (typeof canvas === "undefined" || !canvas?.ready || typeof PIXI === "undefined") return;
-    const combat = getCombat(); if (!combat.active) return;
-    // Which guns are currently selected by a gunner? (deduped)
+    const combat = getCombat(); if (!combat.active || !canSeeGunCone(combat)) return;
+    // One cone per distinct gun any gunner has selected — two gunners on different guns → two nested cones.
     const gunIds = [...new Set(Object.values(combat.crew)
       .filter((c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.gun)
       .map((c) => c.gun))];
     if (!gunIds.length) return;
-    const a = shipIconActor(); const scene = canvas.scene; if (!a || !scene) return;
-    const tdoc = scene.tokens.find((t) => t.actorId === a.id); if (!tdoc) return;
-    const grid = scene.grid?.size || 100;
-    const cx = tdoc.x + (tdoc.width * grid) / 2, cy = tdoc.y + (tdoc.height * grid) / 2;
-    const rot = ((tdoc.rotation || 0)) * Math.PI / 180;          // 0 = nose up
-    const fwd = Math.atan2(-Math.cos(rot), Math.sin(rot));       // forward vector angle in y-down canvas coords
-    const half = Math.PI / 4, a0 = fwd - half, a1 = fwd + half, STEPS = 20;
-    const arcPts = (r, from, to) => { const out = []; for (let i = 0; i <= STEPS; i++) { const t = from + (to - from) * (i / STEPS); out.push(cx + r * Math.cos(t), cy + r * Math.sin(t)); } return out; };
+    const tok = shipTokenObject(); if (!tok) return;
+    const grid = canvas.scene?.grid?.size || 100;
+    // Geometry is LOCAL (apex at origin, forward = up); positionGunCone() then places+rotates it onto the token.
+    const half = Math.PI / 4, fwd = -Math.PI / 2, a0 = fwd - half, a1 = fwd + half, STEPS = 22;
+    const arcPts = (r, from, to) => { const out = []; for (let i = 0; i <= STEPS; i++) { const t = from + (to - from) * (i / STEPS); out.push(r * Math.cos(t), r * Math.sin(t)); } return out; };
     const g = new PIXI.Graphics();
-    // Fill+stroke a polygon, working under both PIXI v7 (beginFill/drawPolygon) and v8 (poly/fill/stroke).
+    // Fill+stroke a polygon under both PIXI v7 (beginFill/drawPolygon) and v8 (poly/fill/stroke).
     const fillPoly = (pts, color, alpha, la) => {
       if (typeof g.beginFill === "function") { g.beginFill(color, alpha); g.lineStyle(2, color, la); g.drawPolygon(pts); g.endFill(); }
       else { g.poly(pts).fill({ color, alpha }).stroke({ width: 2, color, alpha: la }); }
     };
-    // draw longest range first so shorter guns' bands stay visible on top
-    for (const id of gunIds.sort((x, y) => (S.gun(y)?.longMax || 0) - (S.gun(x)?.longMax || 0))) {
+    for (const id of gunIds.sort((x, y) => (S.gun(y)?.longMax || 0) - (S.gun(x)?.longMax || 0))) {   // longest first
       const gun = S.gun(id); if (!gun) continue;
       const rG = Math.max(1, gun.shortMax) * grid, rR = Math.max(gun.shortMax + 0.5, gun.longMax) * grid;
       fillPoly([...arcPts(rR, a0, a1), ...arcPts(rG, a1, a0)], 0xe0454d, 0.12, 0.45);   // red (long) band
-      fillPoly([cx, cy, ...arcPts(rG, a0, a1)], 0x42d16a, 0.16, 0.6);                    // green (close) band
+      fillPoly([0, 0, ...arcPts(rG, a0, a1)], 0x42d16a, 0.16, 0.6);                      // green (close) band
     }
     _coneGfx = g;
     (canvas.interface || canvas.controls || canvas.stage)?.addChild(g);
+    positionGunCone(tok);
   }
 
   Hooks.once("ready", async () => {
@@ -3199,12 +3217,16 @@
     // Keep the ship "icon" actor's token image in sync with the shields (GM renders + uploads).
     Hooks.on(`${MODULE_ID}.updated`, () => updateShipIcon());
     if (game.user.isGM) ensureShipIconActor().then(() => updateShipIcon());
-    // Firing-arc cone on the map: redraw when the canvas is ready and whenever the ship token moves/rotates.
+    // Firing-arc cone on the map: (re)build on canvas ready / token add-remove; follow the ship every frame.
     Hooks.on("canvasReady", () => { try { drawGunCone(); } catch (e) {} });
-    Hooks.on("updateToken", (doc, change) => {
-      if (doc.actorId === shipIconActor()?.id && ("x" in change || "y" in change || "rotation" in change || "width" in change || "height" in change)) { try { drawGunCone(); } catch (e) {} }
-    });
+    Hooks.on("createToken", (doc) => { if (doc.actorId === shipIconActor()?.id) { try { drawGunCone(); } catch (e) {} } });
     Hooks.on("deleteToken", () => { try { drawGunCone(); } catch (e) {} });
+    Hooks.on("updateToken", (doc, change) => {
+      if (doc.actorId !== shipIconActor()?.id) return;
+      try { if ("width" in change || "height" in change) drawGunCone(); else positionGunCone(); } catch (e) {}
+    });
+    // refreshToken fires each animation frame — keep the cone glued to the ship while it moves/turns.
+    Hooks.on("refreshToken", (tok) => { if (_coneGfx && tok?.document?.actorId === shipIconActor()?.id) { try { positionGunCone(tok); } catch (e) {} } });
     try { drawGunCone(); } catch (e) {}
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
