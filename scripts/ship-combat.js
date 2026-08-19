@@ -674,6 +674,9 @@
 .sgcon-invpop .ip-name{font-size:14px;font-weight:700;color:#38e1c4;line-height:1.2;}
 .sgcon-invpop .ip-type{font-size:11px;color:#7fa6b4;text-transform:capitalize;margin:2px 0 7px;}
 .sgcon-invpop .ip-meta{font-size:11px;color:#9fc0cc;margin-bottom:7px;}
+.sgcon-invpop .ip-prov{font-size:12px;color:#cfeef0;margin:0 0 7px;}
+.sgcon-invpop .ip-prov b{color:#38e1c4;}
+.sgcon-invpop .ip-prov .ip-over{display:block;color:#f2b03d;font-size:11px;margin-top:1px;}
 .sgcon-invpop .ip-desc{clear:both;font-size:12px;line-height:1.45;color:#bcd7df;max-height:150px;overflow:hidden;}
 /* Mode-swap transition (stations ↔ inventory ↔ GM) */
 @keyframes sgcon-swap{from{opacity:0;transform:translateX(26px);}to{opacity:1;transform:none;}}
@@ -1194,10 +1197,13 @@
   function showInvPop(it, tileEl) {
     const p = invPopEl();
     const meta = [it.qty > 1 ? `Qty ${it.qty}` : "", it.weight ? `${it.weight} lb` : ""].filter(Boolean).join(" · ");
+    const provides = it.resKind
+      ? `<div class="ip-prov">Provides <b>+${it.resAmount} ${it.resKind === "fuel" ? "⛽ Fuel" : "⚡ Power"}</b>${it.overcharge ? ' <span class="ip-over">⚡ overcharges past max</span>' : ""}</div>`
+      : "";
     p.innerHTML =
       `<img src="${esc(it.img || DEFAULT_ITEM_IMG)}" alt="" onerror="this.style.display='none'">` +
       `<div class="ip-name">${esc(it.name)}</div><div class="ip-type">${esc(it.type || "item")}</div>` +
-      (meta ? `<div class="ip-meta">${esc(meta)}</div>` : "") +
+      (meta ? `<div class="ip-meta">${esc(meta)}</div>` : "") + provides +
       `<div class="ip-desc">${esc(it.desc || "No description.")}</div>`;
     p.classList.add("show");
     const r = tileEl.getBoundingClientRect(), pw = 240, ph = p.offsetHeight || 180, gap = 12;
