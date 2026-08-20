@@ -1835,8 +1835,8 @@
     const stId = kctx.station, crew = kctx.crew;
     const acts = stId ? S.stationActions(stId) : { main: [], bonus: [] };
     const stName = stId ? (S.station(stId)?.name || stId) : "STATION";
-    const picker = (kctx.isGM && kctx.stationOptions?.length)
-      ? `<select class="con-sel" title="Drive which station">${kctx.stationOptions.map((o) => `<option value="${o.crewId}" ${o.crewId === kctx.currentCrewId ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+    const picker = (kctx.stationOptions?.length > 1)
+      ? `<select class="con-sel" title="${kctx.isGM ? "Drive which station" : "Switch which of your crew"}">${kctx.stationOptions.map((o) => `<option value="${o.crewId}" ${o.crewId === kctx.currentCrewId ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
       : "";
 
     if (!stId || !crew) {
@@ -1948,6 +1948,7 @@
   let _console = null;
   let armed = null;            // transient shield-allocation mode: 'main' | 'secondary' | null
   let gmDriveCrewId = null;    // which crew the GM is driving in the console
+  let playerDriveCrewId = null;// which of THEIR OWN crew a player is viewing (when they control more than one)
   let invMode = false;         // console showing the inventory panel instead of the station panel
   let gmActMode = false;       // console showing the GM Actions panel (GM-only, direct state control)
   let invTab = "ship";         // inventory active tab: 'ship' | 'you'
@@ -1970,7 +1971,8 @@
       const stationed = Object.values(combat.crew).filter((c) => c.station);
       return stationed.find((x) => x.id === gmDriveCrewId) || stationed[0] || null;
     }
-    return S.crewControlledBy(combat, game.user.id).filter((c) => c.station)[0] || null;
+    const mine = S.crewControlledBy(combat, game.user.id).filter((c) => c.station);
+    return mine.find((x) => x.id === playerDriveCrewId) || mine[0] || null;
   }
   function consoleCtx() {
     const combat = getCombat();
@@ -1981,10 +1983,11 @@
       overviewCtx: ctx(),
       getCombat,
       station: crew?.station || null, crew, currentCrewId: crew?.id || null,
-      stationOptions: game.user.isGM
-        ? Object.values(combat.crew).filter((c) => c.station).map((c) => ({ crewId: c.id, station: c.station, label: `${c.name} — ${S.station(c.station)?.name || c.station}` }))
-        : [],
-      selectStation: (cid) => { gmDriveCrewId = cid; armed = null; renderConsole(); },
+      stationOptions: (game.user.isGM
+        ? Object.values(combat.crew).filter((c) => c.station)
+        : S.crewControlledBy(combat, game.user.id).filter((c) => c.station)
+      ).map((c) => ({ crewId: c.id, station: c.station, label: `${c.name} — ${S.station(c.station)?.name || c.station}` })),
+      selectStation: (cid) => { if (game.user.isGM) gmDriveCrewId = cid; else playerDriveCrewId = cid; armed = null; renderConsole(); },
       get armed() { return armed; },
       setArmed: (m) => { armed = m; renderConsole(); },
       allocate: (facing, slot) => {
