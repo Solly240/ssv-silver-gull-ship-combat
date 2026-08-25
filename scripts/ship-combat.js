@@ -219,13 +219,13 @@
   // each one (e.g. cover an absent player) and exclude any from a given fight.
   S.defaultRoster = function () {
     return [
-      { id: "astra", name: "ASTRA",        userId: "" },
-      { id: "kael",  name: "Kael Voss",    userId: "" },
-      { id: "baldy", name: "Baldy",        userId: "" },
-      { id: "gobby", name: "Gobby",        userId: "" },
-      { id: "glimm", name: "G.L.I.M.M.",   userId: "" },
-      { id: "ronon", name: "Ronon Dex",    userId: "" },
-      { id: "gerth", name: "Gerthorlemue", userId: "" }
+      { id: "astra", name: "ASTRA",        userId: "", prof: {} },
+      { id: "kael",  name: "Kael Voss",    userId: "", prof: {} },
+      { id: "baldy", name: "Baldy",        userId: "", prof: {} },
+      { id: "gobby", name: "Gobby",        userId: "", prof: {} },
+      { id: "glimm", name: "G.L.I.M.M.",   userId: "", prof: {} },
+      { id: "ronon", name: "Ronon Dex",    userId: "", prof: {} },
+      { id: "gerth", name: "Gerthorlemue", userId: "", prof: {} }
     ];
   };
 
@@ -252,7 +252,8 @@
     }
     if (Array.isArray(stored.roster) && stored.roster.length) {
       for (const m of stored.roster) {
-        if (m && m.id && m.name) out.roster.push({ id: String(m.id), name: String(m.name), userId: String(m.userId || "") });
+        if (m && m.id && m.name) out.roster.push({ id: String(m.id), name: String(m.name), userId: String(m.userId || ""),
+          prof: (m.prof && typeof m.prof === "object") ? { ...m.prof } : {} });   // survives end/start of combat
       }
     }
     const validStation = (s) => (s && S.station(s) ? s : "");
@@ -441,17 +442,20 @@
 .sgsc .sc-shipwrap{position:relative;height:112%;aspect-ratio:1218/1620;pointer-events:auto;}
 .sgsc .sc-shipwrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
 .sgsc .sc-shipimg{filter:drop-shadow(0 0 20px rgba(29,106,134,.5));}
+/* will-change promotes these to their own layer so the forever-running opacity animation
+   recomposites a cached layer instead of re-running the drop-shadow/sepia filter chain
+   over the full-size ship art every frame. A rendering hint only — nothing looks different. */
 .sgsc .sc-shieldimg{z-index:2;filter:drop-shadow(0 0 8px rgba(72,232,226,.75)) drop-shadow(0 0 22px rgba(72,232,226,.5));
-  animation:sgsc-pulse 2.6s ease-in-out infinite;}
+  will-change:opacity;animation:sgsc-pulse 2.6s ease-in-out infinite;}
 .sgsc .sc-shieldimg.dmg{filter:sepia(1) saturate(9) hue-rotate(-38deg) brightness(1) contrast(1.1)
-  drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));animation:sgsc-flicker .5s steps(2,end) infinite;}
+  drop-shadow(0 0 8px rgba(235,60,60,.9)) drop-shadow(0 0 22px rgba(235,60,60,.55));will-change:opacity;animation:sgsc-flicker .5s steps(2,end) infinite;}
 /* Secondary shield (Micro-Adjust): a thin violet arc hugging the allocated side —
    a slimmer, inward-scaled copy of that side's main shield, tinted distinct from the cyan primary. */
 /* Sits at scale 1.0 (same footprint as that side's main shield) so it aligns with the hull;
    distinguished purely by being violet + much fainter than the cyan primary. */
 .sgsc .sc-shield2img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:3;pointer-events:none;
   filter:hue-rotate(92deg) saturate(1.2) brightness(.72) drop-shadow(0 0 2px rgba(176,107,240,.45));
-  opacity:.42;animation:sgsc-pulse2 2.6s ease-in-out infinite;}
+  opacity:.42;will-change:opacity;animation:sgsc-pulse2 2.6s ease-in-out infinite;}
 @keyframes sgsc-pulse2{0%,100%{opacity:.3;}50%{opacity:.5;}}
 @keyframes sgsc-pulse{0%,100%{opacity:.82;}50%{opacity:1;}}
 @keyframes sgsc-flicker{0%,100%{opacity:.92;}44%{opacity:.5;}}
@@ -795,11 +799,14 @@
   /* ---------------------------------------------------------------------- */
 
   const cycle = (list, v) => list[(list.indexOf(v) + 1) % list.length];
+  const ITEM_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base" });
 
   function iconEl(ctx, sys, st) {
-    const file = ctx.assetUrl(`assets/systems/${sys.icon}-${st === "offline" ? "destroyed" : st}.png`);
+    // -sm is the 128px variant: these render into a 52px slot, so shipping the 1024px
+    // master here cost ~4MB of decoded bitmap per icon (x8 on screen) for no visible gain.
+    const file = ctx.assetUrl(`assets/systems/${sys.icon}-${st === "offline" ? "destroyed" : st}-sm.webp`);
     return `<div class="sc-ico"><span class="ph" style="color:${S.STATE_META[st]?.c || "#5a6b7a"}"></span>` +
-      `<img src="${file}" alt="" onload="this.previousElementSibling.style.display='none'" onerror="this.style.display='none'"></div>`;
+      `<img src="${file}" alt="" width="52" height="52" decoding="async" onload="this.previousElementSibling.style.display='none'" onerror="this.style.display='none'"></div>`;
   }
 
   function systemCard(ctx, sys, state) {
@@ -821,13 +828,13 @@
     if (gen === "destroyed") return "";
     let html = "";
     if (state.shield.on) {
-      const file = ctx.assetUrl(`assets/shields/shield-${state.shield.facing}.png`);
+      const file = ctx.assetUrl(`assets/shields/shield-${state.shield.facing}.webp`);
       const cls = "sc-shieldimg" + (gen === "damaged" ? " dmg" : "");
       html += `<img class="${cls}" src="${file}" alt="" onerror="this.style.display='none'">`;
     }
     // Secondary facing (Micro-Adjust): a thin violet arc hugging that side.
     if (state.shield.secondary) {
-      const f2 = ctx.assetUrl(`assets/shields/shield-${state.shield.secondary}.png`);
+      const f2 = ctx.assetUrl(`assets/shields/shield-${state.shield.secondary}.webp`);
       html += `<img class="sc-shield2img face-${state.shield.secondary}" src="${f2}" alt="" onerror="this.style.display='none'">`;
     }
     return html;
@@ -857,7 +864,7 @@
     const state = S.normalize(ctx.getState());
     const left = S.SYSTEMS.filter((s) => s.side === "left");
     const right = S.SYSTEMS.filter((s) => s.side === "right");
-    const shipFile = ctx.assetUrl(`assets/ship/ship-${S.shipVariant(state)}.png`);
+    const shipFile = ctx.assetUrl(`assets/ship/ship-${S.shipVariant(state)}.webp`);
 
     const hullPct = state.hull.max ? clamp(state.hull.cur / state.hull.max, 0, 1) * 100 : 0;
     const hullColor = hullPct > 50 ? "var(--teal)" : hullPct > 20 ? "var(--amber)" : "var(--red)";
@@ -1160,7 +1167,7 @@
   function renderMiniShip(leftEl, kctx) {
     const ctx = kctx.overviewCtx;
     const state = S.normalize(ctx.getState());
-    const shipFile = ctx.assetUrl(`assets/ship/ship-${S.shipVariant(state)}.png`);
+    const shipFile = ctx.assetUrl(`assets/ship/ship-${S.shipVariant(state)}.webp`);
     const hullPct = state.hull.max ? clamp(state.hull.cur / state.hull.max, 0, 1) * 100 : 0;
     const hullColor = hullPct > 50 ? "var(--teal)" : hullPct > 20 ? "var(--amber)" : "var(--red)";
     leftEl.innerHTML =
@@ -1196,6 +1203,10 @@
   function hideInvPop() { const p = document.getElementById("ssv-inv-pop"); if (p) p.classList.remove("show"); }
   function showInvPop(it, tileEl) {
     const p = invPopEl();
+    // Measure the tile before touching the popup: its geometry does not depend on the
+    // popup's content, so reading it first avoids one of the two forced layouts this
+    // used to trigger on every tile hover.
+    const r = tileEl.getBoundingClientRect();
     const meta = [it.qty > 1 ? `Qty ${it.qty}` : "", it.weight ? `${it.weight} lb` : ""].filter(Boolean).join(" · ");
     const provides = it.resKind
       ? `<div class="ip-prov">Provides <b>+${it.resAmount} ${it.resKind === "fuel" ? "⛽ Fuel" : "⚡ Power"}</b>${it.overcharge ? ' <span class="ip-over">⚡ overcharges past max</span>' : ""}</div>`
@@ -1206,7 +1217,7 @@
       (meta ? `<div class="ip-meta">${esc(meta)}</div>` : "") + provides +
       `<div class="ip-desc">${esc(it.desc || "No description.")}</div>`;
     p.classList.add("show");
-    const r = tileEl.getBoundingClientRect(), pw = 240, ph = p.offsetHeight || 180, gap = 12;
+    const pw = 240, ph = p.offsetHeight || 180, gap = 12;
     let left = r.right + gap;
     if (left + pw > window.innerWidth - 8) left = r.left - pw - gap;       // flip to the left if off-screen
     if (left < 8) left = 8;
@@ -1622,7 +1633,18 @@
   const invCollapsedSecs = new Set();   // collapsed inventory section labels (per-client, this session)
   const INV_SECTIONS = ["Weapons", "Ammunition", "Explosives", "Medical", "Food", "Gobby's Bar",
     "Tools", "Gear & Supplies", "Apparel", "Materials", "Containers", "Valuables", "Other"];
+  // Memoised: the result depends only on type+name, but the regex chain below used to be
+  // re-run for every item on every inventory render.
+  const _catCache = new Map();
   function invCategory(it) {
+    const key = `${it.type}|${it.name}`;
+    const hit = _catCache.get(key);
+    if (hit !== undefined) return hit;
+    const out = _invCategory(it);
+    _catCache.set(key, out);
+    return out;
+  }
+  function _invCategory(it) {
     const t = it.type, n = (it.name || "").toLowerCase();
     if (t === "weapon") return "Weapons";
     if (t === "tool") return "Tools";
@@ -2015,8 +2037,12 @@
       dropItemData: (raw) => gmAddDroppedItem(raw),
       deleteItem: (id) => gmDeleteItem(id),
       getState,
-      shipItems: physicalItems(getShipActor()),
-      playerItems: physicalItems(game.user.character),
+      // Getters, not values: physicalItems() walks every owned item and runs three regexes
+      // over each description. Only renderInventoryPanel reads these, and it is skipped
+      // entirely unless the inventory is showing — so as plain properties this ran on
+      // every console render for nothing.
+      get shipItems() { return physicalItems(getShipActor()); },
+      get playerItems() { return physicalItems(game.user.character); },
       hasPlayerActor: !!game.user.character,
       moveItem: async (fromShip, itemId) => {
         const src = fromShip ? getShipActor() : game.user.character;
@@ -2156,7 +2182,9 @@
         items.push({ uuid: e.uuid || `Compendium.${p.collection}.${e._id}`, name: e.name, type: e.type, img: e.img, source: label });
       }
     }));
-    items.sort((a, b) => a.name.localeCompare(b.name));
+    // Collator built once rather than an ICU lookup per comparison — this sorts the whole
+    // compendium index, which is tens of thousands of comparisons on a loaded world.
+    items.sort((a, b) => ITEM_COLLATOR.compare(a.name, b.name));
     const addOne = async (it) => {
       try {
         const src = await fromUuid(it.uuid); if (!src) return;
@@ -2166,7 +2194,7 @@
       } catch (e) { console.error(`${MODULE_ID} | add item failed`, e); }
     };
     const addNew = async () => {
-      const name = await promptText("New item", "Item name", "New Cargo");
+      const name = await promptTextWithDefault("New item", "Item name", "New Cargo");
       if (!name) return;
       await ship.createEmbeddedDocuments("Item", [{ name, type: "loot", img: DEFAULT_ITEM_IMG, system: { quantity: 1 } }]);
       refreshOpen();
@@ -2185,7 +2213,7 @@
     await ChatMessage.create({ content: `GM added <b>${esc(src.name)}</b> to the ship.`, speaker: { alias: "SSV Silver Gull" } });
     refreshOpen();
   }
-  async function promptText(title, label, value) {
+  async function promptTextWithDefault(title, label, value) {
     const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="text" name="v" value="${esc(value || "")}"/></label></div>`;
     const read = (form) => { const s = String(form.elements.v.value || "").trim(); return s || null; };
     const d = D2();
@@ -2354,6 +2382,9 @@
       const c = next.crew[crewId]; if (!c) continue;
       c.prof = {};
       for (const [rid, on] of Object.entries(profMap || {})) if (on) c.prof[rid] = true;
+      // Mirror onto the roster: crew objects are thrown away at endCombat, the roster is not.
+      const m = next.roster.find((r) => r.id === crewId);
+      if (m) m.prof = { ...c.prof };
     }
     await saveCombat(next);
   }
@@ -2850,7 +2881,7 @@
     next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
     for (const m of cur.roster) {
       if (!included.has(m.id)) continue;
-      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, gun: null, prof: {} };
+      next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, gun: null, prof: { ...(m.prof || {}) } };   // carried over from the roster, so it survives end/start of combat
     }
     await saveCombat(next);
     emit({ type: "pickPrompt" });
@@ -2976,7 +3007,7 @@
     if (!cid) return;
     const m = combat.roster.find((x) => x.id === cid); if (!m) return;
     const next = getCombat();
-    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, gun: null, prof: {} };
+    next.crew[cid] = { id: cid, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, gun: null, prof: { ...(m.prof || {}) } };
     await saveCombat(next);
   }
   async function editCrewDialog() {
@@ -2995,10 +3026,10 @@
       combat.roster.forEach((m, i) => {
         if (form.elements["del_" + i]?.checked) return;
         const nm = (form.elements["name_" + i]?.value || "").trim(); if (!nm) return;
-        roster.push({ id: m.id, name: nm, userId: form.elements["user_" + i]?.value || "" });
+        roster.push({ id: m.id, name: nm, userId: form.elements["user_" + i]?.value || "", prof: { ...(m.prof || {}) } });
       });
       const nn = (form.elements["name_new"]?.value || "").trim();
-      if (nn) roster.push({ id: newId(), name: nn, userId: form.elements["user_new"]?.value || "" });
+      if (nn) roster.push({ id: newId(), name: nn, userId: form.elements["user_new"]?.value || "", prof: {} });
       return roster;
     };
     const d = D2();
@@ -3083,7 +3114,19 @@
   Hooks.once("init", () => {
     // onChange fires on every client when a world setting replicates → our cross-client refresh.
     // Both the bar AND the console read combat + ship state, so refresh both on either change.
-    const refreshUI = () => { renderBar(); refreshOpen(); try { drawGunCone(); } catch (e) {} };
+    // A single action can write both settings and replicate to every client, so a burst of
+    // onChange calls used to mean several full rebuilds of the bar + console + gun cone.
+    // Coalesce them into one render on the next frame; the end state is identical.
+    let _uiQueued = false;
+    const refreshUI = () => {
+      if (_uiQueued) return;
+      _uiQueued = true;
+      requestAnimationFrame(() => {
+        _uiQueued = false;
+        renderBar(); refreshOpen();
+        try { drawGunCone(); } catch (e) {}
+      });
+    };
     game.settings.register(MODULE_ID, SETTING_DATA, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.keybindings.register(MODULE_ID, "open", {
@@ -3108,7 +3151,21 @@
 
   /* ---- Live ship "icon" actor: its token image mirrors the S-menu ship + shield view ---- */
   const SHIP_ICON_DIR = "ssv-ship-icon";
-  function shipIconActor() { return game.actors?.find((a) => a.getFlag?.(MODULE_ID, "shipIcon")) || null; }
+  // Cached: this is called from updateToken/refreshToken, which fire per drag-step and per
+  // animation frame. The uncached find() ran a getFlag over every actor in the world each time.
+  let _shipIconCache;   // undefined = not resolved yet, null = resolved to "none"
+  function shipIconActor() {
+    if (_shipIconCache !== undefined) {
+      // Guard against the cached actor having been deleted out from under us.
+      if (_shipIconCache === null || _shipIconCache.id === game.actors?.get(_shipIconCache.id)?.id) return _shipIconCache;
+    }
+    _shipIconCache = game.actors?.find((a) => a.getFlag?.(MODULE_ID, "shipIcon")) || null;
+    return _shipIconCache;
+  }
+  const invalidateShipIcon = () => { _shipIconCache = undefined; };
+  Hooks.on("createActor", invalidateShipIcon);
+  Hooks.on("deleteActor", invalidateShipIcon);
+  Hooks.on("updateActor", (a, ch) => { if (ch?.flags?.[MODULE_ID] !== undefined) invalidateShipIcon(); });
   async function ensureShipIconActor() {
     if (!game.user.isGM) return null;
     let a = shipIconActor();
@@ -3121,9 +3178,9 @@
     const A = `modules/${MODULE_ID}/assets/`, W = 1218, H = 1620;
     const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
     const c = cv.getContext("2d");
-    const ship = await load(A + `ship/ship-${S.shipVariant(state)}.png`); if (ship) c.drawImage(ship, 0, 0, W, H);
+    const ship = await load(A + `ship/ship-${S.shipVariant(state)}.webp`); if (ship) c.drawImage(ship, 0, 0, W, H);
     if (state.shield.on && state.systems.shields !== "destroyed") {
-      const sh = await load(A + `shields/shield-${state.shield.facing}.png`);
+      const sh = await load(A + `shields/shield-${state.shield.facing}.webp`);
       if (sh) {
         if (state.systems.shields === "damaged") {
           // Damaged Shield Generator → the field on the token goes amber/orange (matches the HUD "FAILING" warning).
@@ -3134,7 +3191,7 @@
       }
     }
     if (state.shield.secondary) {
-      const sc = await load(A + `shields/shield-${state.shield.secondary}.png`);
+      const sc = await load(A + `shields/shield-${state.shield.secondary}.webp`);
       if (sc) { c.save(); c.globalAlpha = 0.42; c.filter = "hue-rotate(92deg) saturate(1.2) brightness(0.72)"; c.drawImage(sc, 0, 0, W, H); c.restore(); }
     }
     return await new Promise((r) => cv.toBlob(r, "image/webp", 0.9));
