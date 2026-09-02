@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.19.3";
+  S.VERSION = "0.20.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -562,6 +562,7 @@
         mpMax: Number.isFinite(c.mpMax) && c.mpMax > 0 ? Math.floor(c.mpMax) : 0, // pilot: this turn's full pool (after nav mult)
         navMult: Number.isFinite(c.navMult) && c.navMult >= 1 ? c.navMult : 1,     // pilot: Science nav-support multiplier this turn
         gun: S.gun(c.gun) ? c.gun : null,                                          // gunner: which gun is selected in the turn bar
+        target: String(c.target || ""),   // gunner: which enemy ship this gun is laid on (persists across turns)
         prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
@@ -840,15 +841,20 @@
   /* ---------------------------------------------------------------------- */
 
   S.SHIP_PUBLIC_KEYS = ["id", "name", "faction", "cls", "disposition", "outcome",
-                        "sizeSq", "tokenId", "sceneId", "combatantId", "statuses", "known"];
+                        "sizeSq", "tokenId", "sceneId", "combatantId", "statuses", "known", "unresolved"];
 
   S.shipView = function (ship, { isGM = false, own = false } = {}) {
     if (!ship) return null;
     const full = { ...ship, own: !!own, known: { ac: true, shields: true, systems: true, crew: true, hull: true, deckmap: 3 } };
     if (isGM || own) return full;
     const r = ship.revealed || {};
+    // A rift vessel does not resolve. Its class is a tell — a "Corvette" label on
+    // something that ignores shields and AC would quietly reassure the crew — so
+    // it is withheld along with everything else until a scan gets through.
+    const unresolved = ship.faction === "rift" && !r.ac;
     const view = {
-      id: ship.id, name: ship.name, faction: ship.faction, cls: ship.cls,
+      id: ship.id, name: ship.name, faction: ship.faction, cls: unresolved ? "" : ship.cls,
+      unresolved,
       disposition: ship.disposition, outcome: ship.outcome, sizeSq: ship.sizeSq,
       tokenId: ship.tokenId, sceneId: ship.sceneId, combatantId: ship.combatantId,
       // Statuses are things you can SEE happening — a ship on fire is on fire.
@@ -1081,6 +1087,7 @@
 .sgfleet .fl-crest.none{border:1.5px dashed #46606e;border-radius:50%;}
 .sgfleet .fl-crest.own{display:flex;align-items:center;justify-content:center;color:#38e1c4;font-size:13px;}
 .sgfleet .fl-sub{font-size:10px;letter-spacing:1px;color:#6f97a6;margin:2px 0 5px;text-transform:uppercase;}
+.sgfleet .fl-sub.unres{color:#c98bff;}
 
 .sgfleet .fl-hp{position:relative;height:11px;border-radius:6px;background:#0a1c26;border:1px solid #12455a;overflow:hidden;}
 .sgfleet .fl-hp i{position:absolute;left:0;top:0;bottom:0;border-radius:6px;transition:width .45s cubic-bezier(.2,.7,.2,1);}
@@ -1289,6 +1296,9 @@
 .sgct .ct-move .pm-mp{font-size:13px;font-weight:700;color:var(--teal);background:#0a1c26;border:1px solid var(--edge2);border-radius:9px;padding:2px 9px;white-space:nowrap;}
 .sgct .ct-move .pm-nav{font-size:11px;font-weight:700;color:#0a1c26;background:#f2b03d;border-radius:8px;padding:2px 7px;white-space:nowrap;letter-spacing:.5px;box-shadow:0 0 8px rgba(242,176,61,.4);}
 .sgct .ct-move .pm-mp.bonus{color:var(--amber);border-color:var(--amber);}
+.sgct .pm-tgt{border-color:#f2b03d;color:#ffd98a;}
+.sgct .pm-warn{font-size:10px;letter-spacing:.5px;color:#e0454d;align-self:center;padding:0 4px;}
+.sgct .pm-warn.long{color:#f2b03d;}
 .sgct .pm-btn{font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;color:var(--ink);background:#0a1c26;
   border:1px solid var(--edge2);border-radius:7px;padding:4px 9px;white-space:nowrap;}
 .sgct .pm-btn:hover:not([disabled]){border-color:var(--teal);box-shadow:0 0 8px rgba(56,225,196,.35);color:var(--teal);}
@@ -1800,21 +1810,34 @@
   }
   // Inline gunner panel (under the seat): pick a gun → Back / Fire / Called Shot / Boarding Fire.
   // The firing-arc cone itself is drawn on the ship TOKEN on the map (drawGunCone), not here.
-  function gunnerPanel(c) {
+  function gunnerPanel(c, cctx) {
     if (c.station !== "gunner_port" && c.station !== "gunner_starboard") return "";
     if (!c.gun) {
       const btns = S.GUNS.map((g) => `<button class="pm-btn" data-gun="${g.id}" title="${g.longNote} at long range — arc shows on the ship token">${esc(g.label)} <b>+${g.toHit}</b> · <b>${g.damage}</b></button>`).join("");
       return `<div class="ct-gun" data-crew="${c.id}"><span class="pm-h">Gun</span>${btns}</div>`;
     }
     const g = S.gun(c.gun) || S.GUNS[0];
+    // Targets come through cctx already redacted, and each carries the range and
+    // facing worked out from the two tokens — so the gunner can see, before
+    // spending an action, whether the shot is even in range and which arc it hits.
+    const targets = (cctx?.targets || []).filter((t) => !t.outcome);
+    const cur = targets.find((t) => t.id === c.target);
+    const tgtBtn = targets.length
+      ? `<button class="pm-btn ${cur ? "pm-tgt" : ""}" data-target title="Pick which contact this gun is laid on">` +
+        (cur ? `🎯 ${esc(cur.name)}${cur.band ? ` <small>${esc(cur.band)}</small>` : ""}` : `🎯 No target`) + `</button>`
+      : "";
+    const rangeNote = cur && cur.band === "out"
+      ? `<span class="pm-warn" title="Out of range for this gun">out of range</span>`
+      : cur && cur.band === "long" ? `<span class="pm-warn long" title="Long range: ${esc(g.longNote)}">long · ${esc(g.longNote)}</span>` : "";
     return `<div class="ct-gun open" data-crew="${c.id}"><span class="pm-h">${esc(g.label)} <small>+${g.toHit} · ${g.damage} · <b style="color:#42d16a">close ${g.shortMax}</b>/<b style="color:#e0454d">far ${g.longMax}</b></small></span>` +
       `<button class="pm-btn" data-gunback title="Pick a different gun">← Back</button>` +
+      tgtBtn + rangeNote +
       `<button class="pm-btn gc-fire" data-fire title="Fire — to-hit + damage (gun bonus + STR + bonuses)">🔥 Fire</button>` +
       `<button class="pm-btn" data-called title="Called Shot — target an enemy system">🎯 Called Shot</button>` +
       `<button class="pm-btn" data-board title="Fire a crewmate at the enemy hull (spends your action)">🚀 Boarding Fire</button></div>`;
   }
   // The inline turn-bar panel for a seat: pilot maneuvers, or gunner guns. Empty for other stations.
-  function seatPanel(c) { return pilotPanel(c) || gunnerPanel(c); }
+  function seatPanel(c, cctx) { return pilotPanel(c) || gunnerPanel(c, cctx); }
   // Wire the pilot maneuver/move panels AND the gunner gun panels — shared by GM and player views.
   function wirePilotPanels(root, cctx) {
     root.querySelectorAll(".ct-move").forEach((el) => {
@@ -1829,6 +1852,7 @@
       const fire = el.querySelector("[data-fire]"); if (fire) fire.onclick = () => cctx.gunFire(id);
       const called = el.querySelector("[data-called]"); if (called) called.onclick = () => cctx.calledShot(id);
       const board = el.querySelector("[data-board]"); if (board) board.onclick = () => cctx.boardingFire(id);
+      const tgt = el.querySelector("[data-target]"); if (tgt) tgt.onclick = () => cctx.pickTarget && cctx.pickTarget(id);
     });
   }
 
@@ -1880,7 +1904,7 @@
           `<div class="ct-toks">${token("action", actionState(c), true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>` +
           `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Controlled by">${ctrlOpts}</select>` +
           `<span class="ct-x" data-remove title="Exclude from combat">✕</span></div></div>`;
-        const panel = seatPanel(c);
+        const panel = seatPanel(c, cctx);
         return panel ? `<div class="ct-seatwrap">${seat}${panel}</div>` : seat;
       }).join("") : `<div class="ct-empty">No crew in this fight — use “+ Add crew”.</div>`;
       const swap = combat.pendingSwap ? `<div class="ct-note">Station swap pending — awaiting confirmation…</div>` : "";
@@ -1930,7 +1954,7 @@
       const seat = `<div class="ct-seat mine" data-crew="${c.id}">` +
         `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">${stLabel}</div>${sub}</div>` +
         `<div class="ct-toks">${token("action", actionState(c), true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>${btn}</div>`;
-      const panel = seatPanel(c);
+      const panel = seatPanel(c, cctx);
       return panel ? `<div class="ct-seatwrap mine">${seat}${panel}</div>` : seat;
     }).join("");
     root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>${collapseBtn}</div>` +
@@ -2829,7 +2853,7 @@
       <div class="fl-art">${art}</div>
       <div>
         <div class="fl-name">${v.own ? `<span class="fl-crest own" title="Your ship">⬢</span>` : crestEl(fctx, v.faction)}<span>${esc(v.name)}</span></div>
-        <div class="fl-sub">${esc(cls ? cls.name : v.cls)}${v.own ? " · YOUR SHIP" : f ? ` · ${esc(f.short)}` : " · Unaligned"}</div>
+        <div class="fl-sub${v.unresolved ? " unres" : ""}">${v.unresolved ? "[UNRESOLVED]" : esc(cls ? cls.name : v.cls)}${v.own ? " · YOUR SHIP" : f ? ` · ${esc(f.short)}` : " · Unaligned"}</div>
         ${hullBar(v)}
         ${arcRow(v)}
         ${pipRow(v)}
@@ -2853,7 +2877,11 @@
       return head + hint + `<div class="fl-empty">Crew unknown — the Science officer has not scanned this hull deeply enough.</div>`;
     }
     const rows = Object.values(v.crew);
-    if (!rows.length) return head + hint + `<div class="fl-empty">No crew aboard. Nothing to board, nothing to break.</div>`;
+    if (!rows.length) {
+      return head + hint + `<div class="fl-empty">${v.own
+        ? "No stations manned yet — start ship combat and pick your seats."
+        : "No crew aboard. Nothing to board, nothing to break."}</div>`;
+    }
     const body = rows.map((c) => {
       const st = c.station ? (S.station(c.station)?.name || c.station) : "unassigned";
       return `<div class="fl-crewrow${c.dead ? " dead" : ""}" data-crew="${esc(c.id)}" title="${c.dead ? "Killed — this station is offline" : "Drive this seat"}">
@@ -3102,6 +3130,14 @@
     ok(tier2.shield.facing === "aft", "the shield tier reveals the facing");
     ok(tier2.crew.c1.name === "Captain", "the crew tier reveals the roster");
     ok(tier2.crew.c1.deck === undefined, "…but not their deck until the deck-map tier");
+    // a rift hull withholds even its class until it is scanned
+    const riftShip = S.normalizeShip({ id: "r1", name: "The Dark Crown", faction: "rift", cls: "corvette" });
+    const riftBlind = S.shipView(riftShip, { isGM: false });
+    ok(riftBlind.cls === "" && riftBlind.unresolved === true, "a rift hull does not resolve its class to a player");
+    ok(S.shipView(riftShip, { isGM: true }).cls === "corvette", "the GM still sees a rift hull's class");
+    riftShip.revealed.ac = true;
+    ok(S.shipView(riftShip, { isGM: false }).cls === "corvette", "a successful scan resolves it");
+
     secret.revealed.deckmap = 3;
     ok(S.shipView(secret, { isGM: false }).crew.c1.deck === 1, "the top scan tier reveals crew positions");
     // A status a player can plainly see (a burning ship) is not a leak.
@@ -3121,6 +3157,8 @@
     // --- combat normalize --------------------------------------------------
     const c = S.normalizeCombat({ active: true, turn: 4, crew: { x: { name: "Test", station: "pilot", mp: 3 } } });
     ok(c.turn === 4 && c.crew.x.station === "pilot" && c.crew.x.mp === 3, "combat normalize keeps crew fields");
+    ok(S.normalizeCombat({ crew: { g: { name: "G", station: "gunner_port", target: "e1" } } }).crew.g.target === "e1",
+       "a gunner's target survives normalize — a laid gun stays laid");
     ok(S.normalizeCombat({ crew: { y: { name: "Y", station: "not-a-station" } } }).crew.y.station === "", "invalid stations are dropped");
 
     return fails;
