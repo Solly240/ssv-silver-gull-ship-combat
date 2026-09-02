@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.20.0";
+  S.VERSION = "0.20.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -995,7 +995,7 @@
   /* ---------------------------------------------------------------------- */
 
   S.FLEET_CSS = `
-.sgfleet{position:fixed;inset:0;z-index:62;display:flex;flex-direction:column;overflow:hidden;
+.sgfleet{position:fixed;inset:0;z-index:72;display:flex;flex-direction:column;overflow:hidden;
   font-family:'Courier New',monospace;color:#cfeef0;
   background:radial-gradient(1200px 700px at 50% -10%,rgba(29,106,134,.22),transparent 60%),
              radial-gradient(900px 600px at 80% 110%,rgba(176,107,240,.10),transparent 55%),#03070d;}

@@ -1299,7 +1299,9 @@
       _bar.id = "ssv-combat-bar";
       document.body.appendChild(_bar);
     }
-    if (consoleOpen()) { _bar.style.display = "none"; return; }  // console shows its own tokens
+    // Both full-screen views carry their own seat/action UI, and the bar sits at a
+    // higher z-index than either, so it would otherwise draw straight over them.
+    if (consoleOpen() || fleetOpen()) { _bar.style.display = "none"; return; }
     _bar.style.display = "";
     try { S.renderTracker(_bar, combatCtx()); } catch (e) { console.error(`${MODULE_ID} | tracker render failed`, e); }
   }
