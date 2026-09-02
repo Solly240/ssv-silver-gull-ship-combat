@@ -990,7 +990,12 @@
   }
   async function endCombat() {
     if (!game.user.isGM) return;
-    const next = getCombat(); next.active = false; next.crew = {}; next.pendingSwap = null;
+    // Take the enemy ships, their tokens and their actors with it — otherwise the
+    // world quietly accumulates a folder of every hull ever spawned.
+    await gmClearFleet({ silent: true });
+    const next = getCombat();
+    next.active = false; next.crew = {}; next.pendingSwap = null;
+    next.ships = {}; next.initiative = []; next.activeShip = "gull"; next.round = 1;
     await saveCombat(next);
   }
   async function nextTurn() {
@@ -1780,15 +1785,53 @@
     if (!game.user.isGM) return;
     const next = getCombat(); const sh = next.ships[shipId];
     if (!sh) return;
-    if (sh.tokenId && sh.sceneId) {
-      const sc = game.scenes.get(sh.sceneId);
-      if (sc?.tokens.get(sh.tokenId)) await sc.deleteEmbeddedDocuments("Token", [sh.tokenId]);
-    }
-    if (sh.actorId) { try { await game.actors.get(sh.actorId)?.delete(); } catch (e) {} }
+    await destroyShipDocuments(sh);
     delete next.ships[shipId];
     next.initiative = (next.initiative || []).filter((e) => e.shipId !== shipId);
     await saveCombat(next);
     refreshFleet();
+  }
+
+  /** Delete the token and actor a ship record is bound to, wherever they are. */
+  async function destroyShipDocuments(sh) {
+    // By id first, then by flag: a token dragged to another scene, or an actor
+    // whose id was lost in an older build, still has to go somewhere.
+    for (const scene of game.scenes) {
+      const ids = scene.tokens.filter((t) => t.id === sh.tokenId
+        || (sh.actorId && t.actorId === sh.actorId)).map((t) => t.id);
+      if (ids.length) { try { await scene.deleteEmbeddedDocuments("Token", ids); } catch (e) {} }
+    }
+    const actor = (sh.actorId && game.actors.get(sh.actorId))
+      || game.actors.find((a) => a.getFlag(MODULE_ID, "shipId") === sh.id);
+    if (actor) { try { await actor.delete(); } catch (e) {} }
+  }
+
+  /**
+   * Remove every enemy ship, and sweep any flagged actor no live ship claims.
+   * Orphans are otherwise invisible: they sit in the folder, and the next fight
+   * starts with a sidebar full of last week's dead.
+   */
+  async function gmClearFleet({ silent = false } = {}) {
+    if (!game.user.isGM) return 0;
+    const next = getCombat();
+    let n = 0;
+    for (const sh of Object.values(next.ships)) { await destroyShipDocuments(sh); n++; }
+    next.ships = {};
+    next.initiative = [];
+    next.activeShip = "gull";
+    await saveCombat(next);
+    // Sweep anything left flagged as ours that no ship record claims.
+    const orphans = game.actors.filter((a) => a.getFlag(MODULE_ID, "fleet"));
+    for (const a of orphans) {
+      for (const scene of game.scenes) {
+        const ids = scene.tokens.filter((t) => t.actorId === a.id).map((t) => t.id);
+        if (ids.length) { try { await scene.deleteEmbeddedDocuments("Token", ids); } catch (e) {} }
+      }
+      try { await a.delete(); n++; } catch (e) {}
+    }
+    refreshFleet();
+    if (!silent && n) ui.notifications?.info(`Cleared ${n} enemy ship${n === 1 ? "" : "s"}.`);
+    return n;
   }
 
   /* ---- Live ship "icon" actor: its token image mirrors the S-menu ship + shield view ---- */
@@ -1970,6 +2013,7 @@
       hullIds: async () => (await loadFleet()).hulls.map((h) => h.id),
       findHull: async (q) => (await loadFleet()).hulls.filter((h) => new RegExp(q, "i").test(h.name + " " + h.id)).map((h) => h.id),
       rollInitiative: gmRollInitiative, endShipTurn: gmEndShipTurn, removeShip: gmRemoveShip,
+      clearFleet: gmClearFleet,
       getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,
       getCombat, enterCombat, endCombat, nextTurn };

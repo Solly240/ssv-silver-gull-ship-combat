@@ -718,7 +718,11 @@
       boardingParty: 0,
       morale: { cur: 4, max: 4 },      // Resolve. cur === null means it never breaks.
       revealed: { ac: false, shields: false, systems: false, crew: false, deckmap: 0 },
-      tokenId: "", sceneId: "", combatantId: "",
+      // The documents and art this record is bound to. actorId in particular is
+      // load-bearing: without it nothing can delete the actor when the ship goes,
+      // and every fight leaves a folder of orphans behind.
+      actorId: "", tokenId: "", sceneId: "", combatantId: "",
+      skin: "", art: "",
       sizeSq: [20, 30],
       outcome: ""                      // "" | derelict | destroyed | disabled | surrendered | fled
     };
@@ -760,8 +764,10 @@
         systems: !!stored.revealed?.systems, crew: !!stored.revealed?.crew,
         deckmap: Math.max(0, Math.min(3, num(stored.revealed?.deckmap, 0)))
       },
+      actorId: String(stored.actorId || ""),
       tokenId: String(stored.tokenId || ""), sceneId: String(stored.sceneId || ""),
       combatantId: String(stored.combatantId || ""),
+      skin: String(stored.skin || ""), art: String(stored.art || ""),
       sizeSq: Array.isArray(stored.sizeSq) && stored.sizeSq.length === 2
         ? [num(stored.sizeSq[0], 20), num(stored.sizeSq[1], 30)] : d.sizeSq,
       outcome: ["", "derelict", "destroyed", "disabled", "surrendered", "fled"].includes(stored.outcome) ? stored.outcome : ""
@@ -3067,6 +3073,10 @@
     ok(S.stationManned(enemy, "pilot") === false, "a dead pilot leaves the station unmanned");
     ok(S.normalizeShip({ faction: "not-real" }).faction === "", "an unknown faction normalises to unaligned");
     ok(S.normalizeShip({ hull: { cur: 999, max: 100 } }).hull.cur === 100, "hull is clamped to max");
+    const bound = S.normalizeShip({ id: "b1", actorId: "AAA", tokenId: "BBB", sceneId: "CCC", skin: "Junker", art: "x/y.png" });
+    ok(bound.actorId === "AAA", "actorId survives normalize — without it the enemy actor can never be deleted");
+    ok(bound.tokenId === "BBB" && bound.sceneId === "CCC", "token and scene bindings survive normalize");
+    ok(bound.skin === "Junker" && bound.art === "x/y.png", "the chosen skin and its art survive normalize");
     const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
     ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
        "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
