@@ -508,7 +508,11 @@
   S.defaultCombat = function () {
     const rolesEnabled = {};
     for (const st of S.STATIONS) rolesEnabled[st.id] = !!st.defaultUnlocked;
-    return { active: false, turn: 1, rolesEnabled, roster: S.defaultRoster(), crew: {}, pendingSwap: null };
+    return { active: false, turn: 1, round: 1, rolesEnabled, roster: S.defaultRoster(), crew: {},
+             pendingSwap: null,
+             ships: {},            // every ship in the engagement, the Gull included as "gull"
+             initiative: [],       // [{shipId, roll}] sorted high-to-low
+             activeShip: "gull" };
   };
 
   // Merge stored combat onto defaults so new fields/stations forward-migrate.
@@ -518,6 +522,12 @@
     const out = {
       active: !!stored.active,
       turn: Number.isFinite(stored.turn) ? stored.turn : 1,
+      round: Number.isFinite(stored.round) && stored.round > 0 ? Math.floor(stored.round) : (Number.isFinite(stored.turn) ? stored.turn : 1),
+      ships: S.normalizeShips(stored.ships),
+      initiative: Array.isArray(stored.initiative)
+        ? stored.initiative.filter((e) => e && e.shipId).map((e) => ({ shipId: String(e.shipId), roll: Number(e.roll) || 0 }))
+        : [],
+      activeShip: String(stored.activeShip || "gull"),
       rolesEnabled: { ...d.rolesEnabled },
       roster: Array.isArray(stored.roster) && stored.roster.length ? [] : S.defaultRoster(),
       crew: {},
@@ -560,6 +570,286 @@
   // Crew a given user currently operates (their own + any the GM handed them).
   S.crewControlledBy = function (combat, userId) {
     return Object.values(combat.crew).filter((c) => c.controllerUserId === userId);
+  };
+
+
+  /* ====================================================================== */
+  /*  The fleet: factions, classes, ship records                            */
+  /* ====================================================================== */
+
+  /* ---------------------------------------------------------------------- */
+  /*  Factions                                                               */
+  /*                                                                          */
+  /*  `politics` is the id in the ssv-silver-gull-politics module — those     */
+  /*  three move a real standing number when you kill or spare one of their   */
+  /*  hulls, and their crest is read live from that module so the colours     */
+  /*  match what the players already see in the Politics tab.                 */
+  /*  A hull with faction "" is unaligned: no crest, no standing, no          */
+  /*  signature ability. That is itself information at the table.             */
+  /* ---------------------------------------------------------------------- */
+
+  S.FACTIONS = {
+    "iron-directorate": {
+      name: "The Iron Directorate", short: "Directorate", politics: "iron-directorate",
+      color: "#8a939c", accent: "#e0343d", resolve: 8,
+      signature: "Armour X — every damage packet is reduced. Two Directorate hulls within 2 squares share a shield pool.",
+      wants: "To hold you in place.",
+      abilities: ["armour_plate", "shield_link", "blockade", "cyber_boarders", "siege_barrage", "point_defence", "reinforce", "lockdown"]
+    },
+    "apostles-threshold": {
+      name: "The Apostles of the Threshold", short: "Apostles", politics: "apostles-threshold",
+      color: "#3f8fe0", accent: "#d4af37", resolve: null,   // null = never breaks
+      signature: "Zeal — no morale. At half hull they enter Rapture. At 0 hull the three-module self-destruct fires.",
+      wants: "To die on top of you.",
+      abilities: ["self_destruct", "rapture", "reflector_shields", "plasma_lance", "boarding_pods", "zealot_charge", "martyr_ram", "no_parley"]
+    },
+    "sovereign-horizon": {
+      name: "The Sovereign Horizon", short: "Horizon", politics: "sovereign-horizon",
+      color: "#f2a03d", accent: "#e0552b", resolve: 4,
+      signature: "Ghost Contacts — they arrive unresolved, mixed with decoys. Slip: forfeit movement to halve a hit.",
+      wants: "Cargo, and an exit.",
+      abilities: ["ghost_contacts", "slip", "engage_cloak", "decoy_drop", "smuggler_hold", "overtune_engine", "illegal_gun", "cut_and_run"]
+    },
+    "frostwatch": {
+      name: "The Frostwatch", short: "Frostwatch", politics: null,
+      color: "#7fd4e8", accent: "#cfeef0", resolve: 6,
+      signature: "Precision — never targets hull; every shot is a free Called Shot. Compliance: hold fire and their damage halves.",
+      wants: "Compliance.",
+      abilities: ["precision_fire", "compliance", "deep_scan", "quiet_approach", "warning_shot", "sensor_lock", "impound", "escort_wing"]
+    },
+    "rift": {
+      name: "Rift Vessel", short: "Rift", politics: null,
+      color: "#b06bf0", accent: "#ff4fd8", resolve: null,
+      signature: "Unmeasurable. Ignores shields, reduction and AC. Looking at it is the danger.",
+      wants: "Nothing you can offer.",
+      abilities: ["unmeasurable", "gravitic_unmaking", "phase_discontinuity", "it_notices_you", "rewrite_the_board", "no_wreck"]
+    }
+  };
+  S.faction = (id) => (id && S.FACTIONS[id]) || null;
+  S.factionName = (id) => S.faction(id)?.short || "Unaligned";
+
+  /* ---------------------------------------------------------------------- */
+  /*  Hull classes                                                            */
+  /*                                                                          */
+  /*  `sizeSq` is the hull's real footprint in grid squares, read off the map  */
+  /*  pack's own exterior scene. It drives BOTH the stat band and the token    */
+  /*  silhouette — but never directly: a 100x135 hull as a 100x135 token on a  */
+  /*  40x30 space board is nonsense, so the class buckets it.                  */
+  /*                                                                          */
+  /*  Hull numbers come from the tuning laws, not taste: the Gull puts out     */
+  /*  ~21 raw damage a round, and a fight should last 4-6 rounds.              */
+  /* ---------------------------------------------------------------------- */
+
+  S.SHIP_CLASSES = [
+    { id: "fighter",   name: "Fighter",    maxSide: 14, token: [1, 1], scale: 0.62, hull: [15, 25],   ac: 15, crew: [1, 2],   mp: 8,
+      blurb: "One hit, one kill. Four of them fly as a single squadron token." },
+    { id: "corvette",  name: "Corvette",   maxSide: 40, token: [1, 1], scale: 1.0,  hull: [100, 140], ac: 13, crew: [4, 8],   mp: 6,
+      blurb: "The Gull's own weight class." },
+    { id: "frigate",   name: "Frigate",    maxSide: 60, token: [2, 2], scale: 1.0,  hull: [160, 220], ac: 12, crew: [8, 16],  mp: 4,
+      blurb: "Slower, tougher, hits from more arcs." },
+    { id: "cruiser",   name: "Cruiser",    maxSide: 90, token: [3, 3], scale: 1.0,  hull: [110, 110], ac: 11, crew: [16, 30], mp: 3, sections: 4,
+      blurb: "Four sections, each with its own guns and its own hull. Kill it a quarter at a time." },
+    { id: "capital",   name: "Capital",    maxSide: Infinity, token: [4, 4], scale: 1.0, hull: [0, 0], ac: 10, crew: [30, 60], mp: 2, isLevel: true,
+      blurb: "Not an enemy — a level. No hull bar; fight its batteries, board it, blow its reactor." }
+  ];
+  S.shipClass = (id) => S.SHIP_CLASSES.find((c) => c.id === id) || null;
+  /** Pick a class from the hull's real footprint [w,h] in grid squares. */
+  S.classFor = function (sizeSq) {
+    const side = Array.isArray(sizeSq) ? Math.max(sizeSq[0] || 0, sizeSq[1] || 0) : Number(sizeSq) || 0;
+    return S.SHIP_CLASSES.find((c) => side <= c.maxSide) || S.SHIP_CLASSES[S.SHIP_CLASSES.length - 1];
+  };
+  /** Token footprint in squares, preserving the hull's aspect so nose-up art doesn't distort. */
+  S.tokenSizeFor = function (sizeSq) {
+    const cls = S.classFor(sizeSq);
+    const [w, h] = Array.isArray(sizeSq) ? sizeSq : [sizeSq, sizeSq];
+    const [tw, th] = cls.token;
+    const aspect = (Number(h) || 1) / (Number(w) || 1);
+    // Long hulls get an extra square along their length rather than a fatter square.
+    if (aspect >= 1.5) return { width: tw, height: Math.max(th, Math.round(tw * Math.min(aspect, 2.2))), scale: cls.scale, cls: cls.id };
+    if (aspect <= 1 / 1.5) return { width: Math.max(tw, Math.round(th * Math.min(1 / aspect, 2.2))), height: th, scale: cls.scale, cls: cls.id };
+    return { width: tw, height: th, scale: cls.scale, cls: cls.id };
+  };
+
+  S.DOCTRINES = {
+    brawler:   { name: "Brawler",   hint: "Close to 1-2 and hold there. Fire every round." },
+    sniper:    { name: "Sniper",    hint: "Stay at long range. Called Shot the engines first." },
+    ambusher:  { name: "Ambusher",  hint: "Stay unresolved until they are within 3, then alpha strike." },
+    boarder:   { name: "Boarder",   hint: "Close to 1 and launch pods. The guns are a distraction." },
+    turtle:    { name: "Turtle",    hint: "Shields to the threatened arc. Repair. Outlast them." },
+    escort:    { name: "Escort",    hint: "Screen the biggest friendly. Intercept boarders." },
+    predator:  { name: "Predator",  hint: "Ignore the escorts. Go for the flagship." }
+  };
+  S.doctrine = (id) => S.DOCTRINES[id] || S.DOCTRINES.brawler;
+
+  /* ---------------------------------------------------------------------- */
+  /*  A ship record                                                          */
+  /*                                                                          */
+  /*  The Gull and every enemy share this shape, so one set of helpers serves  */
+  /*  both. The Gull keeps its authoritative copy in the `shipState` setting;  */
+  /*  combatState.ships.gull is a view over it.                                */
+  /* ---------------------------------------------------------------------- */
+
+  S.DISPOSITIONS = ["hostile", "neutral", "ally"];
+
+  S.defaultShip = function (over = {}) {
+    return {
+      id: over.id || "ship",
+      profileId: over.profileId || "",
+      name: over.name || "Unknown Vessel",
+      faction: over.faction || "",
+      cls: over.cls || "corvette",
+      doctrine: over.doctrine || "brawler",
+      disposition: S.DISPOSITIONS.includes(over.disposition) ? over.disposition : "hostile",
+      hull: { cur: 120, max: 120 },
+      ac: { base: 13 },
+      armour: 0,
+      resist: {},
+      systems: {}, systemHp: {},
+      shield: { on: true, facing: "fore", secondary: null },
+      guns: [],
+      abilities: [],
+      statuses: [],
+      crew: {},
+      boardingParty: 0,
+      morale: { cur: 4, max: 4 },      // Resolve. cur === null means it never breaks.
+      revealed: { ac: false, shields: false, systems: false, crew: false, deckmap: 0 },
+      tokenId: "", sceneId: "", combatantId: "",
+      sizeSq: [20, 30],
+      outcome: ""                      // "" | derelict | destroyed | disabled | surrendered | fled
+    };
+  };
+
+  S.normalizeShip = function (stored) {
+    const d = S.defaultShip(stored || {});
+    if (!stored || typeof stored !== "object") return d;
+    const num = (v, f) => (Number.isFinite(Number(v)) ? Number(v) : f);
+    const out = {
+      ...d,
+      id: String(stored.id || d.id),
+      profileId: String(stored.profileId || ""),
+      name: String(stored.name || d.name),
+      faction: S.faction(stored.faction) ? stored.faction : "",
+      cls: S.shipClass(stored.cls) ? stored.cls : d.cls,
+      doctrine: S.DOCTRINES[stored.doctrine] ? stored.doctrine : d.doctrine,
+      disposition: S.DISPOSITIONS.includes(stored.disposition) ? stored.disposition : d.disposition,
+      hull: { max: Math.max(1, num(stored.hull?.max, d.hull.max)), cur: num(stored.hull?.cur, d.hull.cur) },
+      ac: { base: Math.max(1, num(stored.ac?.base, d.ac.base)) },
+      armour: Math.max(0, num(stored.armour, 0)),
+      resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
+      systems: {}, systemHp: {},
+      shield: {
+        on: !!stored.shield?.on,
+        facing: S.FACINGS.includes(stored.shield?.facing) ? stored.shield.facing : "fore",
+        secondary: S.FACINGS.includes(stored.shield?.secondary) ? stored.shield.secondary : null
+      },
+      guns: Array.isArray(stored.guns) ? stored.guns.filter((g) => g && g.id).map((g) => ({ ...g })) : [],
+      abilities: Array.isArray(stored.abilities) ? stored.abilities.map(String) : [],
+      statuses: S.normalizeStatuses(stored.statuses),
+      crew: {},
+      boardingParty: Math.max(0, num(stored.boardingParty, 0)),
+      morale: stored.morale && stored.morale.cur === null
+        ? { cur: null, max: null }
+        : { max: Math.max(1, num(stored.morale?.max, d.morale.max)), cur: num(stored.morale?.cur, d.morale.max) },
+      revealed: {
+        ac: !!stored.revealed?.ac, shields: !!stored.revealed?.shields,
+        systems: !!stored.revealed?.systems, crew: !!stored.revealed?.crew,
+        deckmap: Math.max(0, Math.min(3, num(stored.revealed?.deckmap, 0)))
+      },
+      tokenId: String(stored.tokenId || ""), sceneId: String(stored.sceneId || ""),
+      combatantId: String(stored.combatantId || ""),
+      sizeSq: Array.isArray(stored.sizeSq) && stored.sizeSq.length === 2
+        ? [num(stored.sizeSq[0], 20), num(stored.sizeSq[1], 30)] : d.sizeSq,
+      outcome: ["", "derelict", "destroyed", "disabled", "surrendered", "fled"].includes(stored.outcome) ? stored.outcome : ""
+    };
+    // Systems: an enemy hull carries its own list, which is usually not the Gull's eight.
+    const ids = Object.keys(stored.systemHp || stored.systems || {});
+    for (const id of (ids.length ? ids : S.SYSTEMS.map((x) => x.id))) {
+      const M = S.SYSTEM_HP_MAX;
+      const cur = Math.max(0, Math.min(num(stored.systemHp?.[id]?.cur, M), M));
+      out.systemHp[id] = { cur, max: M };
+      out.systems[id] = S.systemState(out.systemHp[id]);
+    }
+    out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
+    if (out.morale.cur !== null) out.morale.cur = Math.max(0, Math.min(out.morale.cur, out.morale.max));
+    for (const [cid, c] of Object.entries(stored.crew || {})) {
+      if (!c || !c.name) continue;
+      out.crew[cid] = {
+        id: cid, name: String(c.name), roleId: String(c.roleId || ""),
+        station: c.station && S.station(c.station) ? c.station : "",
+        action: !!c.action, bonus: !!c.bonus,
+        granted: Math.max(0, num(c.granted, 0)),
+        maneuver: S.MANEUVERS[c.maneuver] ? c.maneuver : null,
+        mp: Math.max(0, num(c.mp, 0)), mpMax: Math.max(0, num(c.mpMax, 0)),
+        navMult: Math.max(1, num(c.navMult, 1)),
+        gun: c.gun || null, target: String(c.target || ""),
+        actorId: String(c.actorId || ""), tokenId: String(c.tokenId || ""),
+        deck: Math.max(1, num(c.deck, 1)),
+        dead: !!c.dead
+      };
+    }
+    return out;
+  };
+
+  S.normalizeShips = function (stored) {
+    const out = {};
+    for (const [id, sh] of Object.entries(stored || {})) {
+      if (!sh || typeof sh !== "object") continue;
+      out[id] = S.normalizeShip({ ...sh, id });
+    }
+    return out;
+  };
+
+  /** Crew still able to work a station. */
+  S.liveCrew = (ship) => Object.values(ship?.crew || {}).filter((c) => !c.dead);
+  /** A station is offline if nobody living is sitting at it. */
+  S.stationManned = (ship, station) => S.liveCrew(ship).some((c) => c.station === station);
+  /** A gun is offline once its gunner is dead — the rule from ship-combat.md, automatic. */
+  S.gunOnline = function (ship, gunId) {
+    if (S.hasStatus(ship, "weapon_offline")) {
+      const st = S.getStatus(ship, "weapon_offline");
+      if (!st.data?.gun || st.data.gun === gunId) return false;
+    }
+    if (!S.systemWorks(ship, "weapons")) return false;
+    return true;
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  The reveal boundary                                                    */
+  /*                                                                          */
+  /*  ONE function decides what a given viewer may see of a ship. Renderers    */
+  /*  are handed the result and never the record, so they cannot leak; the     */
+  /*  selftest asserts a player view carries no unrevealed key. Secrecy is     */
+  /*  UI-level by design — but keeping it to one chokepoint means it can be    */
+  /*  upgraded to a real GM-side vault later without touching a renderer.      */
+  /* ---------------------------------------------------------------------- */
+
+  S.SHIP_PUBLIC_KEYS = ["id", "name", "faction", "cls", "disposition", "outcome",
+                        "sizeSq", "tokenId", "sceneId", "combatantId", "statuses", "known"];
+
+  S.shipView = function (ship, { isGM = false, own = false } = {}) {
+    if (!ship) return null;
+    const full = { ...ship, known: { ac: true, shields: true, systems: true, crew: true, hull: true, deckmap: 3 } };
+    if (isGM || own) return full;
+    const r = ship.revealed || {};
+    const view = {
+      id: ship.id, name: ship.name, faction: ship.faction, cls: ship.cls,
+      disposition: ship.disposition, outcome: ship.outcome, sizeSq: ship.sizeSq,
+      tokenId: ship.tokenId, sceneId: ship.sceneId, combatantId: ship.combatantId,
+      // Statuses are things you can SEE happening — a ship on fire is on fire.
+      statuses: (ship.statuses || []).filter((s) => S.STATUSES[s.id]?.kind !== "good" || s.id === "cloaked"),
+      known: { ac: !!r.ac, shields: !!r.shields, systems: !!r.systems, crew: !!r.crew, hull: !!r.ac, deckmap: r.deckmap || 0 }
+    };
+    if (r.ac) { view.ac = { base: ship.ac.base }; view.armour = ship.armour; view.resist = { ...ship.resist }; view.hull = { ...ship.hull }; }
+    if (r.shields) view.shield = { ...ship.shield };
+    if (r.systems) { view.systems = { ...ship.systems }; view.systemHp = JSON.parse(JSON.stringify(ship.systemHp || {})); }
+    if (r.crew) {
+      view.crew = {};
+      for (const [cid, c] of Object.entries(ship.crew || {})) {
+        view.crew[cid] = { id: cid, name: c.name, roleId: c.roleId, station: c.station, dead: c.dead,
+                           ...(r.deckmap >= 3 ? { deck: c.deck, tokenId: c.tokenId } : {}) };
+      }
+    }
+    return view;
   };
 
   /* ---------------------------------------------------------------------- */
@@ -2335,6 +2625,87 @@
     }
     ok(S.STATIONS.length === 15, "there should be 15 stations");
     ok(S.profRoles().length === 7, "seven proficiency roles");
+
+
+    // --- hull classes and token silhouettes --------------------------------
+    ok(S.classFor([7, 7]).id === "fighter", "a 7x7 hull is a fighter");
+    ok(S.classFor([26, 40]).id === "corvette", "the Razorbill (the Gull) is a corvette");
+    ok(S.classFor([49, 37]).id === "frigate", "a 49-square hull is a frigate");
+    ok(S.classFor([85, 85]).id === "cruiser", "an 85-square hull is a cruiser");
+    ok(S.classFor([100, 135]).id === "capital", "the Platanus is a capital");
+    // Every real hull footprint read off the packs must land in a sane token size.
+    const REAL_HULLS = [[24,38],[37,49],[39,48],[36,45],[39,45],[9,14],[33,48],[25,39],[21,35],[19,30],
+      [19,33],[20,48],[29,31],[19,31],[24,51],[32,20],[39,56],[31,54],[36,53],[41,33],[17,28],[30,39],
+      [41,41],[27,42],[25,36],[30,35],[58,86],[20,32],[24,34],[50,50],[20,32],[31,45],[24,45],[85,85],
+      [100,135],[35,55],[26,40],[17,28],[41,72],[24,36],[39,59],[63,30],[9,6],[23,23],[7,7],[7,6],
+      [35,35],[11,19],[29,36],[55,80],[31,43],[27,35],[33,30],[11,11]];
+    for (const sz of REAL_HULLS) {
+      const t = S.tokenSizeFor(sz);
+      ok(t.width >= 1 && t.height >= 1 && t.width <= 6 && t.height <= 6,
+         `hull ${sz} produced a token of ${t.width}x${t.height} — outside 1..6`);
+      ok(!!S.shipClass(t.cls), `hull ${sz} produced an unknown class ${t.cls}`);
+    }
+    ok(S.tokenSizeFor([20, 48]).height > S.tokenSizeFor([20, 48]).width, "a long hull gets a long token");
+    ok(S.tokenSizeFor([63, 30]).width > S.tokenSizeFor([63, 30]).height, "a wide hull gets a wide token");
+
+    // --- factions -----------------------------------------------------------
+    ok(S.factionName("") === "Unaligned", "no faction reads as Unaligned");
+    ok(S.faction("apostles-threshold").resolve === null, "the Apostles never break");
+    ok(S.faction("rift").resolve === null, "rift vessels never break");
+    for (const [id, f] of Object.entries(S.FACTIONS)) {
+      ok(!!f.name && !!f.short && !!f.signature && !!f.wants, `faction ${id} is missing copy`);
+      ok(Array.isArray(f.abilities) && f.abilities.length >= 6, `faction ${id} needs an ability pool`);
+    }
+    const pol = Object.values(S.FACTIONS).filter((f) => f.politics).length;
+    ok(pol === 3, `exactly three factions should map to the politics module, found ${pol}`);
+
+    // --- ship records round-trip -------------------------------------------
+    const enemy = S.normalizeShip({ id: "e1", name: "Test Hull", faction: "iron-directorate", cls: "frigate",
+      hull: { cur: 180, max: 200 }, armour: 3, guns: [{ id: "g1", label: "Gun", toHit: 4, damage: "2d8", shortMax: 3, longMax: 7 }],
+      crew: { c1: { name: "Gunner", station: "gunner_port" }, c2: { name: "Dead One", station: "pilot", dead: true } } });
+    ok(enemy.hull.cur === 180 && enemy.armour === 3, "ship fields survive normalize");
+    ok(S.liveCrew(enemy).length === 1, "dead crew are not live crew");
+    ok(S.stationManned(enemy, "gunner_port") === true, "a manned station reads as manned");
+    ok(S.stationManned(enemy, "pilot") === false, "a dead pilot leaves the station unmanned");
+    ok(S.normalizeShip({ faction: "not-real" }).faction === "", "an unknown faction normalises to unaligned");
+    ok(S.normalizeShip({ hull: { cur: 999, max: 100 } }).hull.cur === 100, "hull is clamped to max");
+
+    // --- the reveal boundary (the leak audit) -------------------------------
+    const secret = S.normalizeShip({ id: "s1", name: "Ghost", hull: { cur: 40, max: 200 }, ac: { base: 17 },
+      armour: 6, shield: { on: true, facing: "aft" }, crew: { c1: { name: "Captain", station: "captain" } } });
+    const gmView = S.shipView(secret, { isGM: true });
+    ok(gmView.hull.cur === 40 && gmView.ac.base === 17, "the GM sees everything");
+    const blind = S.shipView(secret, { isGM: false });
+    for (const k of Object.keys(blind)) {
+      ok(S.SHIP_PUBLIC_KEYS.includes(k), `an unscanned player view leaked "${k}"`);
+    }
+    ok(blind.hull === undefined && blind.ac === undefined && blind.armour === undefined,
+       "an unscanned player learns no hull, AC or armour");
+    ok(blind.crew === undefined, "an unscanned player learns no crew");
+    secret.revealed.ac = true;
+    const tier1 = S.shipView(secret, { isGM: false });
+    ok(tier1.ac.base === 17 && tier1.hull.cur === 40, "a scan reveals AC and hull");
+    ok(tier1.shield === undefined, "…but not the shield facing until that tier");
+    secret.revealed.shields = true; secret.revealed.crew = true;
+    const tier2 = S.shipView(secret, { isGM: false });
+    ok(tier2.shield.facing === "aft", "the shield tier reveals the facing");
+    ok(tier2.crew.c1.name === "Captain", "the crew tier reveals the roster");
+    ok(tier2.crew.c1.deck === undefined, "…but not their deck until the deck-map tier");
+    secret.revealed.deckmap = 3;
+    ok(S.shipView(secret, { isGM: false }).crew.c1.deck === 1, "the top scan tier reveals crew positions");
+    // A status a player can plainly see (a burning ship) is not a leak.
+    S.applyStatus(secret, "on_fire", { round: 1 });
+    ok(S.shipView(secret, { isGM: false }).statuses.some((x) => x.id === "on_fire"), "visible statuses stay visible");
+    S.applyStatus(secret, "hidden", { round: 1 });
+    ok(!S.shipView(secret, { isGM: false }).statuses.some((x) => x.id === "hidden"), "a ship in cover does not advertise it");
+
+    // --- combat state carries the fleet ------------------------------------
+    const fc = S.normalizeCombat({ active: true, round: 3, activeShip: "e1",
+      ships: { e1: { name: "E", hull: { cur: 50, max: 60 } } }, initiative: [{ shipId: "e1", roll: 17 }] });
+    ok(fc.round === 3 && fc.activeShip === "e1", "round and active ship survive");
+    ok(fc.ships.e1.hull.cur === 50, "ships survive normalizeCombat");
+    ok(fc.initiative[0].roll === 17, "initiative survives");
+    ok(S.normalizeCombat({}).ships && Object.keys(S.normalizeCombat({}).ships).length === 0, "a fresh combat has no ships");
 
     // --- combat normalize --------------------------------------------------
     const c = S.normalizeCombat({ active: true, turn: 4, crew: { x: { name: "Test", station: "pilot", mp: 3 } } });
