@@ -1959,7 +1959,16 @@
     staleScriptWarning();
     const mod = game.modules.get(MODULE_ID);
     if (mod) mod.api = { open: openShipHUD, openFleet, loadFleet, dumpFleet,
-      spawnShip: (hullId, opts) => { const h = hullById(hullId); return h ? gmSpawnShip(h, { skin: Object.keys(h.skins)[0], tier: 1, crew: h.crew.max, disp: "hostile", ...opts }) : null; },
+      // Awaits the catalogue: called straight from a macro or the console, FLEET
+      // has usually not been fetched yet, and hullById would silently return null.
+      spawnShip: async (hullId, opts = {}) => {
+        await loadFleet();
+        const h = hullById(hullId);
+        if (!h) { ui.notifications?.warn(`No hull "${hullId}". Try SilverGullShip.hullIds().`); return null; }
+        return gmSpawnShip(h, { skin: Object.keys(h.skins)[0], tier: 1, crew: h.crew.max, disp: "hostile", ...opts });
+      },
+      hullIds: async () => (await loadFleet()).hulls.map((h) => h.id),
+      findHull: async (q) => (await loadFleet()).hulls.filter((h) => new RegExp(q, "i").test(h.name + " " + h.id)).map((h) => h.id),
       rollInitiative: gmRollInitiative, endShipTurn: gmEndShipTurn, removeShip: gmRemoveShip,
       getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,
