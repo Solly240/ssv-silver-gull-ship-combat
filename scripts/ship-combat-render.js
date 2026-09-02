@@ -116,9 +116,10 @@
     },
     pilot: {
       main: [
-        N("evasive", "Evasive Maneuvers", "+5 ship AC; forward gunners at disadvantage; 5 Movement Points."),
-        N("steady", "Steady Approach", "+0 AC; gunners normal; 3 Movement Points."),
-        N("aggressive", "Aggressive Positioning", "−5 AC; forward gunners advantage; 2 Movement Points; enables Ram.")
+        N("evasive", "Evasive Maneuvers", "+4 ship AC; forward gunners at disadvantage; 6 Movement Points."),
+        N("steady", "Steady Approach", "+0 AC; gunners normal; 4 Movement Points."),
+        N("come_about", "Come About", "No AC change; forward gunners get +2 to hit. 2 Movement Points."),
+        N("aggressive", "Aggressive Positioning", "−4 AC; forward gunners advantage; 3 Movement Points; enables Ram.")
       ],
       bonus: [N("reposition", "Reposition", "Spend Movement Points: Move Forward, Rotate 45°/90°, or Enter Hiding.")]
     },
@@ -169,7 +170,20 @@
   };
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
   // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk) + a ship-AC modifier. Chosen as the Main action.
-  S.MANEUVERS = { evasive: { label: "Evasive", mp: 6, ac: 5 }, steady: { label: "Steady", mp: 4, ac: 0 }, aggressive: { label: "Aggressive", mp: 3, ac: -5 } };
+  // Pilot posture. AC spreads are ±4, not ±5: with shields moved off AC entirely,
+  // ±5 on top of a 13 base put the ship outside the band where a d20 means
+  // anything. `gun` is the modifier the forward gunners get, and `gunAdv` the
+  // advantage state they fire under. MP keeps the +1 pilot perk already baked in.
+  S.MANEUVERS = {
+    evasive:    { label: "Evasive",    mp: 6, ac:  4, gun:  0, gunAdv: -1, status: "evasive",
+                  blurb: "+4 ship AC; forward gunners fire at disadvantage." },
+    steady:     { label: "Steady",     mp: 4, ac:  0, gun:  0, gunAdv:  0, status: null,
+                  blurb: "No modifier either way." },
+    come_about: { label: "Come About", mp: 2, ac:  0, gun: +2, gunAdv:  0, status: null,
+                  blurb: "Line the ship up: forward gunners get +2 to hit. The Pilot's move that serves gunnery." },
+    aggressive: { label: "Aggressive", mp: 3, ac: -4, gun:  0, gunAdv: +1, status: "aggressive",
+                  blurb: "−4 ship AC; forward gunners fire with advantage; enables Ram." }
+  };
   // Fuel each move burns (players only — anything the GM drives is free). Rotate 45 = 1, Rotate 90 = 2, Forward = 4.
   S.MOVE_FUEL = { rotL45: 1, rotR45: 1, rotL90: 2, rotR90: 2, forward: 4 };
   // The ship's two forward-mounted mono-gun turrets. A gunner (port or starboard seat) picks which gun to fire.
@@ -197,7 +211,141 @@
     engage: 12, burst: 15, phase: 10, decoy: 8, stealth: 6
   };
   S.actionPower = (a) => (a && S.ACTION_POWER[a.id]) || 0;
-  // Effective per-facing ship AC = base (GM) + pilot maneuver (all sides) + directional shield bonuses.
+
+  /* ---------------------------------------------------------------------- */
+  /*  Status effects                                                         */
+  /*                                                                          */
+  /*  Every entry in the status appendix of ship/ship-combat.md, as data.      */
+  /*  A ship carries `statuses: [{id, src, expiresRound, data}]`; the engine   */
+  /*  never reads a status's rules text, only the fields below.                */
+  /*                                                                          */
+  /*  scope tells expireStatuses when to drop it:                             */
+  /*    "round"    — until the end of the owning ship's next turn             */
+  /*    "rounds"   — a counted duration (expiresRound is set on apply)        */
+  /*    "until"    — cleared by an event (fire, move, repair, a Patch Job)    */
+  /*    "next-hit" — consumed by the next hit that lands                      */
+  /* ---------------------------------------------------------------------- */
+
+  S.STATUSES = {
+    // --- Pilot posture -----------------------------------------------------
+    evasive:          { label: "Evasive",        kind: "good", scope: "round",    ac: 4,
+                        blurb: "+4 AC; forward gunners fire at disadvantage." },
+    aggressive:       { label: "Aggressive",     kind: "bad",  scope: "round",    ac: -4,
+                        blurb: "−4 AC; forward gunners fire with advantage; enables Ram." },
+    hidden:           { label: "In Cover",       kind: "good", scope: "until",    incomingAdv: -1,
+                        blurb: "Attacks against you have disadvantage until you move or fire." },
+    ramming:          { label: "Ramming",        kind: "warn", scope: "round",
+                        blurb: "Committed to a ram — you cannot change maneuver this round." },
+
+    // --- Shields & systems -------------------------------------------------
+    shields_down:     { label: "Shields Down",   kind: "bad",  scope: "rounds",   noShield: true,
+                        blurb: "No shield damage reduction on any facing." },
+    engines_disabled: { label: "Engines Down",   kind: "bad",  scope: "rounds",   noMove: true, ac: -2,
+                        blurb: "No Movement Points and no maneuver modifier." },
+    weapon_offline:   { label: "Weapon Offline", kind: "bad",  scope: "rounds",
+                        blurb: "One gun cannot fire." },
+
+    // --- Applied by weapons ------------------------------------------------
+    frozen:           { label: "Frozen",         kind: "bad",  scope: "next-hit", incomingAdv: 1, incomingMult: 2,
+                        blurb: "The next kinetic hit has advantage and deals double damage." },
+    grappled:         { label: "Grappled",       kind: "bad",  scope: "rounds",   noMove: true, incomingAdv: 1,
+                        blurb: "No movement; attacks against you have advantage; rams deal double." },
+    on_fire:          { label: "On Fire",        kind: "bad",  scope: "until",    dot: "1d4",
+                        blurb: "1d4 hull at the start of your turn until patched or repaired." },
+
+    // --- Information & boarding -------------------------------------------
+    painted:          { label: "Painted",        kind: "warn", scope: "rounds",   scanAdv: 1,
+                        blurb: "The next scan of this ship is made with advantage." },
+    boarded:          { label: "Boarded",        kind: "warn", scope: "until",
+                        blurb: "Enemy crew are physically aboard." },
+    cloaked:          { label: "Cloaked",        kind: "good", scope: "until",    incomingAdv: -1,
+                        blurb: "Undetectable; attacks against you have disadvantage until you fire." },
+
+    // --- People ------------------------------------------------------------
+    station_shock:    { label: "Station Shock",  kind: "bad",  scope: "round",
+                        blurb: "Knocked off the chair — spend your Bonus re-seating, or lose it." },
+    adrift:           { label: "Crew Adrift",    kind: "bad",  scope: "until",
+                        blurb: "A crew member is in open space. Combat cannot end until they are recovered." }
+  };
+  S.status = (id) => S.STATUSES[id] || null;
+  S.STATUS_IDS = Object.keys(S.STATUSES);
+
+  // Normalise whatever is stored into a clean status array.
+  S.normalizeStatuses = function (list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (const s of list) {
+      if (!s || !S.STATUSES[s.id]) continue;
+      out.push({
+        id: String(s.id),
+        src: String(s.src || ""),
+        expiresRound: Number.isFinite(s.expiresRound) ? s.expiresRound : null,
+        data: (s.data && typeof s.data === "object") ? { ...s.data } : {}
+      });
+    }
+    return out;
+  };
+
+  S.hasStatus = (ship, id) => !!(ship?.statuses || []).some((s) => s.id === id);
+  S.getStatus = (ship, id) => (ship?.statuses || []).find((s) => s.id === id) || null;
+
+  /** Add a status. `rounds` only means anything for scope:"rounds". Re-applying refreshes. */
+  S.applyStatus = function (ship, id, { src = "", rounds = 1, round = 1, data = {} } = {}) {
+    const def = S.STATUSES[id];
+    if (!ship || !def) return null;
+    ship.statuses = S.normalizeStatuses(ship.statuses);
+    const expiresRound = def.scope === "rounds" ? round + Math.max(1, rounds)
+      : def.scope === "round" ? round + 1 : null;
+    const existing = ship.statuses.find((s) => s.id === id);
+    if (existing) {
+      // Refresh rather than stack — a second Shields Down should not mean two of them.
+      existing.src = src || existing.src;
+      existing.data = { ...existing.data, ...data };
+      if (expiresRound != null) existing.expiresRound = Math.max(existing.expiresRound ?? 0, expiresRound);
+      return existing;
+    }
+    const st = { id, src, expiresRound, data: { ...data } };
+    ship.statuses.push(st);
+    return st;
+  };
+
+  S.clearStatus = function (ship, id) {
+    if (!ship) return false;
+    const before = (ship.statuses || []).length;
+    ship.statuses = S.normalizeStatuses(ship.statuses).filter((s) => s.id !== id);
+    return ship.statuses.length !== before;
+  };
+
+  /** Drop everything whose clock has run out. Called at the start of a ship's turn. */
+  S.expireStatuses = function (ship, round) {
+    if (!ship) return [];
+    const before = S.normalizeStatuses(ship.statuses);
+    const kept = before.filter((s) => s.expiresRound == null || s.expiresRound > round);
+    ship.statuses = kept;
+    return before.filter((s) => !kept.includes(s)).map((s) => s.id);
+  };
+
+  /**
+   * Everything the rest of the engine needs to know about a ship's statuses,
+   * flattened into one object. Pure: it reads, it never writes.
+   */
+  S.statusMods = function (ship) {
+    const out = { ac: 0, incomingAdv: 0, scanAdv: 0, incomingMult: 1,
+                  noShield: false, noMove: false, dots: [], ids: [] };
+    for (const s of S.normalizeStatuses(ship?.statuses)) {
+      const def = S.STATUSES[s.id];
+      if (!def) continue;
+      out.ids.push(s.id);
+      if (def.ac) out.ac += def.ac;
+      if (def.incomingAdv) out.incomingAdv += def.incomingAdv;
+      if (def.scanAdv) out.scanAdv += def.scanAdv;
+      if (def.incomingMult) out.incomingMult *= def.incomingMult;
+      if (def.noShield) out.noShield = true;
+      if (def.noMove) out.noMove = true;
+      if (def.dot) out.dots.push({ id: s.id, formula: def.dot });
+    }
+    return out;
+  };
   // Crew can arrive as an array (one ship's crew — the multi-ship form), as a
   // combat object with a .crew map (the original single-ship form), or as null.
   // Normalising here is what lets one AC function serve the Gull and every enemy.
@@ -208,21 +356,136 @@
     return Object.values(crewOrCombat);
   };
 
+  // Effective per-facing ship AC.
+  //
+  // Shields no longer add AC — they are damage reduction (S.shieldDR). AC is
+  // base + pilot maneuver + status modifiers only, which keeps it in a readable
+  // 8-18 band instead of the 10-25 band that made Session 5's AC 24-25 feel
+  // arbitrary: past a threshold nothing lands, below it everything does.
+  // The four facings therefore share a number; what differs per facing is DR.
   S.shipAC = function (state, crewOrCombat) {
     const raw = Number(state?.ac?.base), base = Number.isFinite(raw) ? raw : 13;
     let manMod = 0, manLabel = "";
     const crew = S.crewList(crewOrCombat);
-    if (crew.length) {
+    const mods = S.statusMods(state);
+    if (crew.length && !mods.noMove) {
       const pilot = crew.find((c) => c && c.station === "pilot" && c.maneuver);
       const m = pilot && S.MANEUVERS[pilot.maneuver];
       if (m) { manMod = m.ac; manLabel = m.label; }
     }
-    const shieldsOk = S.systemWorks(state, "shields"), sh = state.shield || {};
-    const bonus = (f) => shieldsOk ? ((sh.on && sh.facing === f ? 5 : 0) + (sh.secondary === f ? 2 : 0)) : 0;
-    const out = { base, maneuver: manMod, maneuverLabel: manLabel };
-    for (const f of S.FACINGS) out[f] = base + manMod + bonus(f);
+    const ac = base + manMod + mods.ac;
+    const out = { base, maneuver: manMod, maneuverLabel: manLabel, status: mods.ac, dr: {} };
+    for (const f of S.FACINGS) { out[f] = ac; out.dr[f] = S.shieldDR(state, f); }
     return out;
   };
+
+  /**
+   * What a facing's shields do to an incoming damage packet.
+   *   half  — the main allocated facing halves damage
+   *   flat  — the Micro-Adjust secondary facing takes 3 off
+   * Returns {half:boolean, flat:number, label:string}.
+   */
+  S.MICRO_DR = 3;
+  S.shieldDR = function (state, facing) {
+    const none = { half: false, flat: 0, label: "" };
+    if (!state) return none;
+    if (!S.systemWorks(state, "shields")) return none;
+    if (S.statusMods(state).noShield) return none;
+    const sh = state.shield || {};
+    const half = !!(sh.on && sh.facing === facing);
+    const flat = sh.secondary === facing ? S.MICRO_DR : 0;
+    return { half, flat, label: half ? "SHIELDED" : flat ? "MICRO" : "" };
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  Facing — which arc did that shot come from?                            */
+  /*                                                                          */
+  /*  Session 4's best play was swinging the ship so the enemy's unshielded   */
+  /*  rear was pointing at the guns. That was worked out by eye at the table;  */
+  /*  here it falls out of the two tokens' positions, so flanking is a real   */
+  /*  mechanic rather than a GM ruling.                                       */
+  /*                                                                          */
+  /*  Convention matches the pilot's movement maths: rotation 0 = nose up,    */
+  /*  forward = (sin r, -cos r), screen y grows downward.                     */
+  /* ---------------------------------------------------------------------- */
+
+  /** Signed bearing in degrees of `from` as seen by `target`. 0 = dead ahead, +90 = starboard. */
+  S.bearing = function (target, from) {
+    const r = ((Number(target?.rotation) || 0) * Math.PI) / 180;
+    const nx = Math.sin(r), ny = -Math.cos(r);
+    const vx = (from?.x ?? 0) - (target?.x ?? 0);
+    const vy = (from?.y ?? 0) - (target?.y ?? 0);
+    if (!vx && !vy) return 0;
+    const dot = nx * vx + ny * vy;
+    const cross = nx * vy - ny * vx;
+    return (Math.atan2(cross, dot) * 180) / Math.PI;
+  };
+
+  /** The facing of `target` that a shot from `from` strikes. */
+  S.facingFrom = function (target, from) {
+    const b = S.bearing(target, from), a = Math.abs(b);
+    if (a <= 45) return "fore";
+    if (a > 135) return "aft";
+    return b > 0 ? "starboard" : "port";
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  Damage                                                                  */
+  /* ---------------------------------------------------------------------- */
+
+  // Order is deliberate and is asserted in the selftest: status multipliers,
+  // then resistance, then shields, then armour, then floor at zero. Armour last
+  // is what makes the Iron Directorate's "many small hits are worthless" read.
+  S.RESIST = { immune: 0, half: 0.5, normal: 1, double: 2 };
+  S.resolveDamage = function (ship, raw, facing, { type = "kinetic", ignoreShields = false, ignoreArmour = false } = {}) {
+    const steps = [];
+    let dmg = Math.max(0, Math.round(Number(raw) || 0));
+    steps.push({ label: "raw", value: dmg });
+
+    const mods = S.statusMods(ship);
+    if (mods.incomingMult !== 1) { dmg = Math.round(dmg * mods.incomingMult); steps.push({ label: `×${mods.incomingMult} (status)`, value: dmg }); }
+
+    const res = ship?.resist?.[type];
+    if (res && S.RESIST[res] !== undefined && S.RESIST[res] !== 1) {
+      dmg = Math.floor(dmg * S.RESIST[res]);
+      steps.push({ label: `${res} to ${type}`, value: dmg });
+    }
+
+    let shield = { half: false, flat: 0, label: "" };
+    if (!ignoreShields) {
+      shield = S.shieldDR(ship, facing);
+      if (shield.half) { dmg = Math.floor(dmg / 2); steps.push({ label: `shields ${facing}`, value: dmg }); }
+      if (shield.flat) { dmg = Math.max(0, dmg - shield.flat); steps.push({ label: `micro-adjust −${shield.flat}`, value: dmg }); }
+    }
+
+    const armour = ignoreArmour ? 0 : Math.max(0, Number(ship?.armour) || 0);
+    if (armour) { dmg = Math.max(0, dmg - armour); steps.push({ label: `armour −${armour}`, value: dmg }); }
+
+    return { final: Math.max(0, dmg), facing, absorbed: Math.max(0, Math.round(Number(raw) || 0) - Math.max(0, dmg)),
+             shielded: shield.half || shield.flat > 0, steps };
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  Range bands                                                            */
+  /* ---------------------------------------------------------------------- */
+
+  /** Which band a target sits in for a given gun. distance is in grid squares. */
+  S.rangeBand = function (gun, distance) {
+    const d = Number(distance) || 0;
+    if (!gun) return "out";
+    if (d <= gun.shortMax) return "close";
+    if (d <= gun.longMax) return "long";
+    return "out";
+  };
+  // Long range costs accuracy and bite; out of range cannot be fired at all.
+  S.LONG_TO_HIT = -5;
+  S.rangePenalty = function (gun, distance) {
+    const band = S.rangeBand(gun, distance);
+    if (band === "close") return { band, toHit: 0, halve: false, ok: true };
+    if (band === "long") return { band, toHit: S.LONG_TO_HIT, halve: true, ok: true };
+    return { band, toHit: 0, halve: false, ok: false };
+  };
+
   // Roles a crew can be proficient in — the active bridge stations (each makes rolls), EXCEPT Boarding.
   // A crew proficient in a role adds their character's proficiency bonus to that station's rolls.
   S.profRoles = () => S.STATIONS.filter((st) => st.defaultUnlocked && st.id !== "boarding").map((st) => ({ id: st.id, name: st.name }));
@@ -446,6 +709,9 @@
 .sgsc .sc-acdir{position:absolute;z-index:4;min-width:24px;text-align:center;font-size:13px;font-weight:700;color:var(--ink);
   background:rgba(4,10,18,.78);border:1px solid var(--edge2);border-radius:9px;padding:1px 6px;pointer-events:none;transform:translate(-50%,-50%);}
 .sgsc .sc-acdir.shielded{color:#04121c;background:var(--teal);border-color:var(--teal);box-shadow:0 0 10px rgba(56,225,196,.55);}
+.sgsc .sc-acdir.micro{border-color:#b06bf0;box-shadow:0 0 8px rgba(176,107,240,.45);}
+.sgsc .sc-acdir .sc-dr{display:block;font-size:9px;font-style:normal;font-weight:700;line-height:1;opacity:.85;letter-spacing:0;}
+.sgsc .sc-acdir.micro .sc-dr{color:#c9a0ff;}
 .sgsc .sc-acdir.pos-fore{top:14%;left:50%;}
 .sgsc .sc-acdir.pos-aft{top:86%;left:50%;}
 .sgsc .sc-acdir.pos-port{top:52%;left:27%;}
@@ -884,10 +1150,19 @@
 
     // Per-facing ship AC (base + pilot maneuver + directional shields).
     const ac = S.shipAC(state, ctx.getCombat ? ctx.getCombat() : null);
-    const acDir = (f, lbl) => `<div class="sc-acdir pos-${f}${ac[f] > ac.base + ac.maneuver ? " shielded" : ""}" title="${lbl} AC ${ac[f]}">${ac[f]}</div>`;
-    const acLine = `<div class="sc-ac${ctx.isGM ? " gm" : ""}" data-ac title="${ctx.isGM ? "Click to set base AC" : ""}">AC · ` +
-      `<span>F <b>${ac.fore}</b></span><span>S <b>${ac.starboard}</b></span><span>A <b>${ac.aft}</b></span><span>P <b>${ac.port}</b></span>` +
-      `<em>base ${ac.base}${ac.maneuver ? ` · ${esc(ac.maneuverLabel)} ${ac.maneuver >= 0 ? "+" : ""}${ac.maneuver}` : ""}</em></div>`;
+    // AC is one number for the whole ship now; what differs per facing is the
+    // shield DR, so each badge shows AC with the reduction underneath it.
+    const drTag = (f) => { const d = ac.dr[f]; return d.half ? "½" : d.flat ? `−${d.flat}` : ""; };
+    const acDir = (f, lbl) => {
+      const d = ac.dr[f], tag = drTag(f);
+      const cls = d.half ? " shielded" : d.flat ? " micro" : "";
+      const tip = `${lbl} — AC ${ac[f]}${d.half ? " · shields halve damage from here" : d.flat ? ` · micro-adjust takes ${d.flat} off` : " · unshielded"}`;
+      return `<div class="sc-acdir pos-${f}${cls}" title="${tip}">${ac[f]}${tag ? `<i class="sc-dr">${tag}</i>` : ""}</div>`;
+    };
+    const acLine = `<div class="sc-ac${ctx.isGM ? " gm" : ""}" data-ac title="${ctx.isGM ? "Click to set base AC" : ""}">AC <b>${ac.fore}</b> · ` +
+      `<span>F ${drTag("fore") || "—"}</span><span>S ${drTag("starboard") || "—"}</span><span>A ${drTag("aft") || "—"}</span><span>P ${drTag("port") || "—"}</span>` +
+      `<em>base ${ac.base}${ac.maneuver ? ` · ${esc(ac.maneuverLabel)} ${ac.maneuver >= 0 ? "+" : ""}${ac.maneuver}` : ""}` +
+      `${ac.status ? ` · status ${ac.status >= 0 ? "+" : ""}${ac.status}` : ""} · shields reduce damage, not AC</em></div>`;
 
     root.className = `sgsc ${ctx.isGM ? "gm" : ""}`;
     root.innerHTML = `
@@ -1979,17 +2254,72 @@
     ok(S.systemState({ cur: 4, max: 5 }) === "damaged", "4/5 is damaged");
     ok(S.systemState({ cur: 0, max: 5 }) === "destroyed", "0/5 is destroyed");
 
-    // --- directional AC ---------------------------------------------------
+    // --- directional AC: shields are DR now, never AC ---------------------
     const st = S.normalize({ ac: { base: 13 }, shield: { on: true, facing: "fore", secondary: "aft" } });
     const crewEvasive = [{ station: "pilot", maneuver: "evasive" }];
     const a1 = S.shipAC(st, { crew: crewEvasive });
+    ok(a1.fore === 13 + 4, `evasive AC should be 17 on every facing, got ${a1.fore}`);
+    ok(a1.fore === a1.aft && a1.aft === a1.port && a1.port === a1.starboard, "all four facings share one AC");
+    ok(a1.dr.fore.half === true, "the allocated facing halves damage");
+    ok(a1.dr.aft.flat === S.MICRO_DR, "the micro-adjust facing takes a flat reduction");
+    ok(a1.dr.port.half === false && a1.dr.port.flat === 0, "unshielded facings get nothing");
     ok(S.shipAC(st, crewEvasive).fore === a1.fore, "shipAC accepts a bare crew array as well as a combat object");
-    ok(S.shipAC(st, []).fore === 13 + 5, "an empty crew means no maneuver modifier");
-    ok(a1.fore === 13 + 5 + 5, `fore AC should be 23, got ${a1.fore}`);
-    ok(a1.aft === 13 + 5 + 2, `aft AC (micro) should be 20, got ${a1.aft}`);
-    ok(a1.port === 13 + 5, `port AC should be 18, got ${a1.port}`);
+    ok(S.shipAC(st, []).fore === 13, "an empty crew means no maneuver modifier");
     const broken = S.normalize({ ac: { base: 13 }, systemHp: { shields: { cur: 0, max: 5 } }, shield: { on: true, facing: "fore" } });
-    ok(S.shipAC(broken, null).fore === 13, "a destroyed shield generator grants no facing bonus");
+    ok(S.shieldDR(broken, "fore").half === false, "a destroyed shield generator grants no reduction");
+
+    // --- statuses ----------------------------------------------------------
+    const sh = S.normalize({ ac: { base: 13 } });
+    sh.statuses = [];
+    S.applyStatus(sh, "aggressive", { round: 1 });
+    ok(S.shipAC(sh, []).fore === 13 - 4, "aggressive is -4 AC");
+    S.applyStatus(sh, "shields_down", { round: 1, rounds: 2 });
+    ok(S.statusMods(sh).noShield === true, "shields_down suppresses shield DR");
+    S.applyStatus(sh, "shields_down", { round: 1, rounds: 2 });
+    ok(sh.statuses.filter((x) => x.id === "shields_down").length === 1, "re-applying a status refreshes rather than stacks");
+    ok(S.expireStatuses(sh, 2).includes("aggressive"), "a round-scoped status expires on the next round");
+    ok(S.hasStatus(sh, "shields_down"), "a 2-round status survives one round");
+    ok(S.expireStatuses(sh, 3).includes("shields_down"), "…and expires on the third");
+    ok(S.applyStatus(sh, "not-a-status", {}) === null, "unknown statuses are refused");
+
+    // --- facing derived from token positions -------------------------------
+    const tgt = { x: 100, y: 100, rotation: 0 };            // nose up
+    ok(S.facingFrom(tgt, { x: 100, y: 0 }) === "fore", "an attacker above a nose-up ship hits the bow");
+    ok(S.facingFrom(tgt, { x: 100, y: 200 }) === "aft", "…below hits the stern");
+    ok(S.facingFrom(tgt, { x: 200, y: 100 }) === "starboard", "…to the right hits starboard");
+    ok(S.facingFrom(tgt, { x: 0, y: 100 }) === "port", "…to the left hits port");
+    const spun = { x: 100, y: 100, rotation: 180 };         // nose down
+    ok(S.facingFrom(spun, { x: 100, y: 0 }) === "aft", "turning the ship 180 turns the bow away");
+    ok(Math.abs(S.bearing(tgt, { x: 100, y: 0 })) < 1e-9, "dead ahead is bearing 0");
+
+    // --- the damage pipeline ----------------------------------------------
+    const victim = S.normalize({ shield: { on: true, facing: "fore", secondary: "aft" } });
+    ok(S.resolveDamage(victim, 20, "port").final === 20, "an unshielded facing takes it all");
+    ok(S.resolveDamage(victim, 20, "fore").final === 10, "the shielded facing halves");
+    ok(S.resolveDamage(victim, 20, "aft").final === 20 - S.MICRO_DR, "micro-adjust is flat");
+    ok(S.resolveDamage(victim, 20, "fore", { ignoreShields: true }).final === 20, "Ram ignores the shield facing");
+    victim.armour = 4;
+    ok(S.resolveDamage(victim, 20, "fore").final === 10 - 4, "armour comes off after shields");
+    ok(S.resolveDamage(victim, 6, "fore").final === 0, "armour can absorb a small hit entirely");
+    victim.armour = 0;
+    victim.resist = { energy: "half" };
+    ok(S.resolveDamage(victim, 20, "port", { type: "energy" }).final === 10, "resistance halves");
+    ok(S.resolveDamage(victim, 20, "port", { type: "kinetic" }).final === 20, "…only the resisted type");
+    victim.statuses = []; S.applyStatus(victim, "frozen", { round: 1 });
+    ok(S.resolveDamage(victim, 10, "port", { type: "kinetic" }).final === 20, "frozen doubles the next hit");
+    ok(S.resolveDamage(victim, 10, "port").absorbed >= 0, "absorbed is never negative");
+
+    // --- range bands -------------------------------------------------------
+    const flak = S.gun("flak"), auto = S.gun("autocannon");
+    ok(S.rangeBand(flak, 1) === "close" && S.rangeBand(flak, 3) === "long" && S.rangeBand(flak, 9) === "out",
+       "flak bands: close 1-2, long 3-4, out beyond");
+    ok(S.rangeBand(auto, 4) === "close" && S.rangeBand(auto, 10) === "long" && S.rangeBand(auto, 11) === "out",
+       "autocannon bands: close 1-4, long 5-10, out beyond");
+    ok(S.rangePenalty(auto, 8).toHit === S.LONG_TO_HIT && S.rangePenalty(auto, 8).halve === true, "long range costs accuracy and bite");
+    ok(S.rangePenalty(auto, 99).ok === false, "out of range cannot be fired");
+    for (const g of S.GUNS) for (let d = 0; d <= 12; d++) {
+      ok(["close", "long", "out"].includes(S.rangeBand(g, d)), `${g.id} at ${d} produced no band`);
+    }
 
     // --- guns / maneuvers are internally consistent -----------------------
     for (const g of S.GUNS) ok(g.shortMax < g.longMax, `${g.id}: shortMax must be < longMax`);
