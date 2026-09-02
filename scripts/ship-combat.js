@@ -1212,22 +1212,24 @@
 
   /* -- Hooks ------------------------------------------------------------- */
 
+  // onChange fires on every client when a world setting replicates → our cross-client refresh.
+  // Both the bar AND the console read combat + ship state, so refresh both on either change.
+  // A single action can write both settings and replicate to every client, so a burst of
+  // onChange calls used to mean several full rebuilds of the bar + console + gun cone.
+  // Coalesce them into one render on the next frame; the end state is identical.
+  // Module scope, not inside init(): every GM handler needs to call it too.
+  let _uiQueued = false;
+  function refreshUI() {
+    if (_uiQueued) return;
+    _uiQueued = true;
+    requestAnimationFrame(() => {
+      _uiQueued = false;
+      renderBar(); refreshOpen(); refreshFleet();
+      try { drawGunCone(); } catch (e) {}
+    });
+  }
+
   Hooks.once("init", () => {
-    // onChange fires on every client when a world setting replicates → our cross-client refresh.
-    // Both the bar AND the console read combat + ship state, so refresh both on either change.
-    // A single action can write both settings and replicate to every client, so a burst of
-    // onChange calls used to mean several full rebuilds of the bar + console + gun cone.
-    // Coalesce them into one render on the next frame; the end state is identical.
-    let _uiQueued = false;
-    const refreshUI = () => {
-      if (_uiQueued) return;
-      _uiQueued = true;
-      requestAnimationFrame(() => {
-        _uiQueued = false;
-        renderBar(); refreshOpen();
-        try { drawGunCone(); } catch (e) {}
-      });
-    };
     game.settings.register(MODULE_ID, SETTING_DATA, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.keybindings.register(MODULE_ID, "open", {
@@ -1235,6 +1237,17 @@
       hint: game.i18n?.localize(`${MODULE_ID}.keybind.open.hint`) || "Opens the SSV Silver Gull ship-combat overview.",
       editable: [{ key: "KeyS" }],
       onDown: () => { openShipHUD(); return true; }
+    });
+    // F is core's `rulerWaypoint`. Registering at PRIORITY wins the key, and
+    // `restricted` keeps it GM-only — so players keep ruler waypoints untouched
+    // and only the GM trades F for the fleet board. Rebindable in Configure Controls.
+    game.keybindings.register(MODULE_ID, "fleet", {
+      name: "Open Fleet Command",
+      hint: "Every ship in the engagement, and the panel to spawn more. GM only. F is also core's ruler-waypoint key, so this is registered at priority.",
+      editable: [{ key: "KeyF" }],
+      restricted: true,
+      precedence: CONST.KEYBINDING_PRECEDENCE?.PRIORITY ?? 0,
+      onDown: () => { openFleet(); return true; }
     });
     game.keybindings.register(MODULE_ID, "toggleCombatBar", {
       name: "Show/Hide Ship Combat Bar",
@@ -1249,6 +1262,515 @@
       }
     });
   });
+
+  /* ====================================================================== */
+  /*  Fleet Command (key F)                                                 */
+  /* ====================================================================== */
+
+  /* ---- the hull catalogue -------------------------------------------- */
+  // data/fleet.json is generated and shipped; a release overwrites it, so it
+  // holds no instance state. Fetched once, then cached for the session.
+  let FLEET = null, _fleetPromise = null;
+  async function loadFleet() {
+    if (FLEET) return FLEET;
+    if (_fleetPromise) return _fleetPromise;
+    _fleetPromise = (async () => {
+      try {
+        const res = await fetch(`modules/${MODULE_ID}/data/fleet.json`);
+        FLEET = await res.json();
+      } catch (e) {
+        console.error(`${MODULE_ID} | could not load data/fleet.json`, e);
+        FLEET = { version: "0", hulls: [] };
+      }
+      return FLEET;
+    })();
+    return _fleetPromise;
+  }
+  const hullById = (id) => (FLEET?.hulls || []).find((h) => h.id === id) || null;
+  /** Full art path for a hull's skin: the shipped paths are relative to artRoot. */
+  const hullArt = (hull, skin, which = "exterior", deck = "1") => {
+    if (!hull) return "";
+    const sk = hull.skins?.[skin] || Object.values(hull.skins || {})[0];
+    if (!sk) return "";
+    const node = which === "exterior" ? sk.exterior : sk.decks?.[String(deck)];
+    return node ? hull.artRoot + node.art : "";
+  };
+
+  /**
+   * Re-scan every installed ship map pack and upload the result as
+   * `ssv-fleet-dump/fleet_scan.json`, which tools/build_fleet.py consumes.
+   *
+   *     await SilverGullShip.dumpFleet()
+   *
+   * Run this after installing or updating a map pack, then rebuild:
+   *     python3 tools/build_fleet.py --verify
+   *
+   * It reads the real art path off each scene document rather than deriving one
+   * from the scene's name, because the two disagree: the Razorbill's images are
+   * spelled GL_Razorbill_Orginal_… while its scenes say Original. It is slow —
+   * ~1,800 scene documents — so it yields to the browser between packs.
+   */
+  async function dumpFleet({ upload = true } = {}) {
+    if (!game.user.isGM) return ui.notifications?.warn("GM only.");
+    const clean = (u) => decodeURIComponent(String(u || ""));
+    const packs = game.packs.filter((p) => p.documentName === "Scene" && /Czepeku|Hyperdrive|czepeku/i.test(p.collection));
+    const out = [];
+    ui.notifications?.info(`Scanning ${packs.length} ship packs — this takes a few minutes.`);
+    for (const p of packs) {
+      const idx = await p.getIndex();
+      const rec = { pack: p.collection, label: p.metadata.label, scenes: idx.size, skins: {}, supp: {} };
+      for (const e of idx) {
+        const n = e.name;
+        if (/blueprint|fire escape|console/i.test(n)) {
+          const d = await p.getDocument(e._id);
+          rec.supp[/blueprint/i.test(n) ? "blueprint" : /fire escape/i.test(n) ? "fireEscape" : "console"] =
+            { scene: n, id: e._id, src: clean(d.background?.src || d.levels?.contents?.[0]?.background?.src || d.tiles.contents[0]?.texture?.src || "") };
+          continue;
+        }
+        const m = n.match(/\b(\d\d)([a-z])\s+(.+?)\s+(Exterior|Interior)(?:\s+Level\s?0?(\d))?/i);
+        if (!m) continue;
+        let skin = m[3].trim(); const view = m[4].toLowerCase(); const lvl = m[5] ? Number(m[5]) : 1;
+        // "Alert" / "No Turrets" / "Activated" are VARIANTS of a skin, not skins.
+        let variant = "base";
+        const vm = skin.match(/^(.*?)\s*(Alert|No Turrets|Activated|Animated)$/i);
+        if (vm) { skin = vm[1].trim() || skin; variant = vm[2].toLowerCase().replace(/\s+/g, "-"); }
+        if (/\balert\b/i.test(n) && variant === "base") variant = "alert";
+        if (/no turrets/i.test(n) && variant === "base") variant = "no-turrets";
+        rec.skins[skin] ||= { ext: {}, decks: {} };
+        const bucket = view === "exterior" ? rec.skins[skin].ext : (rec.skins[skin].decks[lvl] ||= {});
+        if (bucket[variant]) continue;
+        const d = await p.getDocument(e._id);
+        const g = d.grid?.size || 100;
+        const tiles = d.tiles.contents.map((t) => ({ src: clean(t.texture?.src), w: t.width, h: t.height, x: Math.round(t.x), y: Math.round(t.y) }));
+        const hull = tiles.filter((t) => !/nebula|burner|glow|turret|background|desert/i.test(t.src)).sort((a, b) => b.w * b.h - a.w * a.h)[0];
+        const tur = tiles.filter((t) => /turret/i.test(t.src));
+        bucket[variant] = { scene: n, id: e._id, w: d.width, h: d.height, grid: g,
+          art: hull ? hull.src : clean(d.background?.src || ""),
+          sq: hull ? [Math.round(hull.w / g), Math.round(hull.h / g)] : null,
+          walls: d.walls.size, lights: d.lights.size,
+          turretArt: [...new Set(tur.map((t) => t.src))],
+          ...(view === "exterior" && tur.length ? { turretPos: tur.map((t) => ({ src: t.src, x: t.x, y: t.y, w: t.w, h: t.h })) } : {}) };
+      }
+      rec.decks = Math.max(1, ...Object.values(rec.skins).map((s) => Object.keys(s.decks).length || 1));
+      out.push(rec);
+      await new Promise((r) => setTimeout(r, 0));   // let the browser breathe
+    }
+    const json = JSON.stringify(out);
+    if (!upload) return out;
+    const FP = foundry.applications?.apps?.FilePicker?.implementation || FilePicker;
+    try { await FP.createDirectory("data", "ssv-fleet-dump"); } catch (e) { /* exists */ }
+    const res = await FP.upload("data", "ssv-fleet-dump",
+      new File([new Blob([json], { type: "application/json" })], "fleet_scan.json", { type: "application/json" }), {}, { notify: false });
+    ui.notifications?.info(`Scanned ${out.length} packs → ${res?.path}`);
+    console.log(`${MODULE_ID} | fleet scan written to ${res?.path} (${json.length} bytes)`);
+    return res?.path;
+  }
+
+  /* ---- faction crests -------------------------------------------------- */
+  // Bundled rather than read out of the politics module: same crests, same
+  // colours, but the fleet board still draws correctly with politics disabled.
+  const CRESTS = {};
+  async function loadCrests() {
+    const ids = [...Object.keys(S.FACTIONS), "unaligned"];
+    await Promise.all(ids.map(async (id) => {
+      if (CRESTS[id] !== undefined) return;
+      try {
+        const res = await fetch(`modules/${MODULE_ID}/assets/factions/${id}.svg`);
+        CRESTS[id] = res.ok ? await res.text() : "";
+      } catch (e) { CRESTS[id] = ""; }
+    }));
+    return CRESTS;
+  }
+  const crestFor = (id) => CRESTS[id] || "";
+
+  /* ---- the overlay ----------------------------------------------------- */
+  let _fleet = null, fleetSelected = null;
+  const fleetOpen = () => _fleet && _fleet.style.display !== "none" && document.body.contains(_fleet);
+  function closeFleet() { if (_fleet) _fleet.style.display = "none"; renderBar(); }
+  function renderFleet() {
+    if (!_fleet) { _fleet = document.createElement("div"); _fleet.id = "ssv-fleet"; document.body.appendChild(_fleet); }
+    _fleet.style.display = "flex";
+    try { S.renderFleet(_fleet, fleetCtx()); }
+    catch (e) { console.error(`${MODULE_ID} | fleet render failed`, e); }
+    renderBar();
+  }
+  function refreshFleet() { if (fleetOpen()) renderFleet(); }
+  async function openFleet() {
+    if (fleetOpen()) return closeFleet();
+    await loadFleet(); await loadCrests();
+    renderFleet();
+  }
+
+  /** Every ship in the engagement, already redacted for whoever is looking. */
+  function fleetShips() {
+    const combat = getCombat();
+    const out = [];
+    // The Gull is ship "gull" and reads from shipState, so it is never a copy
+    // that can drift out of step with the S menu.
+    const gullState = getState();
+    const gull = S.normalizeShip({
+      ...gullState, id: "gull", name: gullState.name, cls: "corvette",
+      disposition: "ally", faction: "",
+      crew: Object.fromEntries(Object.values(combat.crew).map((c) => [c.id, { ...c, roleId: "crew" }]))
+    });
+    gull.art = `modules/${MODULE_ID}/assets/ship/ship-${S.shipVariant(gullState)}.webp`;
+    out.push(S.shipView(gull, { isGM: game.user.isGM, own: true }));
+    for (const sh of Object.values(combat.ships || {})) {
+      if (sh.id === "gull") continue;
+      const hull = hullById(sh.profileId);
+      const view = S.shipView(sh, { isGM: game.user.isGM });
+      view.art = sh.art || hullArt(hull, sh.skin);
+      out.push(view);
+    }
+    return out;
+  }
+
+  function fleetCtx() {
+    const combat = getCombat();
+    return {
+      isGM: game.user.isGM, userId: game.user.id,
+      ships: fleetShips(),
+      round: combat.round || 1,
+      activeShip: combat.activeShip || "gull",
+      initiative: combat.initiative || [],
+      selectedId: fleetSelected,
+      select: (id) => { fleetSelected = id; renderFleet(); },
+      crest: crestFor,
+      artUrl: (p) => (/^(https?:|modules\/|worlds\/|data\/)/i.test(p) ? p : assetUrl(p)),
+      spawn: () => spawnShipBrowser(),
+      rollInitiative: () => gmRollInitiative(),
+      endShipTurn: () => gmEndShipTurn(),
+      runShip: (id) => gmRunShip(id),
+      removeShip: (id) => gmRemoveShip(id),
+      driveCrew: (shipId, crewId) => { fleetSelected = shipId; ui.notifications?.info("Per-seat driving lands with the station consoles."); },
+      close: closeFleet
+    };
+  }
+
+  /* ---- spawning -------------------------------------------------------- */
+
+  /** The party's average level, so the crew tier defaults sensibly. */
+  function partyLevel() {
+    const pcs = game.actors.filter((a) => a.type === "character" && a.hasPlayerOwner);
+    if (!pcs.length) return 3;
+    const lv = pcs.map((a) => Number(a.system?.details?.level) || 0).filter((n) => n > 0);
+    if (!lv.length) return 3;
+    return Math.max(1, Math.round(lv.reduce((a, b) => a + b, 0) / lv.length));
+  }
+  const tierForLevel = (lv) => (lv <= 3 ? 1 : lv <= 6 ? 2 : lv <= 10 ? 3 : 4);
+
+  /** A searchable grid of every hull, so the GM can decide in about five seconds. */
+  async function spawnShipBrowser() {
+    if (!game.user.isGM) return;
+    await loadFleet(); await loadCrests();
+    const hulls = (FLEET.hulls || []).slice();
+    if (!hulls.length) return ui.notifications?.error("No hulls in data/fleet.json.");
+    const lv = partyLevel();
+
+    const tile = (h) => {
+      const f = S.faction(h.faction), cls = S.shipClass(h.cls);
+      const skin = Object.keys(h.skins)[0];
+      const flags = [
+        h.boardingParty ? `<span class="sgsb-f brd" title="Carries ${h.boardingParty} boarders for your decks">⚑ ${h.boardingParty}</span>` : "",
+        (h.abilities || []).some((a) => /cloak|ghost/.test(a)) ? `<span class="sgsb-f clk" title="Can hide from you">☁</span>` : "",
+        h.armour ? `<span class="sgsb-f arm" title="Armour ${h.armour} — small hits are wasted">⛨ ${h.armour}</span>` : "",
+        h.faction === "rift" ? `<span class="sgsb-f rift" title="Apex threat — not a fair fight">⚠ RIFT</span>` : "",
+        h.canonical ? `<span class="sgsb-f canon" title="A hull the crew have already met">★ ${esc(h.canonical)}</span>` : ""
+      ].join("");
+      return `<div class="sgsb-tile${h.faction === "rift" ? " rift" : ""}" data-hull="${esc(h.id)}"
+                   data-search="${esc((h.name + " " + (f ? f.short : "unaligned") + " " + h.cls + " " + h.doctrine + " " + (h.blurb || "")).toLowerCase())}"
+                   data-faction="${esc(h.faction || "unaligned")}" data-cls="${esc(h.cls)}">
+        <div class="sgsb-art"><img src="${esc(hullArt(h, skin))}" alt="" loading="lazy" onerror="this.style.display='none'"></div>
+        <div class="sgsb-body">
+          <div class="sgsb-name"><span class="sgsb-crest">${crestFor(h.faction || "unaligned")}</span>${esc(h.name)}</div>
+          <div class="sgsb-sub">${esc(cls ? cls.name : h.cls)} · ${esc(f ? f.short : "Unaligned")} · ${esc(S.doctrine(h.doctrine).name)}</div>
+          <div class="sgsb-stats"><span>HULL <b>${h.hull}</b></span><span>AC <b>${h.acBase}</b></span>
+            <span>GUNS <b>${(h.guns || []).length}</b></span><span>DECKS <b>${h.decks}</b></span>
+            <span>CREW <b>${h.crew.max}</b></span></div>
+          <div class="sgsb-blurb">${esc(h.blurb || "")}</div>
+          <div class="sgsb-flags">${flags}</div>
+        </div></div>`;
+    };
+
+    const factions = ["", ...Object.keys(S.FACTIONS)];
+    const content = `<div class="sgsb">
+      <div class="sgsb-head">
+        <input class="sgsb-q" type="search" placeholder="Search 53 hulls — name, faction, doctrine…" autofocus>
+        <select class="sgsb-ff"><option value="">All factions</option>${factions.filter(Boolean).map((id) => `<option value="${id}">${esc(S.FACTIONS[id].short)}</option>`).join("")}<option value="unaligned">Unaligned</option></select>
+        <select class="sgsb-cf"><option value="">All classes</option>${S.SHIP_CLASSES.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
+      </div>
+      <div class="sgsb-grid">${hulls.map(tile).join("")}</div>
+    </div>`;
+
+    const chosen = await new Promise((resolve) => {
+      const D = foundry.applications?.api?.DialogV2;
+      const wire = (root) => {
+        const q = root.querySelector(".sgsb-q"), ff = root.querySelector(".sgsb-ff"), cf = root.querySelector(".sgsb-cf");
+        const apply = () => {
+          const term = (q.value || "").toLowerCase().trim();
+          root.querySelectorAll(".sgsb-tile").forEach((t) => {
+            const ok = (!term || t.dataset.search.includes(term))
+              && (!ff.value || t.dataset.faction === ff.value)
+              && (!cf.value || t.dataset.cls === cf.value);
+            t.style.display = ok ? "" : "none";
+          });
+        };
+        q.oninput = apply; ff.onchange = apply; cf.onchange = apply;
+        root.querySelectorAll(".sgsb-tile").forEach((t) => {
+          t.onclick = () => { resolve(t.dataset.hull); root.closest(".application")?.querySelector("[data-action=close]")?.click(); };
+        });
+      };
+      if (D) {
+        D.prompt({ window: { title: "Spawn a ship", resizable: true }, position: { width: 980, height: 700 },
+                   content, ok: { label: "Cancel", callback: () => null },
+                   render: (ev, dlg) => wire(dlg.element) }).then(() => resolve(null)).catch(() => resolve(null));
+      } else {
+        new Dialog({ title: "Spawn a ship", content, buttons: { cancel: { label: "Cancel", callback: () => resolve(null) } },
+                     render: (h) => wire(h[0]) }, { width: 980, height: 700 }).render(true);
+      }
+    });
+    if (!chosen) return;
+    const hull = hullById(chosen); if (!hull) return;
+    await spawnConfigure(hull, lv);
+  }
+
+  /** Skin, crew tier, headcount, disposition — everything pre-filled from the profile. */
+  async function spawnConfigure(hull, lv) {
+    const skins = Object.keys(hull.skins);
+    const tier = tierForLevel(lv);
+    const content = `<div style="display:flex;flex-direction:column;gap:8px;font-family:'Courier New',monospace">
+      <p style="margin:0 0 4px"><b>${esc(hull.name)}</b> — ${esc(S.shipClass(hull.cls)?.name || hull.cls)},
+        ${esc(S.factionName(hull.faction))}. Hull ${hull.hull}, AC ${hull.acBase}, ${hull.crew.max} crew.</p>
+      <label>Skin <select name="skin">${skins.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}</select></label>
+      <label>Crew level <select name="tier">
+        ${[1, 2, 3, 4].map((t) => `<option value="${t}" ${t === tier ? "selected" : ""}>Tier ${t} — party level ${["1–3", "4–6", "7–10", "11+"][t - 1]}</option>`).join("")}
+      </select></label>
+      <label>Crew aboard <input type="number" name="crew" value="${hull.crew.max}" min="0" max="${hull.crew.max}"> <span style="opacity:.6">of ${hull.crew.max}</span></label>
+      <label>Disposition <select name="disp">
+        <option value="hostile" selected>Hostile</option><option value="neutral">Neutral</option><option value="ally">Ally</option>
+      </select></label>
+      <label>How many <input type="number" name="count" value="1" min="1" max="8"></label>
+    </div>`;
+    const read = (form) => ({
+      skin: form.elements.skin.value, tier: Number(form.elements.tier.value),
+      crew: Math.max(0, Number(form.elements.crew.value) || 0),
+      disp: form.elements.disp.value, count: Math.max(1, Number(form.elements.count.value) || 1)
+    });
+    const D = foundry.applications?.api?.DialogV2;
+    const opts = D
+      ? await D.prompt({ window: { title: `Spawn — ${hull.name}` }, content,
+                         ok: { label: "Spawn", callback: (e, b) => read(b.form) } }).catch(() => null)
+      : await new Promise((res) => new Dialog({ title: `Spawn — ${hull.name}`, content,
+          buttons: { ok: { label: "Spawn", callback: (h) => res(read(h[0].querySelector("form") || h[0])) },
+                     cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
+    if (!opts) return;
+    for (let i = 0; i < opts.count; i++) await gmSpawnShip(hull, opts, i);
+    refreshUI(); refreshFleet();
+  }
+
+  /* ---- GM-authoritative fleet handlers --------------------------------- */
+
+  const newShipId = () => "s" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+
+  async function gmSpawnShip(hull, opts, index = 0) {
+    if (!game.user.isGM) return null;
+    const combat = getCombat();
+    const id = newShipId();
+    const existing = Object.values(combat.ships).filter((s) => s.profileId === hull.id).length;
+    const suffix = existing || index ? ` ${String.fromCharCode(65 + existing + index)}` : "";
+    const size = S.tokenSizeFor(hull.sizeSq);
+
+    const sh = S.normalizeShip({
+      id, profileId: hull.id, name: hull.name + suffix,
+      faction: hull.faction, cls: hull.cls, doctrine: hull.doctrine,
+      disposition: opts.disp,
+      hull: { cur: hull.hull, max: hull.hull },
+      ac: { base: hull.acBase }, armour: hull.armour, resist: hull.resist,
+      guns: hull.guns, abilities: hull.abilities,
+      boardingParty: hull.boardingParty,
+      morale: S.faction(hull.faction)?.resolve === null
+        ? { cur: null, max: null }
+        : { cur: S.faction(hull.faction)?.resolve ?? 4, max: S.faction(hull.faction)?.resolve ?? 4 },
+      sizeSq: hull.sizeSq,
+      systemHp: Object.fromEntries(S.SYSTEMS.filter((s) => s.id !== "cloak" ||
+        (hull.abilities || []).some((a) => /cloak|ghost/.test(a))).map((s) => [s.id, { cur: S.SYSTEM_HP_MAX, max: S.SYSTEM_HP_MAX }])),
+      crew: buildCrew(hull, opts)
+    });
+    sh.skin = opts.skin;
+    sh.art = hullArt(hull, opts.skin);
+
+    // A vehicle actor per ship, so it can hold a token, be targeted, and be
+    // deleted cleanly when the fight ends.
+    const folder = await ensureFolder("Actor", "SSV — Enemy Ships");
+    const actor = await Actor.create({
+      name: sh.name, type: "vehicle", folder: folder?.id ?? null,
+      img: sh.art || undefined,
+      prototypeToken: { name: sh.name, width: size.width, height: size.height,
+        texture: { src: sh.art || undefined, scaleX: size.scale, scaleY: size.scale, fit: "contain" },
+        disposition: opts.disp === "ally" ? 1 : opts.disp === "neutral" ? 0 : -1,
+        actorLink: false, lockRotation: false, sight: { enabled: false } },
+      flags: { [MODULE_ID]: { fleet: true, shipId: id, profileId: hull.id } }
+    });
+    sh.actorId = actor?.id || "";
+
+    // Drop it on the active scene, spread out from the middle.
+    const scene = game.scenes.active || canvas.scene;
+    if (scene && actor) {
+      const g = scene.grid?.size || 100;
+      const n = Object.keys(combat.ships).length + index;
+      const x = Math.round(scene.width * 0.5 + ((n % 4) - 1.5) * g * 2);
+      const y = Math.round(scene.height * 0.22 + Math.floor(n / 4) * g * 2);
+      const td = (await actor.getTokenDocument({ x, y })).toObject();
+      delete td._id;
+      const made = await scene.createEmbeddedDocuments("Token", [td]);
+      sh.tokenId = made?.[0]?.id || ""; sh.sceneId = scene.id;
+    }
+
+    const next = getCombat();
+    next.ships[id] = sh;
+    await saveCombat(next);
+    await ChatMessage.create({
+      content: `<b>${esc(sh.name)}</b> — ${esc(S.factionName(sh.faction))} ${esc(S.shipClass(sh.cls)?.name || "")} — enters the engagement.`,
+      speaker: { alias: "SSV Silver Gull" }, whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id)
+    });
+    return sh;
+  }
+
+  // Role -> stat block by tier. Verified against the live compendiums: dnd5e's
+  // 2024 actors have the cleaner ladder, and world.ssv--bestiary-srd carries the
+  // two it lacks. "Champion" and "Warlord" exist in neither — don't reach for them.
+  const CREW_BLOCKS = {
+    captain:  ["Bandit Captain", "Guard Captain", "Pirate Captain", "Assassin"],
+    pilot:    ["Scout", "Spy", "Warrior Veteran", "Guard Captain"],
+    gunner:   ["Guard", "Thug", "Warrior Veteran", "Gladiator"],
+    engineer: ["Priest Acolyte", "Priest", "Mage", "Archmage"],
+    marine:   ["Warrior Infantry", "Berserker", "Warrior Veteran", "Gladiator"],
+    zealot:   ["Cultist", "Cultist Fanatic", "Berserker", "Gladiator"]
+  };
+  // Faction flavour names, so an Apostle gunner is not called "Guard".
+  const CREW_NAMES = {
+    "iron-directorate":   { captain: "Directorate Commander", pilot: "Directorate Helm", gunner: "Directorate Gunner", engineer: "Directorate Tech", marine: "Directorate Trooper", zealot: "Directorate Trooper" },
+    "apostles-threshold": { captain: "Apostle Confessor", pilot: "Apostle Helm", gunner: "Apostle Gunner", engineer: "Apostle Artificer", marine: "Apostle Zealot", zealot: "Apostle Zealot" },
+    "sovereign-horizon":  { captain: "Horizon Captain", pilot: "Horizon Helm", gunner: "Horizon Gunner", engineer: "Horizon Wrench", marine: "Horizon Corsair", zealot: "Horizon Corsair" },
+    "frostwatch":         { captain: "Frostwatch Marshal", pilot: "Frostwatch Helm", gunner: "Frostwatch Gunner", engineer: "Frostwatch Tech", marine: "Frostwatch Constable", zealot: "Frostwatch Constable" },
+    "rift":               {},
+    "":                   { captain: "Ship's Master", pilot: "Helmsman", gunner: "Gunner", engineer: "Engineer", marine: "Deckhand", zealot: "Deckhand" }
+  };
+  const ROLE_STATION = { captain: "captain", pilot: "pilot", gunner: "gunner_port", engineer: "engineer", marine: "", zealot: "" };
+
+  /** Crew are RECORDS here. Actors and tokens are made lazily, only on boarding. */
+  function buildCrew(hull, opts) {
+    const crew = {}, want = Math.min(opts.crew, hull.crew.max);
+    const names = CREW_NAMES[hull.faction] || CREW_NAMES[""];
+    let made = 0, seq = 0;
+    // Fill the bridge first: dropping the headcount should thin the marines, not
+    // leave a warship with nobody flying it.
+    const order = ["captain", "pilot", "gunner", "engineer", "marine", "zealot"];
+    const roles = (hull.crew.roles || []).slice().sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
+    for (const r of roles) {
+      for (let i = 0; i < r.n && made < want; i++, made++) {
+        const cid = `c${++seq}`;
+        const label = names[r.role] || r.role;
+        crew[cid] = {
+          id: cid, name: r.n > 1 ? `${label} ${i + 1}` : label, roleId: r.role,
+          station: r.role === "gunner" && i === 1 ? "gunner_starboard" : (ROLE_STATION[r.role] || ""),
+          block: CREW_BLOCKS[r.role]?.[opts.tier - 1] || "", tier: opts.tier,
+          action: false, bonus: false, deck: 1, dead: false
+        };
+      }
+    }
+    return crew;
+  }
+
+  async function ensureFolder(type, name) {
+    let f = game.folders.find((x) => x.type === type && x.name === name);
+    if (!f) f = await Folder.create({ name, type, color: "#12455a" });
+    return f;
+  }
+
+  async function gmRollInitiative() {
+    if (!game.user.isGM) return;
+    const next = getCombat();
+    const ids = ["gull", ...Object.keys(next.ships).filter((k) => k !== "gull")];
+    const rolls = [];
+    for (const id of ids) {
+      const r = await new Roll("1d20").evaluate();
+      rolls.push({ shipId: id, roll: r.total });
+    }
+    rolls.sort((a, b) => b.roll - a.roll);
+    next.initiative = rolls;
+    next.activeShip = rolls[0]?.shipId || "gull";
+    next.round = 1;
+    await saveCombat(next);
+    const nameOfShip = (id) => (id === "gull" ? getState().name : next.ships[id]?.name || id);
+    await ChatMessage.create({
+      content: `<b>Ship initiative</b><br>` + rolls.map((r, i) => `${i + 1}. ${esc(nameOfShip(r.shipId))} — <b>${r.roll}</b>`).join("<br>"),
+      speaker: { alias: "SSV Silver Gull" }
+    });
+    refreshFleet();
+  }
+
+  async function gmEndShipTurn() {
+    if (!game.user.isGM) return;
+    const next = getCombat();
+    const order = (next.initiative || []).map((e) => e.shipId).filter((id) => id === "gull" || next.ships[id]);
+    if (!order.length) return ui.notifications?.warn("Roll ship initiative first.");
+    const at = order.indexOf(next.activeShip);
+    const wrapped = at < 0 || at === order.length - 1;
+    next.activeShip = order[wrapped ? 0 : at + 1];
+    if (wrapped) next.round = (next.round || 1) + 1;
+
+    // Reset only the ship whose turn is starting, and tick only its statuses.
+    const startingId = next.activeShip;
+    if (startingId === "gull") {
+      for (const c of Object.values(next.crew)) {
+        c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null;
+        c.mp = 0; c.mpMax = 0; c.navMult = 1; c.gun = null;
+      }
+      const ship = getState();
+      let dirty = false;
+      if (ship.shield.secondary) { ship.shield.secondary = null; dirty = true; }
+      const expired = S.expireStatuses(ship, next.round);
+      if (expired.length) dirty = true;
+      if (dirty) await setState(ship);
+    } else if (next.ships[startingId]) {
+      const sh = next.ships[startingId];
+      for (const c of Object.values(sh.crew)) { c.action = false; c.bonus = false; c.maneuver = null; c.mp = 0; c.gun = null; }
+      S.expireStatuses(sh, next.round);
+      sh.shield.secondary = null;
+    }
+    await saveCombat(next);
+    refreshFleet();
+  }
+
+  async function gmRunShip(shipId) {
+    if (!game.user.isGM) return;
+    const combat = getCombat(); const sh = combat.ships[shipId];
+    if (!sh) return;
+    const doc = S.doctrine(sh.doctrine); const f = S.faction(sh.faction);
+    // Standing Orders: what this hull does when the GM does not want to micro it.
+    await ChatMessage.create({
+      content: `<b>${esc(sh.name)}</b> — standing orders<br><i>${esc(doc.name)}: ${esc(doc.hint)}</i>` +
+               (f ? `<br><span style="opacity:.75">Wants: ${esc(f.wants)}</span>` : ""),
+      speaker: { alias: esc(sh.name) }, whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id)
+    });
+    ui.notifications?.info(`${sh.name}: ${doc.hint}`);
+  }
+
+  async function gmRemoveShip(shipId) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const sh = next.ships[shipId];
+    if (!sh) return;
+    if (sh.tokenId && sh.sceneId) {
+      const sc = game.scenes.get(sh.sceneId);
+      if (sc?.tokens.get(sh.tokenId)) await sc.deleteEmbeddedDocuments("Token", [sh.tokenId]);
+    }
+    if (sh.actorId) { try { await game.actors.get(sh.actorId)?.delete(); } catch (e) {} }
+    delete next.ships[shipId];
+    next.initiative = (next.initiative || []).filter((e) => e.shipId !== shipId);
+    await saveCombat(next);
+    refreshFleet();
+  }
 
   /* ---- Live ship "icon" actor: its token image mirrors the S-menu ship + shield view ---- */
   const SHIP_ICON_DIR = "ssv-ship-icon";
@@ -1411,10 +1933,15 @@
     try { drawGunCone(); } catch (e) {}
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
+      if (ev.key !== "Escape") return;
+      if (fleetOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); return closeFleet(); }
+      if (consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
     }, true);
     const mod = game.modules.get(MODULE_ID);
-    if (mod) mod.api = { open: openShipHUD, getState, setState, defaultState: S.defaultState,
+    if (mod) mod.api = { open: openShipHUD, openFleet, loadFleet, dumpFleet,
+      spawnShip: (hullId, opts) => { const h = hullById(hullId); return h ? gmSpawnShip(h, { skin: Object.keys(h.skins)[0], tier: 1, crew: h.crew.max, disp: "hostile", ...opts }) : null; },
+      rollInitiative: gmRollInitiative, endShipTurn: gmEndShipTurn, removeShip: gmRemoveShip,
+      getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,
       getCombat, enterCombat, endCombat, nextTurn };
     globalThis.SilverGullShip = mod?.api;

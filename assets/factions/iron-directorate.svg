@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Iron Directorate emblem">
+  <defs>
+    <linearGradient id="id-steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8a939c"/>
+      <stop offset="45%" stop-color="#6b7280"/>
+      <stop offset="100%" stop-color="#3a3f45"/>
+    </linearGradient>
+    <linearGradient id="id-plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a5058"/>
+      <stop offset="100%" stop-color="#23262b"/>
+    </linearGradient>
+    <linearGradient id="id-red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0343d"/>
+      <stop offset="100%" stop-color="#b3222a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- gunmetal ground -->
+  <circle cx="100" cy="100" r="96" fill="url(#id-plate)" stroke="#8a939c" stroke-width="3"/>
+
+  <!-- orbital blockade ring -->
+  <circle cx="100" cy="100" r="84" fill="none" stroke="#6b7280" stroke-width="6"/>
+  <g fill="#8a939c">
+    <rect x="97" y="12" width="6" height="14" rx="1"/>
+    <rect x="97" y="174" width="6" height="14" rx="1"/>
+    <rect x="12" y="97" width="14" height="6" rx="1"/>
+    <rect x="174" y="97" width="14" height="6" rx="1"/>
+  </g>
+  <!-- blockade satellites -->
+  <g fill="#b3222a">
+    <circle cx="41" cy="41" r="4"/>
+    <circle cx="159" cy="41" r="4"/>
+    <circle cx="41" cy="159" r="4"/>
+    <circle cx="159" cy="159" r="4"/>
+  </g>
+
+  <!-- armored dreadnought prow (downward wedge) -->
+  <path d="M100 154 L58 92 L72 80 L100 96 L128 80 L142 92 Z" fill="url(#id-steel)" stroke="#23262b" stroke-width="2"/>
+  <path d="M100 154 L100 96" stroke="#23262b" stroke-width="2"/>
+  <!-- prow plating lines -->
+  <path d="M78 100 L100 112 L122 100" fill="none" stroke="#23262b" stroke-width="1.5" opacity="0.8"/>
+  <path d="M86 116 L100 124 L114 116" fill="none" stroke="#23262b" stroke-width="1.5" opacity="0.8"/>
+
+  <!-- rank chevrons of command -->
+  <g fill="url(#id-red)" stroke="#7a161c" stroke-width="0.75">
+    <path d="M100 44 L118 62 L110 62 L100 52 L90 62 L82 62 Z"/>
+    <path d="M100 58 L116 74 L108 74 L100 66 L92 74 L84 74 Z"/>
+  </g>
+</svg>

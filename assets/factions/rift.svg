@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Rift vessel marker">
+  <defs>
+    <radialGradient id="rf-void" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#2a0d3d"/><stop offset="70%" stop-color="#0a0414"/><stop offset="100%" stop-color="#05020a"/>
+    </radialGradient>
+    <linearGradient id="rf-tear" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff4fd8"/><stop offset="55%" stop-color="#b06bf0"/><stop offset="100%" stop-color="#5a2f8a"/>
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="96" fill="url(#rf-void)" stroke="#b06bf0" stroke-width="3"/>
+  <!-- the tear. Deliberately not symmetrical, and it does not close. -->
+  <path d="M92 12 L114 62 L96 78 L126 104 L82 122 L108 140 L74 190"
+        fill="none" stroke="url(#rf-tear)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M92 12 L114 62 L96 78 L126 104 L82 122 L108 140 L74 190"
+        fill="none" stroke="#ffd0f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
+  <g fill="#ff4fd8" opacity=".85">
+    <circle cx="140" cy="52" r="3"/><circle cx="56" cy="86" r="2.5"/>
+    <circle cx="150" cy="150" r="2.5"/><circle cx="46" cy="146" r="3"/>
+  </g>
+</svg>

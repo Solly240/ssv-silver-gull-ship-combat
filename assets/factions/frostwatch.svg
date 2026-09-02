@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Frostwatch emblem">
+  <defs>
+    <radialGradient id="fw-ice" cx="50%" cy="38%" r="72%">
+      <stop offset="0%" stop-color="#123a4a"/><stop offset="100%" stop-color="#04121a"/>
+    </radialGradient>
+    <linearGradient id="fw-rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#cfeef0"/><stop offset="100%" stop-color="#4f97ad"/>
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="96" fill="url(#fw-ice)" stroke="url(#fw-rim)" stroke-width="3"/>
+  <circle cx="100" cy="100" r="83" fill="none" stroke="#215d72" stroke-width="1.5" stroke-dasharray="5 7"/>
+  <!-- the open eye: they see you first, and they say so -->
+  <path d="M34 100 Q100 48 166 100 Q100 152 34 100 Z" fill="none" stroke="#7fd4e8" stroke-width="4"/>
+  <circle cx="100" cy="100" r="21" fill="#0a2a36" stroke="#7fd4e8" stroke-width="3"/>
+  <circle cx="100" cy="100" r="8" fill="#cfeef0"/>
+  <!-- six frost spurs -->
+  <g stroke="#9fe2f2" stroke-width="3" stroke-linecap="round" opacity=".9">
+    <line x1="100" y1="14" x2="100" y2="30"/><line x1="100" y1="170" x2="100" y2="186"/>
+    <line x1="26" y1="57" x2="40" y2="65"/><line x1="174" y1="57" x2="160" y2="65"/>
+    <line x1="26" y1="143" x2="40" y2="135"/><line x1="174" y1="143" x2="160" y2="135"/>
+  </g>
+</svg>

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Apostles of the Threshold emblem">
+  <defs>
+    <radialGradient id="ap-void" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#123058"/>
+      <stop offset="100%" stop-color="#050a16"/>
+    </radialGradient>
+    <linearGradient id="ap-gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7e39b"/>
+      <stop offset="100%" stop-color="#caa02f"/>
+    </linearGradient>
+    <linearGradient id="ap-flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#caa02f"/>
+      <stop offset="55%" stop-color="#ffd766"/>
+      <stop offset="100%" stop-color="#fff4c2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- void ground + gold rim -->
+  <circle cx="100" cy="100" r="96" fill="url(#ap-void)" stroke="url(#ap-gold)" stroke-width="4"/>
+
+  <!-- divine rays above the threshold -->
+  <g stroke="#3f6ea8" stroke-width="3" stroke-linecap="round" opacity="0.8">
+    <line x1="100" y1="24" x2="100" y2="40"/>
+    <line x1="60" y1="34" x2="68" y2="49"/>
+    <line x1="140" y1="34" x2="132" y2="49"/>
+    <line x1="34" y1="62" x2="49" y2="70"/>
+    <line x1="166" y1="62" x2="151" y2="70"/>
+  </g>
+
+  <!-- the Threshold: an arched gateway -->
+  <path d="M62 158 L62 96 A38 38 0 0 1 138 96 L138 158" fill="#081426" stroke="url(#ap-gold)" stroke-width="7" stroke-linejoin="round"/>
+
+  <!-- the Holy Cleansing Fire rising through the gate -->
+  <path d="M100 150 C84 126 88 112 100 92 C95 114 112 116 106 130 C120 120 117 104 109 94 C128 112 124 140 100 150 Z" fill="url(#ap-flame)"/>
+
+  <!-- spark at the apex -->
+  <circle cx="100" cy="70" r="5" fill="#fff4c2"/>
+</svg>

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Sovereign Horizon emblem">
+  <defs>
+    <linearGradient id="sh-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#241a4a"/>
+      <stop offset="60%" stop-color="#3a2a6b"/>
+      <stop offset="100%" stop-color="#0e0a24"/>
+    </linearGradient>
+    <linearGradient id="sh-sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd98a"/>
+      <stop offset="45%" stop-color="#f2a03d"/>
+      <stop offset="100%" stop-color="#e0552b"/>
+    </linearGradient>
+    <linearGradient id="sh-glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2a03d" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#e0552b" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- indigo sky ground -->
+  <circle cx="100" cy="100" r="96" fill="url(#sh-sky)" stroke="#f2a03d" stroke-width="3"/>
+
+  <!-- clip everything below the horizon inside the disc -->
+  <clipPath id="sh-disc"><circle cx="100" cy="100" r="93"/></clipPath>
+
+  <g clip-path="url(#sh-disc)">
+    <!-- horizon glow -->
+    <rect x="0" y="104" width="200" height="60" fill="url(#sh-glow)"/>
+    <!-- rising star / sun -->
+    <circle cx="100" cy="118" r="30" fill="url(#sh-sun)"/>
+    <!-- radiant rays -->
+    <g stroke="#f2a03d" stroke-width="3" stroke-linecap="round" opacity="0.85">
+      <line x1="100" y1="70" x2="100" y2="52"/>
+      <line x1="72" y1="80" x2="60" y2="66"/>
+      <line x1="128" y1="80" x2="140" y2="66"/>
+      <line x1="58" y1="104" x2="42" y2="98"/>
+      <line x1="142" y1="104" x2="158" y2="98"/>
+    </g>
+    <!-- the horizon line -->
+    <rect x="0" y="116" width="200" height="4" fill="#ffd98a"/>
+  </g>
+
+  <!-- broken chain of liberty, arcing across the lower rim -->
+  <g fill="none" stroke="#c9d2e0" stroke-width="4">
+    <path d="M50 150 a9 6 0 0 1 16 6"/>
+    <path d="M66 156 a9 6 0 0 0 16 6" opacity="0.9"/>
+    <!-- snapped gap -->
+    <path d="M118 162 a9 6 0 0 1 16 -6" opacity="0.9"/>
+    <path d="M134 156 a9 6 0 0 0 16 -6"/>
+  </g>
+  <!-- broken link ends -->
+  <g fill="#e0552b">
+    <circle cx="98" cy="164" r="2.5"/>
+    <circle cx="102" cy="164" r="2.5"/>
+  </g>
+</svg>

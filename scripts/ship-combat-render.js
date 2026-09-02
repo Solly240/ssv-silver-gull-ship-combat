@@ -960,6 +960,200 @@
   /*  Scoped styles                                                         */
   /* ---------------------------------------------------------------------- */
 
+
+  /* ---------------------------------------------------------------------- */
+  /*  Fleet Command styles                                                   */
+  /*                                                                          */
+  /*  The visual language is ASTRA's nav scan (maps/nav-scan-day4-post-rift): */
+  /*  bracketed corner ticks, a "//"-separated header rule, dashed range      */
+  /*  rings, leader-lined callout cards, cyan "?" for unresolved contacts and */
+  /*  magenta hatching for sensor blackout. The players have been looking at  */
+  /*  that readout all campaign, so the fleet board is not a new invention —  */
+  /*  it is the thing they already know ASTRA produces, live.                 */
+  /* ---------------------------------------------------------------------- */
+
+  S.FLEET_CSS = `
+.sgfleet{position:fixed;inset:0;z-index:62;display:flex;flex-direction:column;overflow:hidden;
+  font-family:'Courier New',monospace;color:#cfeef0;
+  background:radial-gradient(1200px 700px at 50% -10%,rgba(29,106,134,.22),transparent 60%),
+             radial-gradient(900px 600px at 80% 110%,rgba(176,107,240,.10),transparent 55%),#03070d;}
+.sgfleet *{box-sizing:border-box;}
+.sgfleet button{font-family:inherit;color:inherit;cursor:pointer;background:none;border:none;margin:0;
+  line-height:1.2;text-align:left;white-space:normal;text-shadow:none;box-shadow:none;height:auto;min-height:0;}
+
+/* --- header rule -------------------------------------------------------- */
+.sgfleet .fl-head{flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:10px 16px;
+  border-bottom:1px solid #12455a;background:rgba(4,10,18,.72);}
+.sgfleet .fl-brand{font-size:14px;font-weight:700;letter-spacing:2.5px;color:#38e1c4;
+  text-shadow:0 0 12px rgba(56,225,196,.4);white-space:nowrap;}
+.sgfleet .fl-sep{color:#2a5f70;letter-spacing:1px;}
+.sgfleet .fl-meta{font-size:12px;color:#6f97a6;letter-spacing:1px;white-space:nowrap;}
+.sgfleet .fl-meta b{color:#cfeef0;}
+.sgfleet .fl-spacer{flex:1 1 auto;}
+.sgfleet .fl-btn{font-size:12px;font-weight:700;letter-spacing:1px;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:7px 12px;white-space:nowrap;
+  transition:border-color .12s,box-shadow .12s,color .12s;}
+.sgfleet .fl-btn:hover{border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.28);}
+.sgfleet .fl-btn.warn{border-color:#6b3238;}
+.sgfleet .fl-btn.warn:hover{border-color:#e0454d;color:#e0454d;box-shadow:0 0 12px rgba(224,69,77,.28);}
+.sgfleet .fl-btn[disabled]{opacity:.35;cursor:not-allowed;border-style:dashed;box-shadow:none;}
+.sgfleet .fl-x{font-size:16px;color:#6f97a6;padding:4px 8px;}
+.sgfleet .fl-x:hover{color:#f2b03d;}
+
+/* --- initiative strip ---------------------------------------------------- */
+.sgfleet .fl-init{flex:0 0 auto;display:flex;align-items:stretch;gap:0;padding:0 16px;height:38px;
+  border-bottom:1px solid #0e3444;background:rgba(4,10,18,.5);overflow-x:auto;}
+.sgfleet .fl-init-lbl{display:flex;align-items:center;font-size:10px;letter-spacing:2px;color:#4b7688;
+  padding-right:12px;white-space:nowrap;}
+.sgfleet .fl-chip{position:relative;display:flex;align-items:center;gap:7px;padding:0 16px 0 20px;
+  margin-right:-9px;font-size:11px;letter-spacing:1px;color:#8fb2c0;white-space:nowrap;cursor:pointer;
+  background:#081521;border:1px solid #143d4e;
+  clip-path:polygon(9px 0,100% 0,calc(100% - 9px) 100%,0 100%);}
+.sgfleet .fl-chip:hover{color:#cfeef0;}
+.sgfleet .fl-chip.now{background:#0f3b44;border-color:#38e1c4;color:#cfeef0;font-weight:700;}
+.sgfleet .fl-chip.now::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:#38e1c4;
+  box-shadow:0 0 10px rgba(56,225,196,.8);}
+.sgfleet .fl-chip.done{opacity:.42;}
+.sgfleet .fl-chip .fl-roll{font-size:10px;color:#4b7688;}
+.sgfleet .fl-chip .fl-dot{width:7px;height:7px;border-radius:50%;flex:none;}
+
+/* --- body ---------------------------------------------------------------- */
+.sgfleet .fl-body{flex:1 1 auto;display:grid;grid-template-columns:1fr minmax(300px,368px);
+  gap:0;min-height:0;}
+.sgfleet .fl-board{position:relative;overflow:auto;padding:16px;min-height:0;}
+.sgfleet .fl-side{border-left:1px solid #12455a;background:rgba(4,10,18,.55);overflow:auto;
+  padding:14px 14px 22px;min-height:0;}
+@media (max-width:900px){.sgfleet .fl-body{grid-template-columns:1fr;}
+  .sgfleet .fl-side{border-left:none;border-top:1px solid #12455a;}}
+
+.sgfleet .fl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;align-content:start;}
+
+/* --- a ship card --------------------------------------------------------- */
+.sgfleet .fl-card{position:relative;display:grid;grid-template-columns:78px 1fr;gap:10px;
+  padding:10px 12px 10px 14px;min-height:118px;
+  background:linear-gradient(180deg,rgba(12,32,46,.72),rgba(6,16,24,.72));
+  border:1px solid #14455a;border-radius:10px;cursor:pointer;
+  transition:border-color .14s,box-shadow .14s,transform .14s;}
+.sgfleet .fl-card:hover{border-color:#1d6a86;box-shadow:0 0 16px rgba(29,106,134,.4);}
+.sgfleet .fl-card.sel{border-color:#38e1c4;box-shadow:0 0 20px rgba(56,225,196,.35);}
+.sgfleet .fl-card.active{border-color:#38e1c4;}
+.sgfleet .fl-card.active::after{content:"";position:absolute;inset:-2px;border-radius:11px;pointer-events:none;
+  border:2px solid transparent;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 62%,rgba(56,225,196,.95) 78%,transparent 88% 100%) border-box;
+  -webkit-mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  animation:fl-chase 2.4s linear infinite;}
+@keyframes fl-chase{to{--sweep:360deg;}}
+@supports not (background:conic-gradient(from 0deg,red,blue)){
+  .sgfleet .fl-card.active::after{background:none;border-color:#38e1c4;animation:fl-pulse 1.6s ease-in-out infinite;}}
+@keyframes fl-pulse{0%,100%{opacity:.45;}50%{opacity:1;}}
+.sgfleet .fl-card.out{opacity:.5;filter:grayscale(.5);}
+/* Disposition is a left rail, never the border colour — otherwise "hostile"
+   and "selected" fight over the same channel and neither reads. */
+.sgfleet .fl-card .fl-rail{position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;}
+.sgfleet .fl-card.d-hostile .fl-rail{background:#e0454d;}
+.sgfleet .fl-card.d-neutral .fl-rail{background:#6f97a6;}
+.sgfleet .fl-card.d-ally    .fl-rail{background:#42d16a;}
+
+.sgfleet .fl-art{position:relative;width:78px;height:auto;display:flex;align-items:center;justify-content:center;}
+.sgfleet .fl-art img{max-width:100%;max-height:96px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(29,106,134,.6));}
+.sgfleet .fl-art .fl-unknown{width:56px;height:56px;border:1.5px dashed #2a5f70;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:26px;color:#38e1c4;opacity:.8;}
+
+.sgfleet .fl-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#dff3f6;line-height:1.15;}
+.sgfleet .fl-crest{width:18px;height:18px;flex:none;border-radius:50%;overflow:hidden;}
+.sgfleet .fl-crest svg{width:100%;height:100%;display:block;}
+.sgfleet .fl-crest.none{border:1.5px dashed #46606e;border-radius:50%;}
+.sgfleet .fl-sub{font-size:10px;letter-spacing:1px;color:#6f97a6;margin:2px 0 5px;text-transform:uppercase;}
+
+.sgfleet .fl-hp{position:relative;height:11px;border-radius:6px;background:#0a1c26;border:1px solid #12455a;overflow:hidden;}
+.sgfleet .fl-hp i{position:absolute;left:0;top:0;bottom:0;border-radius:6px;transition:width .45s cubic-bezier(.2,.7,.2,1);}
+/* the damage ghost: what was just lost, held bright for a beat */
+.sgfleet .fl-hp u{position:absolute;top:0;bottom:0;background:#ff5b62;box-shadow:0 0 10px rgba(255,91,98,.9);
+  animation:fl-ghost .75s ease-out forwards;}
+@keyframes fl-ghost{0%{opacity:1;}70%{opacity:.85;}100%{opacity:0;}}
+.sgfleet .fl-hp::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.4;
+  background:repeating-linear-gradient(90deg,transparent 0 11px,rgba(0,0,0,.5) 11px 12px);}
+.sgfleet .fl-hptxt{display:flex;justify-content:space-between;font-size:10px;color:#6f97a6;margin-top:3px;letter-spacing:.5px;}
+.sgfleet .fl-hptxt b{color:#cfeef0;}
+
+.sgfleet .fl-arcs{display:flex;gap:4px;margin-top:6px;}
+.sgfleet .fl-arc{flex:1;text-align:center;font-size:9px;letter-spacing:.5px;color:#6f97a6;
+  border:1px solid #12455a;border-radius:5px;padding:2px 0;background:#081521;}
+.sgfleet .fl-arc b{display:block;font-size:11px;color:#cfeef0;}
+.sgfleet .fl-arc.sh{border-color:#38e1c4;color:#04121c;background:#2ec2aa;}
+.sgfleet .fl-arc.sh b{color:#04121c;}
+.sgfleet .fl-arc.mi{border-color:#b06bf0;color:#e6d5ff;}
+
+.sgfleet .fl-pips{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px;}
+.sgfleet .fl-pip{width:9px;height:9px;border-radius:2px;background:#38e1c4;opacity:.9;}
+.sgfleet .fl-pip.dmg{background:#f2b03d;}
+.sgfleet .fl-pip.dead{background:#e0454d;opacity:.55;}
+.sgfleet .fl-pip.unk{background:none;border:1px dashed #46606e;}
+
+.sgfleet .fl-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+.sgfleet .fl-st{font-size:9px;letter-spacing:.5px;padding:1px 6px;border-radius:9px;border:1px solid currentColor;white-space:nowrap;}
+.sgfleet .fl-st.good{color:#42d16a;} .sgfleet .fl-st.bad{color:#e0454d;} .sgfleet .fl-st.warn{color:#f2b03d;}
+.sgfleet .fl-st.pulse{animation:fl-pulse 1.4s ease-in-out infinite;}
+
+.sgfleet .fl-foot{display:flex;justify-content:space-between;align-items:center;margin-top:7px;font-size:10px;color:#6f97a6;}
+.sgfleet .fl-foot .fl-crew b{color:#cfeef0;}
+.sgfleet .fl-outcome{font-size:10px;font-weight:700;letter-spacing:1.5px;padding:1px 7px;border-radius:9px;border:1px solid currentColor;}
+.sgfleet .fl-outcome.derelict{color:#7fb4c8;} .sgfleet .fl-outcome.destroyed{color:#e0454d;}
+.sgfleet .fl-outcome.disabled{color:#6f97a6;} .sgfleet .fl-outcome.surrendered{color:#f2b03d;}
+.sgfleet .fl-outcome.fled{color:#b06bf0;}
+
+/* redaction: keep the SHAPE of what you don't know, so it reads as a gap */
+.sgfleet .fl-redact{display:inline-block;min-width:26px;height:11px;border-radius:3px;vertical-align:-1px;
+  background:repeating-linear-gradient(135deg,#1a3a48 0 4px,#0d2531 4px 8px);
+  border:1px solid #24596e;}
+
+/* --- the crew panel ------------------------------------------------------ */
+.sgfleet .fl-sh{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:2px;
+  color:#38e1c4;padding-bottom:8px;border-bottom:1px solid #12455a;margin-bottom:10px;}
+.sgfleet .fl-hint{font-size:11px;color:#8fb2c0;line-height:1.45;background:rgba(56,225,196,.06);
+  border-left:2px solid #1d6a86;padding:7px 9px;border-radius:0 6px 6px 0;margin-bottom:12px;}
+.sgfleet .fl-hint b{color:#f2b03d;letter-spacing:1px;}
+.sgfleet .fl-crewrow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;
+  padding:7px 9px;border:1px solid #12455a;border-radius:8px;background:rgba(10,28,38,.55);margin-bottom:6px;cursor:pointer;}
+.sgfleet .fl-crewrow:hover{border-color:#1d6a86;}
+.sgfleet .fl-crewrow.dead{opacity:.42;}
+.sgfleet .fl-crewrow.dead .fl-cname{text-decoration:line-through;}
+.sgfleet .fl-cname{font-size:12px;color:#dff3f6;font-weight:700;}
+.sgfleet .fl-crole{font-size:10px;color:#6f97a6;letter-spacing:1px;text-transform:uppercase;}
+.sgfleet .fl-cst{font-size:10px;color:#8fb2c0;}
+.sgfleet .fl-empty{font-size:11px;color:#5a7c8a;font-style:italic;padding:10px 2px;}
+
+/* --- the spawn browser (lives inside a Foundry dialog) ------------------- */
+.sgsb{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0;font-family:'Courier New',monospace;color:#cfeef0;}
+.sgsb-head{display:flex;gap:8px;flex:0 0 auto;}
+.sgsb-q{flex:1 1 auto;font-family:inherit;font-size:13px;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:7px 10px;}
+.sgsb-q:focus{outline:none;border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.25);}
+.sgsb-ff,.sgsb-cf{font-family:inherit;font-size:12px;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:6px 8px;flex:0 0 auto;}
+.sgsb-grid{flex:1 1 auto;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:10px;align-content:start;padding-right:4px;min-height:0;}
+.sgsb-tile{display:grid;grid-template-columns:84px 1fr;gap:10px;padding:9px 11px;cursor:pointer;
+  background:linear-gradient(180deg,rgba(12,32,46,.7),rgba(6,16,24,.7));
+  border:1px solid #14455a;border-radius:9px;transition:border-color .12s,box-shadow .12s,transform .12s;}
+.sgsb-tile:hover{border-color:#38e1c4;box-shadow:0 0 16px rgba(56,225,196,.28);transform:translateY(-1px);}
+.sgsb-tile.rift{border-color:#6b2f8a;}
+.sgsb-tile.rift:hover{border-color:#ff4fd8;box-shadow:0 0 18px rgba(255,79,216,.35);}
+.sgsb-art{display:flex;align-items:center;justify-content:center;}
+.sgsb-art img{max-width:84px;max-height:92px;object-fit:contain;filter:drop-shadow(0 0 7px rgba(29,106,134,.65));}
+.sgsb-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#dff3f6;line-height:1.15;}
+.sgsb-crest{width:17px;height:17px;flex:none;border-radius:50%;overflow:hidden;display:inline-block;}
+.sgsb-crest svg{width:100%;height:100%;display:block;}
+.sgsb-sub{font-size:10px;letter-spacing:1px;color:#6f97a6;text-transform:uppercase;margin:2px 0 5px;}
+.sgsb-stats{display:flex;flex-wrap:wrap;gap:8px;font-size:10px;color:#6f97a6;letter-spacing:.5px;}
+.sgsb-stats b{color:#cfeef0;font-size:11px;}
+.sgsb-blurb{font-size:11px;color:#8fb2c0;line-height:1.35;margin-top:5px;}
+.sgsb-flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+.sgsb-f{font-size:9px;font-weight:700;letter-spacing:.5px;padding:1px 6px;border-radius:9px;border:1px solid currentColor;}
+.sgsb-f.brd{color:#f2b03d;} .sgsb-f.clk{color:#7fd4e8;} .sgsb-f.arm{color:#8a939c;}
+.sgsb-f.canon{color:#42d16a;} .sgsb-f.rift{color:#ff4fd8;}
+`;
+
   S.ensureStyles = function () {
     if (typeof document === "undefined" || document.getElementById("ssvsc-styles")) return;
     const st = document.createElement("style");
@@ -1352,6 +1546,7 @@
 @keyframes sngshake{0%,100%{transform:translate(-50%,-50%)}25%{transform:translate(-58%,-50%)}75%{transform:translate(-42%,-50%)}}
 .sng-chan canvas{display:block;cursor:crosshair;}
 `;
+    st.textContent += S.FLEET_CSS;   // Fleet Command shares the sheet and the palette
     document.head.appendChild(st);
   };
 
@@ -2515,6 +2710,188 @@
   S.ITEM_COLLATOR = ITEM_COLLATOR;
   // (openItemBrowser/closeItemBrowser, openRepairPuzzle/closeRepairPuzzle and
   //  openNavGame/closeNavGame are already attached to S above.)
+
+
+  /* ---------------------------------------------------------------------- */
+  /*  Fleet Command (key F) — environment-agnostic renderer                   */
+  /*                                                                          */
+  /*  fctx = {                                                                */
+  /*    isGM, userId,                                                         */
+  /*    ships: [shipView],          // ALREADY through S.shipView — this       */
+  /*                                //  renderer never sees a raw record, so   */
+  /*                                //  it cannot leak one                     */
+  /*    round, activeShip, initiative:[{shipId,roll}],                        */
+  /*    selectedId, select(id),                                               */
+  /*    crest(factionId) -> svg string | "",                                  */
+  /*    artUrl(path) -> url,                                                  */
+  /*    spawn(), rollInitiative(), endShipTurn(), reveal(id), removeShip(id), */
+  /*    runShip(id), driveCrew(shipId, crewId), close()                       */
+  /*  }                                                                       */
+  /* ---------------------------------------------------------------------- */
+
+  const OUTCOME_LABEL = { derelict: "DERELICT", destroyed: "DESTROYED", disabled: "DISABLED",
+                          surrendered: "SURRENDERED", fled: "FLED" };
+
+  function crestEl(fctx, factionId) {
+    const svg = factionId && fctx.crest ? fctx.crest(factionId) : "";
+    if (!svg) return `<span class="fl-crest none" title="Unaligned — no faction, no standing consequence"></span>`;
+    const f = S.faction(factionId);
+    return `<span class="fl-crest" title="${esc(f ? f.name : factionId)}">${svg}</span>`;
+  }
+
+  function hullBar(v) {
+    if (!v.known?.hull || !v.hull) {
+      return `<div class="fl-hp" title="Not scanned"><i style="width:100%;background:repeating-linear-gradient(135deg,#1a3a48 0 5px,#0d2531 5px 10px)"></i></div>` +
+             `<div class="fl-hptxt"><span>HULL</span><span class="fl-redact" title="Scan to reveal"></span></div>`;
+    }
+    const pct = v.hull.max ? clamp(v.hull.cur / v.hull.max, 0, 1) * 100 : 0;
+    const col = pct > 50 ? "#38e1c4" : pct > 25 ? "#f2b03d" : "#e0454d";
+    const ghost = v._ghost > 0 && v.hull.max
+      ? `<u style="left:${pct}%;width:${clamp(v._ghost / v.hull.max, 0, 1) * 100}%"></u>` : "";
+    return `<div class="fl-hp"><i style="width:${pct}%;background:${col};box-shadow:0 0 10px ${col}"></i>${ghost}</div>` +
+           `<div class="fl-hptxt"><span>HULL</span><span><b>${v.hull.cur}</b> / ${v.hull.max}</span></div>`;
+  }
+
+  function arcRow(v) {
+    if (!v.known?.ac) return "";
+    const ac = S.shipAC(v, S.crewList(v.crew || {}));
+    const cell = (f, lbl) => {
+      const d = v.known.shields ? ac.dr[f] : { half: false, flat: 0 };
+      const cls = !v.known.shields ? "" : d.half ? " sh" : d.flat ? " mi" : "";
+      const tag = !v.known.shields ? "?" : d.half ? "½" : d.flat ? `−${d.flat}` : "—";
+      return `<div class="fl-arc${cls}" title="${lbl} — AC ${ac[f]}${v.known.shields ? "" : " · shields unscanned"}"><b>${ac[f]}</b>${tag}</div>`;
+    };
+    return `<div class="fl-arcs">${cell("fore", "Fore")}${cell("starboard", "Starboard")}${cell("aft", "Aft")}${cell("port", "Port")}</div>`;
+  }
+
+  function pipRow(v) {
+    if (!v.known?.systems || !v.systems) {
+      return `<div class="fl-pips" title="Systems not scanned">${'<span class="fl-pip unk"></span>'.repeat(6)}</div>`;
+    }
+    const pips = Object.entries(v.systems).map(([id, st]) => {
+      const cls = st === "working" ? "" : st === "damaged" ? " dmg" : " dead";
+      return `<span class="fl-pip${cls}" title="${esc(id)}: ${esc(st)}"></span>`;
+    }).join("");
+    return `<div class="fl-pips">${pips}</div>`;
+  }
+
+  function statusChips(v) {
+    const list = (v.statuses || []).slice(0, 6);
+    if (!list.length) return "";
+    return `<div class="fl-chips">${list.map((s) => {
+      const def = S.STATUSES[s.id]; if (!def) return "";
+      const pulse = (s.id === "on_fire" || s.id === "cloaked" || s.id === "boarded") ? " pulse" : "";
+      return `<span class="fl-st ${def.kind}${pulse}" title="${esc(def.blurb)}">${esc(def.label)}</span>`;
+    }).join("")}</div>`;
+  }
+
+  function shipCard(fctx, v) {
+    const f = S.faction(v.faction);
+    const cls = S.shipClass(v.cls);
+    const sel = v.id === fctx.selectedId ? " sel" : "";
+    const act = v.id === fctx.activeShip && !v.outcome ? " active" : "";
+    const out = v.outcome ? " out" : "";
+    const art = v.art ? `<img src="${fctx.artUrl ? fctx.artUrl(v.art) : v.art}" alt="" onerror="this.style.display='none'">`
+                      : `<span class="fl-unknown">?</span>`;
+    const crewTxt = v.known?.crew && v.crew
+      ? `<span class="fl-crew">CREW <b>${Object.values(v.crew).filter((c) => !c.dead).length}</b>/${Object.keys(v.crew).length}</span>`
+      : `<span class="fl-crew">CREW <span class="fl-redact"></span></span>`;
+    const outcome = v.outcome ? `<span class="fl-outcome ${v.outcome}">${OUTCOME_LABEL[v.outcome] || v.outcome}</span>` : "";
+    return `<div class="fl-card d-${esc(v.disposition || "hostile")}${sel}${act}${out}" data-ship="${esc(v.id)}">
+      <span class="fl-rail"></span>
+      <div class="fl-art">${art}</div>
+      <div>
+        <div class="fl-name">${crestEl(fctx, v.faction)}<span>${esc(v.name)}</span></div>
+        <div class="fl-sub">${esc(cls ? cls.name : v.cls)}${f ? ` · ${esc(f.short)}` : " · Unaligned"}</div>
+        ${hullBar(v)}
+        ${arcRow(v)}
+        ${pipRow(v)}
+        ${statusChips(v)}
+        <div class="fl-foot">${crewTxt}${outcome}</div>
+      </div>
+    </div>`;
+  }
+
+  function crewPanel(fctx, v) {
+    if (!v) return `<div class="fl-empty">Pick a contact on the board to drive it.</div>`;
+    const f = S.faction(v.faction);
+    const doc = S.doctrine(v.doctrine);
+    const head = `<div class="fl-sh">${crestEl(fctx, v.faction)}<span>${esc(v.name)}</span></div>`;
+    // The GM should be able to play an enemy from three lines of text.
+    const hint = fctx.isGM
+      ? `<div class="fl-hint"><b>${esc(doc.name.toUpperCase())}</b> — ${esc(doc.hint)}` +
+        (f ? `<br><b>WANTS</b> ${esc(f.wants)}<br><b>SIGNATURE</b> ${esc(f.signature)}` : "") + `</div>`
+      : "";
+    if (!v.known?.crew || !v.crew) {
+      return head + hint + `<div class="fl-empty">Crew unknown — the Science officer has not scanned this hull deeply enough.</div>`;
+    }
+    const rows = Object.values(v.crew);
+    if (!rows.length) return head + hint + `<div class="fl-empty">No crew aboard. Nothing to board, nothing to break.</div>`;
+    const body = rows.map((c) => {
+      const st = c.station ? (S.station(c.station)?.name || c.station) : "unassigned";
+      return `<div class="fl-crewrow${c.dead ? " dead" : ""}" data-crew="${esc(c.id)}" title="${c.dead ? "Killed — this station is offline" : "Drive this seat"}">
+        <div><div class="fl-cname">${esc(c.name)}</div><div class="fl-crole">${esc(c.roleId || "crew")}</div></div>
+        <div class="fl-cst">${esc(st)}</div></div>`;
+    }).join("");
+    return head + hint + body;
+  }
+
+  S.renderFleet = function (root, fctx) {
+    S.ensureStyles();
+    const ships = (fctx.ships || []).filter(Boolean);
+    const sel = ships.find((s) => s.id === fctx.selectedId) || ships.find((s) => s.id === fctx.activeShip) || ships[0] || null;
+    const live = ships.filter((s) => !s.outcome);
+    const activeName = ships.find((s) => s.id === fctx.activeShip)?.name || "—";
+
+    const initOrder = (fctx.initiative || []).map((e) => ({ e, s: ships.find((x) => x.id === e.shipId) })).filter((x) => x.s);
+    const activeIdx = initOrder.findIndex((x) => x.e.shipId === fctx.activeShip);
+    const initStrip = initOrder.length
+      ? initOrder.map((x, i) => {
+          const f = S.faction(x.s.faction);
+          const cls = x.e.shipId === fctx.activeShip ? " now" : (activeIdx >= 0 && i < activeIdx ? " done" : "");
+          return `<div class="fl-chip${cls}" data-init="${esc(x.e.shipId)}" title="Initiative ${x.e.roll}">
+            <span class="fl-dot" style="background:${f ? f.color : "#6f97a6"}"></span>${esc(x.s.name)}
+            <span class="fl-roll">${x.e.roll}</span></div>`;
+        }).join("")
+      : `<div class="fl-chip" style="cursor:default">No initiative rolled yet</div>`;
+
+    root.className = "sgfleet";
+    root.innerHTML = `
+      <div class="fl-head">
+        <span class="fl-brand">FLEET COMMAND</span>
+        <span class="fl-sep">//</span>
+        <span class="fl-meta">ROUND <b>${fctx.round || 1}</b></span>
+        <span class="fl-sep">//</span>
+        <span class="fl-meta">ACTIVE <b>${esc(activeName)}</b></span>
+        <span class="fl-sep">//</span>
+        <span class="fl-meta"><b>${live.length}</b> CONTACT${live.length === 1 ? "" : "S"}</span>
+        <span class="fl-spacer"></span>
+        ${fctx.isGM ? `<button class="fl-btn" data-act="spawn">＋ Spawn ship</button>
+        <button class="fl-btn" data-act="init">⚔ Roll initiative</button>
+        <button class="fl-btn" data-act="end" ${live.length ? "" : "disabled"}>⏭ End ship turn</button>
+        <button class="fl-btn" data-act="run" ${sel && sel.id !== "gull" && !sel.outcome ? "" : "disabled"}>▶ Run ${esc(sel && sel.id !== "gull" ? sel.name : "ship")}</button>` : ""}
+        <button class="fl-x" data-act="close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="fl-init"><span class="fl-init-lbl">INITIATIVE</span>${initStrip}</div>
+      <div class="fl-body">
+        <div class="fl-board">${ships.length
+          ? `<div class="fl-grid">${ships.map((v) => shipCard(fctx, v)).join("")}</div>`
+          : `<div class="fl-empty">No ships in this engagement.${fctx.isGM ? " Use ＋ Spawn ship." : ""}</div>`}</div>
+        <div class="fl-side">${crewPanel(fctx, sel)}</div>
+      </div>`;
+
+    const on = (sel_, fn) => { const e = root.querySelector(sel_); if (e) e.onclick = fn; };
+    on('[data-act="close"]', () => fctx.close && fctx.close());
+    on('[data-act="spawn"]', () => fctx.spawn && fctx.spawn());
+    on('[data-act="init"]', () => fctx.rollInitiative && fctx.rollInitiative());
+    on('[data-act="end"]', () => fctx.endShipTurn && fctx.endShipTurn());
+    on('[data-act="run"]', () => sel && fctx.runShip && fctx.runShip(sel.id));
+    root.querySelectorAll("[data-ship]").forEach((el) => { el.onclick = () => fctx.select && fctx.select(el.dataset.ship); });
+    root.querySelectorAll("[data-init]").forEach((el) => { el.onclick = () => fctx.select && fctx.select(el.dataset.init); });
+    root.querySelectorAll("[data-crew]").forEach((el) => {
+      el.onclick = () => sel && fctx.driveCrew && fctx.driveCrew(sel.id, el.dataset.crew);
+    });
+  };
 
   // Expose for the preview harness, the Foundry wiring, and external callers.
   (typeof globalThis !== "undefined" ? globalThis : window).SSVShipHUD = S;
