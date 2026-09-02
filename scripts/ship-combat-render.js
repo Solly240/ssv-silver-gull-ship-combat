@@ -20,6 +20,11 @@
 (function () {
   const S = {};
   const MODULE_ID = "ssv-silver-gull-ship-combat";
+  // Stamped by tools/deploy.sh. The wiring half compares this against the
+  // manifest the server is actually serving: browsers cache esmodules hard,
+  // and a client running yesterday's script against today's data fails in
+  // ways that look like bugs. Better it says so out loud.
+  S.VERSION = "0.19.2";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */

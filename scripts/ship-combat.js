@@ -1263,6 +1263,24 @@
     });
   });
 
+  /**
+   * Say so when the browser is running a cached copy of an older release.
+   *
+   * Foundry serves scripts from a stable path, so a browser will happily keep
+   * yesterday's file after an update — and old code against new data fails in
+   * ways that read as bugs. This compares the version compiled into the loaded
+   * script against the manifest the server is actually serving.
+   */
+  function staleScriptWarning() {
+    const running = S.VERSION || "0";
+    const declared = game.modules.get(MODULE_ID)?.version || "0";
+    if (!S.VERSION || running === declared) return;
+    const msg = `Ship Combat: your browser is running v${running} but the server has v${declared}. `
+              + `Hard-refresh (Cmd/Ctrl + Shift + R) — until you do, the ship console may misbehave.`;
+    console.warn(`${MODULE_ID} | ${msg}`);
+    ui.notifications?.error(msg, { permanent: true });
+  }
+
   /* ====================================================================== */
   /*  Fleet Command (key F)                                                 */
   /* ====================================================================== */
@@ -1938,6 +1956,7 @@
       if (fleetOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); return closeFleet(); }
       if (consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
     }, true);
+    staleScriptWarning();
     const mod = game.modules.get(MODULE_ID);
     if (mod) mod.api = { open: openShipHUD, openFleet, loadFleet, dumpFleet,
       spawnShip: (hullId, opts) => { const h = hullById(hullId); return h ? gmSpawnShip(h, { skin: Object.keys(h.skins)[0], tier: 1, crew: h.crew.max, disp: "hostile", ...opts }) : null; },
