@@ -1374,14 +1374,15 @@
     const ids = [...Object.keys(S.FACTIONS), "unaligned"];
     await Promise.all(ids.map(async (id) => {
       if (CRESTS[id] !== undefined) return;
+      const url = `modules/${MODULE_ID}/assets/factions/${id}.svg`;
       try {
-        const res = await fetch(`modules/${MODULE_ID}/assets/factions/${id}.svg`);
-        CRESTS[id] = res.ok ? await res.text() : "";
+        const res = await fetch(url, { method: "HEAD" });
+        CRESTS[id] = res.ok ? url : "";
       } catch (e) { CRESTS[id] = ""; }
     }));
     return CRESTS;
   }
-  const crestFor = (id) => CRESTS[id] || "";
+  const crestFor = (id) => CRESTS[id || "unaligned"] || CRESTS.unaligned || "";
 
   /* ---- the overlay ----------------------------------------------------- */
   let _fleet = null, fleetSelected = null;
@@ -1482,7 +1483,7 @@
                    data-faction="${esc(h.faction || "unaligned")}" data-cls="${esc(h.cls)}">
         <div class="sgsb-art"><img src="${esc(hullArt(h, skin))}" alt="" loading="lazy" onerror="this.style.display='none'"></div>
         <div class="sgsb-body">
-          <div class="sgsb-name"><span class="sgsb-crest">${crestFor(h.faction || "unaligned")}</span>${esc(h.name)}</div>
+          <div class="sgsb-name">${crestFor(h.faction) ? `<img class="sgsb-crest" src="${esc(crestFor(h.faction))}" alt="">` : `<span class="sgsb-crest none"></span>`}${esc(h.name)}</div>
           <div class="sgsb-sub">${esc(cls ? cls.name : h.cls)} · ${esc(f ? f.short : "Unaligned")} · ${esc(S.doctrine(h.doctrine).name)}</div>
           <div class="sgsb-stats"><span>HULL <b>${h.hull}</b></span><span>AC <b>${h.acBase}</b></span>
             <span>GUNS <b>${(h.guns || []).length}</b></span><span>DECKS <b>${h.decks}</b></span>

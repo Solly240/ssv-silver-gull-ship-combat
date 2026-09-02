@@ -784,6 +784,11 @@
         gun: c.gun || null, target: String(c.target || ""),
         actorId: String(c.actorId || ""), tokenId: String(c.tokenId || ""),
         deck: Math.max(1, num(c.deck, 1)),
+        // Which SRD stat block this seat resolves to when they are boarded, and
+        // at which tier. Set at spawn; dropping it here left every enemy crew
+        // member with no stat block to instantiate from.
+        block: String(c.block || ""), tier: Math.max(1, Math.min(4, num(c.tier, 1))),
+        hp: c.hp && typeof c.hp === "object" ? { cur: num(c.hp.cur, 0), max: num(c.hp.max, 0) } : null,
         dead: !!c.dead
       };
     }
@@ -828,7 +833,7 @@
 
   S.shipView = function (ship, { isGM = false, own = false } = {}) {
     if (!ship) return null;
-    const full = { ...ship, known: { ac: true, shields: true, systems: true, crew: true, hull: true, deckmap: 3 } };
+    const full = { ...ship, own: !!own, known: { ac: true, shields: true, systems: true, crew: true, hull: true, deckmap: 3 } };
     if (isGM || own) return full;
     const r = ship.revealed || {};
     const view = {
@@ -1029,7 +1034,7 @@
 .sgfleet .fl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;align-content:start;}
 
 /* --- a ship card --------------------------------------------------------- */
-.sgfleet .fl-card{position:relative;display:grid;grid-template-columns:78px 1fr;gap:10px;
+.sgfleet .fl-card{position:relative;display:grid;grid-template-columns:92px 1fr;gap:11px;
   padding:10px 12px 10px 14px;min-height:118px;
   background:linear-gradient(180deg,rgba(12,32,46,.72),rgba(6,16,24,.72));
   border:1px solid #14455a;border-radius:10px;cursor:pointer;
@@ -1054,15 +1059,16 @@
 .sgfleet .fl-card.d-neutral .fl-rail{background:#6f97a6;}
 .sgfleet .fl-card.d-ally    .fl-rail{background:#42d16a;}
 
-.sgfleet .fl-art{position:relative;width:78px;height:auto;display:flex;align-items:center;justify-content:center;}
-.sgfleet .fl-art img{max-width:100%;max-height:96px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(29,106,134,.6));}
+.sgfleet .fl-art{position:relative;width:92px;height:auto;display:flex;align-items:center;justify-content:center;}
+.sgfleet .fl-art img{max-width:100%;max-height:112px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(29,106,134,.6));}
 .sgfleet .fl-art .fl-unknown{width:56px;height:56px;border:1.5px dashed #2a5f70;border-radius:50%;
   display:flex;align-items:center;justify-content:center;font-size:26px;color:#38e1c4;opacity:.8;}
 
 .sgfleet .fl-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#dff3f6;line-height:1.15;}
-.sgfleet .fl-crest{width:18px;height:18px;flex:none;border-radius:50%;overflow:hidden;}
+.sgfleet .fl-crest{width:18px;height:18px;flex:none;border-radius:50%;overflow:hidden;object-fit:contain;display:inline-block;}
 .sgfleet .fl-crest svg{width:100%;height:100%;display:block;}
 .sgfleet .fl-crest.none{border:1.5px dashed #46606e;border-radius:50%;}
+.sgfleet .fl-crest.own{display:flex;align-items:center;justify-content:center;color:#38e1c4;font-size:13px;}
 .sgfleet .fl-sub{font-size:10px;letter-spacing:1px;color:#6f97a6;margin:2px 0 5px;text-transform:uppercase;}
 
 .sgfleet .fl-hp{position:relative;height:11px;border-radius:6px;background:#0a1c26;border:1px solid #12455a;overflow:hidden;}
@@ -1125,12 +1131,16 @@
 
 /* --- the spawn browser (lives inside a Foundry dialog) ------------------- */
 .sgsb{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0;font-family:'Courier New',monospace;color:#cfeef0;}
-.sgsb-head{display:flex;gap:8px;flex:0 0 auto;}
-.sgsb-q{flex:1 1 auto;font-family:inherit;font-size:13px;color:#cfeef0;background:#0a1c26;
-  border:1px solid #1d6a86;border-radius:8px;padding:7px 10px;}
+.sgsb-head{display:flex;gap:8px;flex:0 0 auto;align-items:stretch;}
+/* Foundry's own input/select rules leak in and set width:100%, which blew this
+   row apart — the search collapsed to 22px and each select stretched to 946px.
+   Pin the widths and allow the search to shrink. */
+.sgsb-q{flex:1 1 auto;min-width:0;width:auto;font-family:inherit;font-size:13px;color:#cfeef0;
+  background:#0a1c26;border:1px solid #1d6a86;border-radius:8px;padding:7px 10px;height:34px;}
 .sgsb-q:focus{outline:none;border-color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.25);}
-.sgsb-ff,.sgsb-cf{font-family:inherit;font-size:12px;color:#cfeef0;background:#0a1c26;
-  border:1px solid #1d6a86;border-radius:8px;padding:6px 8px;flex:0 0 auto;}
+.sgsb-ff,.sgsb-cf{flex:0 0 auto;width:170px;min-width:170px;max-width:170px;height:34px;
+  font-family:inherit;font-size:12px;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:6px 8px;}
 .sgsb-grid{flex:1 1 auto;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
   gap:10px;align-content:start;padding-right:4px;min-height:0;}
 .sgsb-tile{display:grid;grid-template-columns:84px 1fr;gap:10px;padding:9px 11px;cursor:pointer;
@@ -1142,8 +1152,8 @@
 .sgsb-art{display:flex;align-items:center;justify-content:center;}
 .sgsb-art img{max-width:84px;max-height:92px;object-fit:contain;filter:drop-shadow(0 0 7px rgba(29,106,134,.65));}
 .sgsb-name{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#dff3f6;line-height:1.15;}
-.sgsb-crest{width:17px;height:17px;flex:none;border-radius:50%;overflow:hidden;display:inline-block;}
-.sgsb-crest svg{width:100%;height:100%;display:block;}
+.sgsb-crest{width:17px;height:17px;flex:none;border-radius:50%;overflow:hidden;display:inline-block;object-fit:contain;}
+.sgsb-crest.none{border:1.5px dashed #46606e;}
 .sgsb-sub{font-size:10px;letter-spacing:1px;color:#6f97a6;text-transform:uppercase;margin:2px 0 5px;}
 .sgsb-stats{display:flex;flex-wrap:wrap;gap:8px;font-size:10px;color:#6f97a6;letter-spacing:.5px;}
 .sgsb-stats b{color:#cfeef0;font-size:11px;}
@@ -2732,11 +2742,14 @@
   const OUTCOME_LABEL = { derelict: "DERELICT", destroyed: "DESTROYED", disabled: "DISABLED",
                           surrendered: "SURRENDERED", fled: "FLED" };
 
+  // The crest is an <img>, not inline <svg>: Foundry's dialog content pipeline
+  // does not reliably keep inline SVG, and an image is cacheable besides.
   function crestEl(fctx, factionId) {
-    const svg = factionId && fctx.crest ? fctx.crest(factionId) : "";
-    if (!svg) return `<span class="fl-crest none" title="Unaligned — no faction, no standing consequence"></span>`;
+    const url = fctx.crest ? fctx.crest(factionId || "unaligned") : "";
     const f = S.faction(factionId);
-    return `<span class="fl-crest" title="${esc(f ? f.name : factionId)}">${svg}</span>`;
+    const title = f ? f.name : "Unaligned — no faction, no standing consequence";
+    if (!url) return `<span class="fl-crest none" title="${esc(title)}"></span>`;
+    return `<img class="fl-crest" src="${esc(url)}" alt="" title="${esc(title)}" onerror="this.className='fl-crest none';this.removeAttribute('src')">`;
   }
 
   function hullBar(v) {
@@ -2793,16 +2806,19 @@
     const out = v.outcome ? " out" : "";
     const art = v.art ? `<img src="${fctx.artUrl ? fctx.artUrl(v.art) : v.art}" alt="" onerror="this.style.display='none'">`
                       : `<span class="fl-unknown">?</span>`;
-    const crewTxt = v.known?.crew && v.crew
-      ? `<span class="fl-crew">CREW <b>${Object.values(v.crew).filter((c) => !c.dead).length}</b>/${Object.keys(v.crew).length}</span>`
-      : `<span class="fl-crew">CREW <span class="fl-redact"></span></span>`;
+    const total = v.crew ? Object.keys(v.crew).length : 0;
+    const crewTxt = !v.known?.crew || !v.crew
+      ? `<span class="fl-crew">CREW <span class="fl-redact"></span></span>`
+      : total
+        ? `<span class="fl-crew">CREW <b>${Object.values(v.crew).filter((c) => !c.dead).length}</b>/${total}</span>`
+        : `<span class="fl-crew">${v.own ? "NO STATIONS MANNED" : "CREWLESS"}</span>`;
     const outcome = v.outcome ? `<span class="fl-outcome ${v.outcome}">${OUTCOME_LABEL[v.outcome] || v.outcome}</span>` : "";
     return `<div class="fl-card d-${esc(v.disposition || "hostile")}${sel}${act}${out}" data-ship="${esc(v.id)}">
       <span class="fl-rail"></span>
       <div class="fl-art">${art}</div>
       <div>
-        <div class="fl-name">${crestEl(fctx, v.faction)}<span>${esc(v.name)}</span></div>
-        <div class="fl-sub">${esc(cls ? cls.name : v.cls)}${f ? ` · ${esc(f.short)}` : " · Unaligned"}</div>
+        <div class="fl-name">${v.own ? `<span class="fl-crest own" title="Your ship">⬢</span>` : crestEl(fctx, v.faction)}<span>${esc(v.name)}</span></div>
+        <div class="fl-sub">${esc(cls ? cls.name : v.cls)}${v.own ? " · YOUR SHIP" : f ? ` · ${esc(f.short)}` : " · Unaligned"}</div>
         ${hullBar(v)}
         ${arcRow(v)}
         ${pipRow(v)}
@@ -3046,6 +3062,9 @@
     ok(S.stationManned(enemy, "pilot") === false, "a dead pilot leaves the station unmanned");
     ok(S.normalizeShip({ faction: "not-real" }).faction === "", "an unknown faction normalises to unaligned");
     ok(S.normalizeShip({ hull: { cur: 999, max: 100 } }).hull.cur === 100, "hull is clamped to max");
+    const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
+    ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
+       "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
 
     // --- the reveal boundary (the leak audit) -------------------------------
     const secret = S.normalizeShip({ id: "s1", name: "Ghost", hull: { cur: 40, max: 200 }, ac: { base: 17 },
