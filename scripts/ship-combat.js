@@ -2047,6 +2047,57 @@
   const DECK_FOLDER = "SSV — Boarded Hulls";
   const deckSceneName = (hullName, skin, deck) => `${hullName} — ${skin} · Deck ${deck}`;
 
+  /*
+   * What each deck of a hull family actually IS.
+   *
+   * The map packs number decks by the order the artist exported them, which says
+   * nothing about the ship. On the Razorbill — the Gull — deck 2 carries the
+   * bridge, the crew quarters, the galley and the engine room, and deck 1 is the
+   * sparse deck with almost nothing on it. Keyed by pack, so every skin reads the
+   * same, and so an enemy flying the same hull is labelled the same way.
+   *
+   * This is a DISPLAY name only. `deckSceneName()` above stays the lookup key and
+   * lives in the scene's flag, so renaming a deck never orphans its scene.
+   */
+  const DECK_ROLES = {
+    // `main` is the deck the crew actually live on — bridge, stations, engine room.
+    // The numbered keys are display names; the two never collide.
+    "HyperdriveFleet-Razorbill-Interceptor.scenes": { main: 2, 1: "Second Deck", 2: "Main Deck" },
+  };
+  const deckRole = (hull, deck) => {
+    const r = DECK_ROLES[hull?.pack || ""]?.[Number(deck)];
+    return typeof r === "string" ? r : "";
+  };
+  /** The deck a hull's crew are on unless something says otherwise. */
+  const mainDeck = (hull) => Number(DECK_ROLES[hull?.pack || ""]?.main) || 1;
+  /** The Gull's own main deck. Resolved from the pack id, so it needs no FLEET. */
+  const gullMainDeck = () => Number(DECK_ROLES[GULL_PACK]?.main) || 1;
+  const deckLabel = (hull, deck) => deckRole(hull, deck) || `Deck ${deck}`;
+  const deckDisplayName = (hull, hullName, skin, deck) => {
+    const role = deckRole(hull, deck);
+    return deckSceneName(hullName, skin, deck) + (role ? ` — ${role}` : "");
+  };
+
+  /*
+   * Stairwells that join two decks, in scene coordinates, keyed by hull family.
+   *
+   * The packs draw the shaft on both decks but ship nothing that connects them,
+   * so we lay a pair of teleport Regions over it — walk onto the stairs on one
+   * deck and you arrive on the stairs of the other, and your view follows.
+   * Measured off the Razorbill maps; every skin shares the geometry, so boarding
+   * an enemy flying this hull gets working stairs for free.
+   *
+   * Core will not bounce you straight back: a teleport arrival is a "displace"
+   * movement, and teleport-token ignores those (client/data/region-behaviors/
+   * teleport-token.mjs — "Displacement does not trigger teleportation").
+   */
+  const STAIR_LINKS = {
+    "HyperdriveFleet-Razorbill-Interceptor.scenes": [
+      { name: "Stairs", at: { 1: { x: 5645, y: 5704, width: 123, height: 104 },
+                              2: { x: 5653, y: 5707, width: 116, height: 103 } } },
+    ],
+  };
+
   /** The scene for one deck of one hull+skin, if it has already been imported. */
   function findDeckScene(hullName, skin, deck = 1) {
     const want = deckSceneName(hullName, skin, deck);
@@ -2086,13 +2137,20 @@
   async function _importDeck(hull, skin, deck, { rebuild = false } = {}) {
     if (!hull) return null;
     const name = deckSceneName(hull.name, skin, deck);
+    const display = deckDisplayName(hull, hull.name, skin, deck);
     const existing = findDeckScene(hull.name, skin, deck);
     if (existing && !rebuild) {
-      // Scenes imported before ownership was set are invisible to players:
-      // scene.view() on a non-active scene needs OBSERVER. Repair in place.
+      // Repair in place. Two things drift on scenes imported by older versions:
+      // ownership (scene.view() on a non-active scene needs OBSERVER, so without
+      // it a player simply cannot go there) and the name, which now says what the
+      // deck is. The lookup key lives in the flag, so renaming is safe.
       const want = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2;
-      if ((existing.ownership?.default ?? 0) < want && game.user.isGM) {
-        try { await existing.update({ ownership: { default: want } }); } catch (e) {}
+      const patch = {};
+      if ((existing.ownership?.default ?? 0) < want) patch.ownership = { default: want };
+      if (existing.name !== display) patch.name = display;
+      if (existing.getFlag(MODULE_ID, "deckScene") !== name) patch[`flags.${MODULE_ID}.deckScene`] = name;
+      if (Object.keys(patch).length && game.user.isGM) {
+        try { await existing.update(patch); } catch (e) {}
       }
       return existing;
     }
@@ -2136,7 +2194,7 @@
     delete data._id;
     delete data.folder;
     (data.tokens || []).length = 0;             // their demo tokens are not our crew
-    data.name = name;
+    data.name = display;
     data.active = false;
     data.navigation = false;
     data.ownership = { default: CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2 };
@@ -2157,7 +2215,7 @@
       scene = await Scene.create(data);
     }
     if (!scene) return null;
-    ui.notifications?.info(`${name}: ${scene.walls.size} walls, ${scene.lights.size} lights, ${scene.tiles.size} tiles — as shipped.`);
+    ui.notifications?.info(`${display}: ${scene.walls.size} walls, ${scene.lights.size} lights, ${scene.tiles.size} tiles — as shipped.`);
     return scene;
   }
 
@@ -2172,7 +2230,71 @@
     }
     if (plan.borrowed) ui.notifications?.info(
       `${hull.name} (${skin}) ships ${plan.count - plan.borrowed} of ${plan.count} decks — the rest came from "${plan.donor}".`);
+    try { await ensureStairLinks(hull, skin); } catch (e) { console.warn(`${MODULE_ID} | stair links`, e); }
     return out[0] || null;
+  }
+
+  /**
+   * Lay the teleport Regions that join a hull's decks at the stairwell.
+   *
+   * Idempotent, and repairs rather than duplicates: the pair is found by flag, so
+   * re-running after a rebuild re-points the existing regions instead of stacking
+   * new ones. Silently does nothing for a hull with no measured stairwell.
+   */
+  async function ensureStairLinks(hull, skin) {
+    const links = STAIR_LINKS[hull?.pack || ""] || [];
+    if (!links.length || !game.user.isGM) return 0;
+    let made = 0;
+    for (let i = 0; i < links.length; i++) {
+      const link = links[i];
+      const tag = String(i);
+      const decks = Object.keys(link.at).map(Number).sort((a, b) => a - b);
+      if (decks.length !== 2) continue;
+
+      // Both ends have to exist before either can point at the other.
+      const scenes = {};
+      for (const d of decks) scenes[d] = findDeckScene(hull.name, skin, d);
+      if (decks.some((d) => !scenes[d])) continue;
+
+      const regions = {};
+      for (const d of decks) {
+        const sc = scenes[d], b = link.at[d];
+        const other = decks.find((x) => x !== d);
+        const data = {
+          name: `${link.name} → ${deckLabel(hull, other)}`,
+          color: "#3fe0d0",
+          visibility: CONST.REGION_VISIBILITY?.ALWAYS ?? 2,
+          shapes: [{ type: "rectangle", x: b.x, y: b.y, width: b.width, height: b.height, rotation: 0, hole: false }],
+          flags: { [MODULE_ID]: { stairLink: tag, hullId: hull.id, skin, deck: d, linksTo: other } },
+        };
+        let reg = sc.regions.find((r) => {
+          const f = r.getFlag(MODULE_ID, "stairLink");
+          return f != null && f !== false && String(f) === tag;
+        });
+        if (reg) { await reg.update(data).catch(() => {}); }
+        else { [reg] = (await sc.createEmbeddedDocuments("Region", [data]).catch(() => [])) || []; }
+        if (!reg) break;
+        regions[d] = reg;
+      }
+      if (decks.some((d) => !regions[d])) continue;
+
+      for (const d of decks) {
+        const other = decks.find((x) => x !== d);
+        const reg = regions[d];
+        const system = {
+          destinations: [regions[other].uuid],
+          placement: "center", snap: true, choice: false, revealed: true,
+          transition: { type: "fade", duration: 800 },
+        };
+        const bh = reg.behaviors.find((x) => x.type === "teleportToken");
+        if (bh) await bh.update({ disabled: false, system }).catch(() => {});
+        else await reg.createEmbeddedDocuments("RegionBehavior", [{
+          name: `To ${deckLabel(hull, other)}`, type: "teleportToken", disabled: false, system,
+        }]).catch(() => {});
+      }
+      made++;
+    }
+    return made;
   }
 
   /* ---- where everyone is standing ---------------------------------------- */
@@ -2180,7 +2302,7 @@
   /** The Gull is where you are unless the combat state says otherwise. */
   function whereAmI(userId) {
     const w = getCombat().whereIs?.[userId || game.user.id];
-    return w && w.shipId ? w : { shipId: "gull", deck: 1 };
+    return w && w.shipId ? w : { shipId: "gull", deck: gullMainDeck() };
   }
 
   /** The hull profile + skin for whichever ship a user is standing in. */
@@ -2248,7 +2370,7 @@
       hullName: name, isOwnShip: isGull, deck: me.deck, shipId: me.shipId,
       decks: deckKeys.map((k) => ({
         n: Number(k),
-        name: Number(k) === 1 ? "Main deck" : Number(k) === 2 ? "Lower deck / engineering" : `Deck ${k}`,
+        name: deckLabel(hull, k),
         crew: canSeeCrew ? (perDeck[Number(k)] || 0) : null,
         here: Number(k) === me.deck
       })),
@@ -2401,8 +2523,9 @@
 
   /** Back to the Gull — only if someone has physically recovered you. */
   async function returnToShip() {
-    if (game.user.isGM) await gmGoToDeck(game.user.id, "gull", 1);
-    else emit({ type: "goDeck", toGM: true, shipId: "gull", deck: 1, userId: game.user.id });
+    const home = gullMainDeck();
+    if (game.user.isGM) await gmGoToDeck(game.user.id, "gull", home);
+    else emit({ type: "goDeck", toGM: true, shipId: "gull", deck: home, userId: game.user.id });
   }
 
   /* ---- Boarding ---------------------------------------------------------- */
@@ -2509,7 +2632,8 @@
    * `boardingParty` has been carried on every hull since the fleet was authored
    * and shown in the spawn browser as a corner flag, but nothing ever spawned
    * them — the Leiothrix and the Apostle pod ships were advertising marines that
-   * did not exist. They land on the Gull's deck 1, at the arc they came from.
+   * did not exist. They land on the Gull's main deck, at the arc they came from —
+   * deck 2 on the Razorbill frame, which is where the stations worth taking are.
    */
   async function gmEnemyBoard(shipId) {
     if (!game.user.isGM) return false;
@@ -2524,10 +2648,10 @@
       return false;
     }
 
-    // The Gull's own deck 1, imported on demand exactly like an enemy's.
+    // The Gull's own main deck, imported on demand exactly like an enemy's.
     const hull = await gullHull();
     const name = getState().name;
-    const scene = hull ? await deckScene({ ...hull, name }, "Original", 1) : null;
+    const scene = hull ? await deckScene({ ...hull, name }, "Original", gullMainDeck()) : null;
     if (!scene) { ui.notifications?.error("The Gull has no deck plan to board — open DECKS in the ship console."); return false; }
 
     const g = scene.grid?.size || 100;
@@ -2566,7 +2690,7 @@
     await ChatMessage.create({
       content: `<b style="color:#e0454d">BOARDERS</b> — <b>${esc(sh.name)}</b> puts <b>${made.length}</b> ` +
                `${esc(label.toLowerCase())}${made.length === 1 ? "" : "s"} through your <b>${esc(S.FACING_LABEL[face])}</b> ` +
-               `onto <b>deck 1</b>.` +
+               `onto your <b>${esc(deckLabel(hull, gullMainDeck()).toLowerCase())}</b>.` +
                (fac ? `<br><span style="opacity:.75">${esc(fac.wants)}</span>` : "") +
                `<br><i>Switch to DECKS in the ship console — they are aboard now.</i>`,
       speaker: { alias: esc(sh.name) } });

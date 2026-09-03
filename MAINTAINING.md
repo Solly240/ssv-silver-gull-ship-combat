@@ -290,6 +290,47 @@ are how everything finds its way around.
 skin of every hull is boardable, and the imported scene records which skin it
 borrowed from.
 
+### The name you see is not the name we look up
+
+`deckSceneName(hullName, skin, deck)` — `SSV Silver Gull — Original · Deck 2` — is
+the **key**. It is what goes in the scene's `deckScene` flag and what
+`findDeckScene()` matches on. The scene's **name** is `deckDisplayName()`, which
+appends what the deck actually is: `… · Deck 2 — Main Deck`.
+
+Keep those two separate. Pack deck numbers are export order and say nothing about
+the ship — on the Razorbill, **deck 2 is the main deck** (bridge, quarters, galley,
+engine room) and **deck 1 is the sparse second deck**. `DECK_ROLES`, keyed by
+**pack** so every skin and every enemy on the same frame agrees, supplies the role;
+`deckLabel(hull, n)` falls back to `Deck N` for hulls we have not labelled, and it
+also drives the deck strip in the boarding HUD. Because the key lives in the flag,
+renaming a deck can never orphan its scene, and `_importDeck` renames any scene
+imported by an older version in place on the next build.
+
+### Stairwells: a pair of teleport Regions, laid by us
+
+The packs draw the stair shaft on both decks and ship **nothing that connects
+them**. `STAIR_LINKS`, also keyed by pack, holds the shaft's box on each deck in
+scene coordinates; `ensureStairLinks(hull, skin)` runs at the end of
+`buildDeckScene()` and lays a `teleportToken` Region over each end pointing at the
+other. Walk onto the stairs and you arrive on the other deck's stairs, and core
+pulls your view across with you.
+
+Three things to know before touching it:
+
+- **It cannot loop.** A teleport arrival is a `displace` movement and
+  `teleport-token.mjs` returns early on those — *"Displacement does not trigger
+  teleportation"*. The token lands inside the destination region and stays there.
+- **It is idempotent.** Regions are found by the `stairLink` flag (a string index),
+  so re-running after a rebuild re-points the existing pair instead of stacking a
+  second one. Change the flag's shape and you will get duplicates.
+- **Both ends must exist first**, so the regions are created in one pass and
+  cross-linked in a second. A hull with no entry in `STAIR_LINKS` is skipped
+  silently — that is the normal case.
+
+Measure a new hull's shaft off its own deck scenes; the boxes are in **scene**
+coordinates, not grid squares, and the two decks' boxes are usually a few pixels
+apart because the artist drew them separately.
+
 ## 5c. The canvas overlay
 
 One `PIXI.Container` per ship, glued to its token, holding the shield arcs, the
