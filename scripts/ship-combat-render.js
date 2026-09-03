@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.27.3";
+  S.VERSION = "0.27.4";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -249,8 +249,10 @@
   // The ship's two forward-mounted mono-gun turrets. A gunner (port or starboard seat) picks which gun to fire.
   // Firing arc is 45° to either side of dead-ahead (90° cone). Ranges are in grid squares.
   S.GUNS = [
-    { id: "flak",       label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 2, longMax: 4,  longNote: "−5 & half dmg" },
-    { id: "autocannon", label: "Heavy Autocannon",  toHit: 3, damage: "4d6", shortMax: 4, longMax: 10, longNote: "no penalty" }
+    // `arc: "fore"` is the fixed 90° forward cone the map overlay already draws.
+    // It went unenforced for a long time while every enemy mount respected its own.
+    { id: "flak",       label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 2, longMax: 4,  longNote: "−5 & half dmg", arc: "fore" },
+    { id: "autocannon", label: "Heavy Autocannon",  toHit: 3, damage: "4d6", shortMax: 4, longMax: 10, longNote: "no penalty", arc: "fore" }
   ];
   S.gun = (id) => S.GUNS.find((g) => g.id === id) || (S.TURRETS || []).map((t) => t.gun).find((g) => g.id === id) || null;
   /* ---------------------------------------------------------------------- */
@@ -266,22 +268,22 @@
   S.TURRET_HP_MAX = 18;
   S.TURRETS = [
     { id: "turret_flak", station: "turret_flak", name: "Light Flak Turret", num: 1,
-      gun: { id: "t_flak", label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 3, longMax: 6, longNote: "−5 & half dmg" },
+      gun: { id: "t_flak", label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 3, longMax: 6, longNote: "−5 & half dmg", arc: "turret" },
       signature: "spread", blurb: "Anti-swarm point defence. Hits up to three contacts, and shoots at boarders for free." },
     { id: "turret_autocannon", station: "turret_autocannon", name: "Heavy Autocannon", num: 2,
-      gun: { id: "t_auto", label: "Heavy Autocannon", toHit: 3, damage: "4d6", shortMax: 5, longMax: 12, longNote: "no penalty" },
+      gun: { id: "t_auto", label: "Heavy Autocannon", toHit: 3, damage: "4d6", shortMax: 5, longMax: 12, longNote: "no penalty", arc: "turret" },
       signature: "pierce", blurb: "Armour-piercing. Ignores armour, and its Called Shots cost no accuracy." },
     { id: "turret_plasma", station: "turret_plasma", name: "Plasma Casing Cannon", num: 3,
-      gun: { id: "t_plasma", label: "Plasma Casing Cannon", toHit: 4, damage: "3d8", shortMax: 3, longMax: 8, longNote: "−5 & half dmg" },
+      gun: { id: "t_plasma", label: "Plasma Casing Cannon", toHit: 4, damage: "3d8", shortMax: 3, longMax: 8, longNote: "−5 & half dmg", arc: "turret" },
       signature: "shieldbreak", blurb: "Shield-breaker. Auto-inflicts Shields Down, and hits harder once they are." },
     { id: "turret_cryo", station: "turret_cryo", name: "Liquid Nitrogen Cryo-Beam", num: 4,
-      gun: { id: "t_cryo", label: "Cryo-Beam", toHit: 4, damage: "2d8", shortMax: 2, longMax: 5, longNote: "−5 & half dmg" },
+      gun: { id: "t_cryo", label: "Cryo-Beam", toHit: 4, damage: "2d8", shortMax: 2, longMax: 5, longNote: "−5 & half dmg", arc: "turret" },
       signature: "freeze", blurb: "Brittle-shatter. Freezes the target: the next kinetic hit has advantage and doubles." },
     { id: "turret_ion", station: "turret_ion", name: "Ion Charge Cannon", num: 5,
-      gun: { id: "t_ion", label: "Ion Charge Cannon", toHit: 4, damage: "2d10", shortMax: 4, longMax: 9, longNote: "−5 & half dmg" },
+      gun: { id: "t_ion", label: "Ion Charge Cannon", toHit: 4, damage: "2d10", shortMax: 4, longMax: 9, longNote: "−5 & half dmg", arc: "turret" },
       signature: "emp", blurb: "EMP disruptor. Disables engines or drops shields, your choice." },
     { id: "turret_gravity", station: "turret_gravity", name: "Gravity Well Projector", num: 6,
-      gun: { id: "t_grav", label: "Gravity Well Projector", toHit: 3, damage: "2d6", shortMax: 2, longMax: 6, longNote: "−5 & half dmg" },
+      gun: { id: "t_grav", label: "Gravity Well Projector", toHit: 3, damage: "2d6", shortMax: 2, longMax: 6, longNote: "−5 & half dmg", arc: "turret" },
       signature: "grapple", blurb: "Pull and crush. Grapples up to three contacts and makes them easy to hit." }
   ];
   S.turret = (id) => S.TURRETS.find((t) => t.id === id || t.station === id) || null;
@@ -4111,6 +4113,14 @@
 
     // --- guns / maneuvers are internally consistent -----------------------
     for (const g of S.GUNS) ok(g.shortMax < g.longMax, `${g.id}: shortMax must be < longMax`);
+    // Every mount must say where it points, or the arc rule silently exempts it —
+    // which is how the Gull ended up an all-round turret ship while every enemy
+    // mount respected its own facing.
+    const ARCS = new Set(["fore", "aft", "port", "starboard", "turret", "all"]);
+    for (const g of S.GUNS) ok(ARCS.has(String(g.arc)), `gun ${g.id} declares no firing arc`);
+    for (const t of S.TURRETS) ok(ARCS.has(String(t.gun.arc)), `turret ${t.id}'s gun declares no firing arc`);
+    ok(S.GUNS.every((g) => g.arc === "fore"), "the two wing guns are fixed forward");
+    ok(S.TURRETS.every((t) => t.gun.arc === "turret"), "every rebuildable turret traverses");
     for (const [k, m] of Object.entries(S.MANEUVERS)) ok(Number.isFinite(m.mp) && m.mp > 0, `maneuver ${k} needs MP`);
 
     // --- every station action has an id, name and text --------------------

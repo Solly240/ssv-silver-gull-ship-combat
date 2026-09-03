@@ -541,7 +541,9 @@
   // Move/rotate the ship-icon actor's token on the active scene. Returns false if it can't.
   async function moveShipToken(kind, byUserId) {
     const a = shipIconActor();
-    const scene = game.scenes?.active || canvas?.scene;
+    // The scene she is ON, not the one anybody happens to be looking at — the
+    // pilot must still be able to fly while the boarding party is on a deck.
+    const scene = spaceScene() || game.scenes?.active || canvas?.scene;
     if (!a || !scene) { notifyUser(byUserId || game.user.id, "No active scene or ship actor to move."); return false; }
     const tdoc = scene.tokens.find((t) => t.actorId === a.id);
     if (!tdoc) { notifyUser(byUserId || game.user.id, "Place the SSV Silver Gull token on the scene first."); return false; }
@@ -1013,6 +1015,17 @@
       `<br><span style="color:#f2b03d">No token on the map for one of these ships — range and facing could not be measured, so this resolved at point-blank on the bow.</span>`;
     if (dist != null && !range.ok) {
       await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(sh.name)}</b> is <b>out of range</b> for the ${esc(gun.label)} (${dist} squares, max ${gun.longMax}).`, speaker: gunSpeaker });
+      return;
+    }
+    // The Gull's wing guns are fixed forward — the rules say so and her own map
+    // overlay draws the cone. Enforcing it only on the enemy made her an
+    // all-round turret ship and made Come About worth nothing.
+    const gunArc = String(gun.arc || "fore");
+    const ourBearing = measured ? S.facingFrom(from, me) : "fore";
+    if (measured && gunArc !== "all" && gunArc !== "turret" && gunArc !== ourBearing) {
+      ui.notifications?.warn(
+        `${gun.label} is a fixed ${gunArc} mount — ${sh.name} is off your ${S.FACING_LABEL[ourBearing]}. ` +
+        `The Pilot has to Come About.`);
       return;
     }
     const ac = S.shipAC(sh, Object.values(sh.crew || {}));
@@ -3066,6 +3079,19 @@
   function shipPoint(shipId) {
     const combat = getCombat();
     if (shipId === "gull") {
+      // Read the DOCUMENT, not the canvas. shipTokenObject() only sees the scene
+      // the GM is currently LOOKING at, so the moment anyone boarded — which
+      // switches the GM's view to a deck — the Gull lost her position entirely:
+      // `measured` went false, the arc check was skipped, the range check was
+      // skipped, and every enemy fired at point-blank against her bow.
+      const a = shipIconActor();
+      if (!a) return null;
+      const sc = spaceScene();
+      const t = sc?.tokens.find((x) => x.actorId === a.id);
+      if (t) {
+        const g = sc.grid?.size || 100;
+        return { x: t.x + (t.width || 1) * g / 2, y: t.y + (t.height || 1) * g / 2, rotation: t.rotation || 0 };
+      }
       const tok = shipTokenObject();
       if (tok) return { x: tok.center?.x ?? tok.document.x, y: tok.center?.y ?? tok.document.y, rotation: tok.document.rotation || 0 };
       return null;
