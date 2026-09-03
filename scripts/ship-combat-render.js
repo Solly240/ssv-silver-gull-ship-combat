@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.20.1";
+  S.VERSION = "0.20.2";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -179,6 +179,12 @@
   // ±5 on top of a 13 base put the ship outside the band where a d20 means
   // anything. `gun` is the modifier the forward gunners get, and `gunAdv` the
   // advantage state they fire under. MP keeps the +1 pilot perk already baked in.
+  //
+  // `status` names the matching entry in S.STATUSES for display and for the
+  // enemy side. It is DELIBERATELY not applied when a pilot picks a maneuver:
+  // S.shipAC already adds the maneuver's own `ac`, so applying the status too
+  // would count Evasive twice and put the ship back in the unreadable band this
+  // retune existed to escape. Show it; never stack it.
   S.MANEUVERS = {
     evasive:    { label: "Evasive",    mp: 6, ac:  4, gun:  0, gunAdv: -1, status: "evasive",
                   blurb: "+4 ship AC; forward gunners fire at disadvantage." },
@@ -900,6 +906,14 @@
       fuel:  { cur: 500, max: 500 },   // baseline tank; GM can raise it (upgrades) via Tune
       power: { cur: 500, max: 500 },
       tuning: { fuelPerItem: 25, powerPerItem: 25, convertFuel: 10, convertPower: 50 },
+      // The Gull carries statuses exactly like every enemy does — S.statusMods,
+      // S.expireStatuses and S.resolveDamage all read this. Leaving it out of the
+      // ship's own state meant the player ship could not catch fire, be boarded,
+      // go evasive or lose its shields, while every enemy could.
+      statuses: [],
+      armour: 0,
+      resist: {},
+      outcome: "",
       actorId: ""   // GM-selected ship (dnd5e vehicle) actor; falls back to a name lookup
     };
   };
@@ -928,6 +942,10 @@
         convertFuel:  Number(stored.tuning?.convertFuel  ?? d.tuning.convertFuel),
         convertPower: Number(stored.tuning?.convertPower ?? d.tuning.convertPower)
       },
+      statuses: S.normalizeStatuses(stored.statuses),
+      armour: Math.max(0, Number(stored.armour) || 0),
+      resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
+      outcome: ["", "derelict", "destroyed", "disabled", "surrendered", "fled"].includes(stored.outcome) ? stored.outcome : "",
       actorId: String(stored.actorId ?? d.actorId)
     };
     // Per-system HP drives the status string. Use stored HP if present, else migrate from the old string.
@@ -2970,6 +2988,13 @@
     ok(mig.systemHp.cloak.cur === 0, "legacy 'destroyed' migrates to 0 HP");
     ok(mig.systems.shields === "damaged", "systems[] is derived from systemHp");
     ok(mig.hull.cur === 90, "stored hull survives normalize");
+    // The Gull has to be able to hold a status like anything else — without this
+    // the player ship could not catch fire, be boarded, or lose its shields.
+    const burning = S.normalize({ statuses: [{ id: "on_fire", src: "test", expiresRound: null, data: {} }] });
+    ok(S.hasStatus(burning, "on_fire"), "the Gull's own state carries statuses through normalize");
+    ok(S.normalize({ statuses: [{ id: "not-real" }] }).statuses.length === 0, "…and drops unknown ones");
+    const downed = S.normalize({ shield: { on: true, facing: "fore" }, statuses: [{ id: "shields_down" }] });
+    ok(S.shieldDR(downed, "fore").half === false, "shields_down suppresses the Gull's own shield reduction");
 
     // --- system state thresholds -----------------------------------------
     ok(S.systemState({ cur: 5, max: 5 }) === "working", "5/5 is working");
@@ -2995,6 +3020,12 @@
     sh.statuses = [];
     S.applyStatus(sh, "aggressive", { round: 1 });
     ok(S.shipAC(sh, []).fore === 13 - 4, "aggressive is -4 AC");
+    // The maneuver's AC and its status must never both apply.
+    const dbl = S.normalize({ ac: { base: 13 } });
+    dbl.statuses = [];
+    S.applyStatus(dbl, "evasive", { round: 1 });
+    ok(S.shipAC(dbl, [{ station: "pilot", maneuver: "evasive" }]).fore === 13 + 4 + 4,
+       "a maneuver AND its status stack — which is exactly why picking a maneuver must not apply one");
     S.applyStatus(sh, "shields_down", { round: 1, rounds: 2 });
     ok(S.statusMods(sh).noShield === true, "shields_down suppresses shield DR");
     S.applyStatus(sh, "shields_down", { round: 1, rounds: 2 });
