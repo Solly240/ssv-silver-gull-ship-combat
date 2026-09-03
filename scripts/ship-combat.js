@@ -1943,7 +1943,13 @@
   async function actorForBlock(blockName, displayName) {
     if (!blockName) return null;
     const key = `${blockName}|${displayName}`;
-    if (blockCache.has(key)) return blockCache.get(key);
+    // A cached actor the GM has since deleted is a dead document: creating a token
+    // from it fails, and the boarding party silently comes up short.
+    if (blockCache.has(key)) {
+      const hit = blockCache.get(key);
+      if (hit === null || game.actors.get(hit.id)) return hit;
+      blockCache.delete(key);
+    }
     let actor = game.actors.getName(displayName);
     if (!actor) {
       let src = null;
@@ -3153,7 +3159,6 @@
     "rift":               {},
     "":                   { captain: "Ship's Master", pilot: "Helmsman", gunner: "Gunner", engineer: "Engineer", marine: "Deckhand", zealot: "Deckhand" }
   };
-  const ROLE_STATION = { captain: "captain", pilot: "pilot", gunner: "gunner_port", engineer: "engineer", marine: "", zealot: "" };
 
   /** Crew are RECORDS here. Actors and tokens are made lazily, only on boarding. */
   function buildCrew(hull, opts) {
@@ -3262,7 +3267,10 @@
    * was manned, all without a scan. Unscanned, the ship acts — not a person.
    */
   function crewLabel(sh, crew) {
-    if (sh?.revealed?.crew || game.user.isGM) return crew?.name || "someone";
+    // NOTE: this decides what goes into a PUBLIC chat message, so it must not
+    // consider who is currently looking. A GM-only branch here put the real name
+    // into a message every player then read.
+    if (sh?.revealed?.crew) return crew?.name || "someone";
     const st = crew?.station || "";
     return { captain: "Her bridge", pilot: "Her helm", gunner_port: "Her port mount",
              gunner_starboard: "Her starboard mount", engineer: "Someone below decks",
@@ -3441,7 +3449,7 @@
         return say(`<b>${esc(who)}</b> brings her about, presenting a fresh arc.`);
       }
       case "e_evade":
-        await spend((t, nx) => S.applyStatus(t, "evasive", { round: nx.round, rounds: 1, src: crew.name }));
+        await spend((t, nx) => S.applyStatus(t, "evasive", { round: nx.round, rounds: 1, src: who }));
         return say(`<b>${esc(who)}</b> throws her into an evasive weave — <b>+4 AC</b> until her next turn.`);
       case "e_rally": {
         const bad = (sh.statuses || []).find((x) => S.STATUSES[x.id]?.kind === "bad");
@@ -3455,9 +3463,9 @@
       case "e_ram": {
         const d = shipDistance(shipId, "gull");
         if (d != null && d > 1) { ui.notifications?.warn(`${sh.name} is ${d} squares off — close to 1 before ramming.`); return false; }
-        await spend((t, nx) => S.applyStatus(t, "ramming_committed", { round: nx.round, rounds: 1, src: crew.name }));
+        await spend((t, nx) => S.applyStatus(t, "ramming_committed", { round: nx.round, rounds: 1, src: who }));
         const dmg = await new Roll("4d6").evaluate();
-        await ChatMessage.create({ content: `<b>${esc(sh.name)}</b> — <b style="color:#e0454d">RAMMING</b>. ${esc(crew.name)} puts the nose through you.`,
+        await ChatMessage.create({ content: `<b>${esc(sh.name)}</b> — <b style="color:#e0454d">RAMMING</b>. ${esc(who)} puts the nose through you.`,
           speaker: { alias: esc(sh.name) }, rolls: [dmg] });
         const gull = shipPoint("gull"), me = shipPoint(shipId);
         await gmApplyDamage("gull", dmg.total, (gull && me) ? S.facingFrom(gull, me) : "fore", { type: "kinetic" });
@@ -3503,7 +3511,7 @@
         await spend();
         return say(`<b>${esc(who)}</b> spins up countermeasures — <b>your next scan of this hull has disadvantage</b>.`);
       case "e_brace":
-        await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: crew.name }));
+        await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: who }));
         return say(`<b>${esc(who)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
       case "e_nogun":
         return ui.notifications?.warn(`${sh.name} has no gun online.`);
@@ -3611,6 +3619,26 @@
         if (ids.length) { try { await scene.deleteEmbeddedDocuments("Token", ids); } catch (e) {} }
       }
       try { await a.delete(); n++; } catch (e) {}
+    }
+    // …and the boarding crew and enemy deck scenes the fight built. They were
+    // created per ship instance and never removed, so a season of fights left a
+    // sidebar full of dead Apostle gunners and a scene list full of hulls nobody
+    // will board again. The GULL's own deck scene is kept — it is a real asset.
+    const crewActors = game.actors.filter((a) => a.getFlag(MODULE_ID, "boardingCrew"));
+    for (const a of crewActors) {
+      for (const scene of game.scenes) {
+        const ids = scene.tokens.filter((t) => t.actorId === a.id).map((t) => t.id);
+        if (ids.length) { try { await scene.deleteEmbeddedDocuments("Token", ids); } catch (e) {} }
+      }
+      try { await a.delete(); n++; } catch (e) {}
+    }
+    blockCache.clear();
+    const gullName = getState().name;
+    const decks = game.scenes.filter((sc) => sc.getFlag(MODULE_ID, "deckScene")
+      && !String(sc.getFlag(MODULE_ID, "deckScene")).startsWith(gullName));
+    for (const sc of decks) {
+      if (sc.active || sc.id === game.scenes.current?.id) continue;   // never delete what someone is standing on
+      try { await sc.delete(); n++; } catch (e) {}
     }
     refreshFleet();
     if (!silent && n) ui.notifications?.info(`Cleared ${n} enemy ship${n === 1 ? "" : "s"}.`);
