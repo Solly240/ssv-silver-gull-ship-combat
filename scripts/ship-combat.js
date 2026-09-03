@@ -1448,17 +1448,22 @@
       `Scan — ${crew.name}`,
       `<p>Intelligence <b>${signMod(mod)}</b> is added automatically.${advantage ? " <b>Advantage</b> — the target is Painted." : ""}</p>` +
       `<div style="display:flex;flex-direction:column;gap:6px;">` +
-      `<label>Other bonuses <input type="number" name="bonus" value="0"/></label>` +
-      `<label>Manual d20 (if not rolling here) <input type="number" name="die" value=""/></label></div>`,
-      "🎲 Roll", "Use manual d20");
+      `<label>Other bonuses <input type="number" name="bonus" value="0" style="width:70px"/></label>` +
+      `<label>Manual d20 (if not rolling here) <input type="number" name="die" min="1" max="20" placeholder="1–20" style="width:70px"/></label></div>`,
+      "🎲 Roll 1d20", "Use manual d20");
     if (!choice) return null;
-    let die = Number(choice.values?.die);
-    let roll = null;
-    if (choice.action === "roll" || !Number.isFinite(die)) {
+    // rollChoiceDialog hands back the FORM, not parsed values — same as gunToHitDialog.
+    const el = choice.form?.elements;
+    const manual = el?.die?.value !== "" ? Number(el.die.value) : null;
+    const bonus = Number(el?.bonus?.value) || 0;
+    let die, roll = null;
+    if (choice.action === "roll") {
       roll = await new Roll(advantage ? "2d20kh" : "1d20").evaluate();
-      die = roll.dice[0].results.filter((r) => r.active)[0]?.result ?? roll.total;
+      die = roll.dice?.[0]?.results?.filter((r) => r.active)?.[0]?.result ?? roll.total;
+    } else {
+      if (!Number.isFinite(manual)) { ui.notifications?.warn("Enter your d20 result (1–20)."); return null; }
+      die = Math.max(1, Math.min(20, manual));
     }
-    const bonus = Number(choice.values?.bonus) || 0;
     return { die, total: die + mod + bonus, roll };
   }
 
