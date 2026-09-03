@@ -699,6 +699,7 @@
     if (a.type === "cloak") { await runCloak(crew, isBonus, a.cloak); return; }
     if (a.type === "turret") { await runTurret(crew, isBonus, a.turret, a.id); return; }
     if (a.type === "adjust") { await runAdjustAim(crew, isBonus); return; }
+    if (a.type === "breach") { await runBreach(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -1109,6 +1110,7 @@
       case "spool":          gmSpool({ total: msg.total, die: msg.die }, msg.byName); break;
       case "cloak":          gmCloak(msg.which, msg.byName); break;
       case "goDeck":         gmGoToDeck(msg.userId, msg.shipId, msg.deck); break;
+      case "breach":         gmBreach(msg.crewId, msg.shipId, msg.toolId, msg.total, { die: msg.die }); break;
       case "viewDeck":       viewDeck(msg.sceneId, msg.levelId); break;
       case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
       case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
@@ -1722,6 +1724,204 @@
   async function returnToShip() {
     if (game.user.isGM) await gmGoToDeck(game.user.id, "gull", 1);
     else emit({ type: "goDeck", toGM: true, shipId: "gull", deck: 1, userId: game.user.id });
+  }
+
+  /* ---- Boarding ---------------------------------------------------------- */
+
+  const CREW_FOLDER = "SSV — Boarding Crew";
+  /** Which SRD stat block a crew record resolves to, and where to find it. */
+  const BLOCK_PACKS = ["dnd5e.actors24", "world.ssv--bestiary-srd", "dnd5e.monsters"];
+
+  /**
+   * Import a stat block once, renamed for the campaign, and cache it.
+   * Same pattern as the settlements module's actorFor(): the world ends up with
+   * one "Apostle Gunner" actor, not one per fight.
+   */
+  const blockCache = new Map();
+  async function actorForBlock(blockName, displayName) {
+    if (!blockName) return null;
+    const key = `${blockName}|${displayName}`;
+    if (blockCache.has(key)) return blockCache.get(key);
+    let actor = game.actors.getName(displayName);
+    if (!actor) {
+      let src = null;
+      for (const pid of BLOCK_PACKS) {
+        const pack = game.packs.get(pid); if (!pack) continue;
+        const idx = await pack.getIndex();
+        const hit = idx.find((e) => e.name.toLowerCase() === blockName.toLowerCase());
+        if (hit) { src = await pack.getDocument(hit._id); break; }
+      }
+      if (!src) { console.warn(`${MODULE_ID} | no stat block "${blockName}" in any bestiary`); blockCache.set(key, null); return null; }
+      const data = src.toObject();
+      data.name = displayName; delete data._id;
+      data.folder = (await ensureFolder("Actor", CREW_FOLDER))?.id ?? null;
+      data.flags = { ...(data.flags || {}), [MODULE_ID]: { boardingCrew: true, block: blockName } };
+      actor = await Actor.create(data);
+    }
+    blockCache.set(key, actor);
+    return actor;
+  }
+
+  /** Spread N tokens around a point without stacking them. */
+  function spread(cx, cy, n, g) {
+    const out = [];
+    let ring = 0;
+    while (out.length < n) {
+      const per = ring === 0 ? 1 : ring * 6;
+      for (let i = 0; i < per && out.length < n; i++) {
+        const a = (i / per) * Math.PI * 2;
+        out.push({ x: Math.round(cx + Math.cos(a) * ring * g), y: Math.round(cy + Math.sin(a) * ring * g) });
+      }
+      ring++;
+    }
+    return out;
+  }
+
+  /**
+   * Put an enemy ship's crew on its own decks, as hidden tokens.
+   * Lazy — nothing is created until somebody actually boards.
+   */
+  async function materialiseCrew(shipId, scene) {
+    if (!game.user.isGM) return 0;
+    const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh || !scene) return 0;
+    const g = scene.grid?.size || 100;
+    const byDeck = {};
+    for (const c of Object.values(sh.crew)) {
+      if (c.dead || c.tokenId) continue;
+      (byDeck[c.deck || 1] ||= []).push(c);
+    }
+    const made = [];
+    for (const [deck, list] of Object.entries(byDeck)) {
+      const levelId = levelForDeck(scene, Number(deck));
+      const spots = spread(scene.width / 2, scene.height / 2, list.length, g * 1.4);
+      for (let i = 0; i < list.length; i++) {
+        const c = list[i];
+        const actor = await actorForBlock(c.block, c.name);
+        if (!actor) continue;
+        const proto = actor.prototypeToken.toObject();
+        made.push({ ...proto, name: c.name, actorId: actor.id, actorLink: false,
+          x: spots[i].x, y: spots[i].y, level: levelId,
+          hidden: true,                       // the GM reveals a compartment as the boarders reach it
+          disposition: -1,
+          flags: { [MODULE_ID]: { boardingCrew: true, shipId, crewId: c.id } } });
+      }
+    }
+    if (!made.length) return 0;
+    const docs = await scene.createEmbeddedDocuments("Token", made);
+    // Remember which token is which crew member, so killing one takes that
+    // station offline — the rule ship-combat.md has always specified.
+    const next = getCombat();
+    docs.forEach((d) => {
+      const cid = d.getFlag(MODULE_ID, "crewId");
+      if (next.ships[shipId]?.crew[cid]) next.ships[shipId].crew[cid].tokenId = d.id;
+    });
+    await saveCombat(next);
+    return docs.length;
+  }
+
+  /** Launch & Breach: cross into an enemy hull. */
+  async function runBreach(crew, isBonus) {
+    const combat = getCombat();
+    const near = Object.values(combat.ships).filter((s) => s.id !== "gull" && s.disposition !== "ally"
+      && s.outcome !== "destroyed" && (shipDistance("gull", s.id) ?? 99) <= 2);
+    if (!near.length) return ui.notifications?.warn("Nothing within 2 squares to board — the Pilot has to close first.");
+    const pw = S.ACTION_POWER.launch_breach;
+    if (!spendCheck(pw)) return;
+
+    const targetId = near.length === 1 ? near[0].id
+      : await chooseDlg("Launch & Breach", "Which hull?", near.map((s) => ({ value: s.id, label: `${s.name} — ${shipDistance("gull", s.id)} sq` })));
+    if (!targetId) return;
+    const target = combat.ships[targetId];
+
+    const toolId = await chooseDlg("Launch & Breach", "What are you crossing with?",
+      S.BOARDING_TOOLS.map((t) => ({ value: t.id, label: `${t.name} ${t.mod === 99 ? "(automatic)" : t.mod >= 0 ? `+${t.mod}` : t.mod} — ${t.note}` })));
+    if (!toolId) return;
+    const tool = S.boardingTool(toolId);
+    if (tool.failsIf && tool.failsIf(target)) {
+      await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — the <b>${esc(tool.name)}</b> will not bite on <b>${esc(target.name)}</b>: her shields are up. Nothing crossed.`, speaker: { alias: "SSV Silver Gull" } });
+      return;
+    }
+
+    const res = await stationRollValue(crew, "str", false);
+    if (!res) return;
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    const total = res.total + (tool.mod === 99 ? 99 : tool.mod);
+    if (game.user.isGM) await gmBreach(crew.id, targetId, toolId, total, res);
+    else emit({ type: "breach", toGM: true, crewId: crew.id, shipId: targetId, toolId, total, die: res.die, userId: game.user.id });
+  }
+
+  async function gmBreach(crewId, shipId, toolId, total, res) {
+    if (!game.user.isGM) return;
+    const combat = getCombat();
+    const crew = combat.crew[crewId], sh = combat.ships[shipId];
+    if (!crew || !sh) return;
+    const tool = S.boardingTool(toolId);
+    const made = total >= S.BOARDING_DC;
+
+    if (!made) {
+      // Whiff protection: you are latched to the OUTSIDE of their hull, not
+      // adrift. Session 4 lost a crew member to a hole exactly this size.
+      await ChatMessage.create({
+        content: `<b>Boarding</b> · ${esc(crew.name)} — <b>${total}</b> vs DC ${S.BOARDING_DC} with the ${esc(tool.name)} — <b style="color:#f2b03d">short</b>.<br>` +
+                 `<i>Latched to the outside of <b>${esc(sh.name)}</b>'s hull, not adrift. Try again next round.</i>`,
+        speaker: { alias: "SSV Silver Gull" }, rolls: res.roll ? [res.roll] : undefined });
+      return;
+    }
+
+    // Build their decks (once) and put their crew on them.
+    const hull = hullById(sh.profileId);
+    const skin = sh.skin || Object.keys(hull?.skins || {})[0];
+    let scene = findDeckScene(sh.name, skin);
+    if (!scene && hull) scene = await buildDeckScene({ ...hull, name: sh.name }, skin);
+    if (scene) await materialiseCrew(shipId, scene);
+
+    const next = getCombat();
+    S.applyStatus(next.ships[shipId], "boarded", { round: next.round, src: crew.name });
+    await saveCombat(next);
+
+    await ChatMessage.create({
+      content: `<b>Boarding</b> · ${esc(crew.name)} — <b>${total}</b> vs DC ${S.BOARDING_DC} with the ${esc(tool.name)} — <b style="color:#42d16a">aboard ${esc(sh.name)}</b>.` +
+               (tool.loud ? `<br><span style="color:#f2b03d">The mine was heard across the whole hull. No surprise.</span>` : "") +
+               `<br><i>No teleport home — somebody has to physically recover them before this fight ends.</i>`,
+      speaker: { alias: "SSV Silver Gull" }, rolls: res.roll ? [res.roll] : undefined });
+
+    // Move whoever controls that crew member onto deck 1 of the boarded hull.
+    const uid = crew.controllerUserId || crew.ownerUserId;
+    if (uid) await gmGoToDeck(uid, shipId, 1);
+  }
+
+  /**
+   * A dead enemy crew member takes their station with them.
+   * ship-combat.md has always said so; nothing enforced it until now.
+   */
+  async function onBoardingCrewDeath(tokenDoc) {
+    if (!isActiveGM()) return;
+    const shipId = tokenDoc.getFlag(MODULE_ID, "shipId");
+    const crewId = tokenDoc.getFlag(MODULE_ID, "crewId");
+    if (!shipId || !crewId) return;
+    const next = getCombat(); const sh = next.ships[shipId]; const c = sh?.crew?.[crewId];
+    if (!c || c.dead) return;
+    c.dead = true;
+    await saveCombat(next);
+    const stn = c.station ? (S.station(c.station)?.name || c.station) : null;
+    await ChatMessage.create({
+      content: `<b>${esc(c.name)}</b> is down aboard <b>${esc(sh.name)}</b>.` +
+               (stn ? `<br><b style="color:#42d16a">${esc(stn)} is offline</b> — nobody is working it.` : ""),
+      speaker: { alias: "SSV Silver Gull" } });
+    refreshUI();
+  }
+
+  /** Crew adrift in vacuum. Combat cannot end while anyone is out there. */
+  async function gmSetAdrift(userId, adrift) {
+    if (!game.user.isGM) return;
+    const ship = S.normalize(getState());
+    const list = new Set(ship.adriftCrew || []);
+    if (adrift) list.add(userId); else list.delete(userId);
+    ship.adriftCrew = [...list];
+    if (list.size) S.applyStatus(ship, "adrift", { round: getCombat().round });
+    else S.clearStatus(ship, "adrift");
+    await setState(ship);
+    refreshUI();
   }
 
   /* ---- Cloaking station -------------------------------------------------- */
@@ -2975,6 +3175,28 @@
     // Keep the ship "icon" actor's token image in sync with the shields (GM renders + uploads).
     Hooks.on(`${MODULE_ID}.updated`, () => updateShipIcon());
     if (game.user.isGM) ensureShipIconActor().then(() => updateShipIcon());
+    // A boarding-crew token dropping to 0 HP takes its station offline. Watch the
+    // actor's HP rather than the token so it works whether the damage came from
+    // the sheet, a macro, or midi-qol.
+    Hooks.on("updateActor", (actor, change) => {
+      if (!isActiveGM()) return;
+      if (!actor.getFlag(MODULE_ID, "boardingCrew")) return;
+      if (change?.system?.attributes?.hp?.value === undefined) return;
+      if ((actor.system?.attributes?.hp?.value ?? 1) > 0) return;
+      for (const scene of game.scenes) {
+        for (const t of scene.tokens) {
+          if (t.actorId === actor.id && t.getFlag(MODULE_ID, "crewId")) onBoardingCrewDeath(t);
+        }
+      }
+    });
+    // Unlinked tokens carry their own HP in the delta.
+    Hooks.on("updateToken", (doc, change) => {
+      if (!isActiveGM()) return;
+      if (!doc.getFlag(MODULE_ID, "crewId")) return;
+      const hp = change?.delta?.system?.attributes?.hp?.value ?? doc.actor?.system?.attributes?.hp?.value;
+      if (hp !== undefined && hp <= 0) onBoardingCrewDeath(doc);
+    });
+
     // Firing-arc cone on the map: (re)build on canvas ready / token add-remove; follow the ship every frame.
     Hooks.on("canvasReady", () => { try { drawGunCone(); } catch (e) {} });
     Hooks.on("createToken", (doc) => { if (doc.actorId === shipIconActor()?.id) { try { drawGunCone(); } catch (e) {} } });
@@ -3007,6 +3229,18 @@
       findHull: async (q) => (await loadFleet()).hulls.filter((h) => new RegExp(q, "i").test(h.name + " " + h.id)).map((h) => h.id),
       rollInitiative: gmRollInitiative, endShipTurn: gmEndShipTurn, removeShip: gmRemoveShip,
       clearFleet: gmClearFleet,
+      buildDecks: async (shipId, opts) => {
+        if (!game.user.isGM) return null;
+        if (!shipId || shipId === "gull") {
+          const h = await gullHull();
+          return h ? buildDeckScene({ ...h, name: getState().name }, "Original", opts || {}) : null;
+        }
+        const sh = getCombat().ships[shipId]; if (!sh) return null;
+        const h = hullById(sh.profileId); if (!h) return null;
+        return buildDeckScene({ ...h, name: sh.name }, sh.skin || Object.keys(h.skins)[0], opts || {});
+      },
+      goToDeck: (userId, shipId, deck) => gmGoToDeck(userId, shipId, deck),
+      whereIs: () => getCombat().whereIs || {},
       getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,
       getCombat, enterCombat, endCombat, nextTurn };

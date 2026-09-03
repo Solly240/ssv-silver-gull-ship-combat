@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.24.1";
+  S.VERSION = "0.24.2";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -137,8 +137,10 @@
       bonus: [N("quickaim", "Quick Aim", "+2 to hit this round (+4 with perk).")]
     },
     boarding: {
-      main: [N("launch_breach", "Launch & Breach", "At close range: the boarder + that bay's gunner both spend their Main. Roll Athletics/Acrobatics (DC 15) to latch & breach.")],
-      bonus: [N("repel", "Repel Boarders", "Leave your station to fight enemy boarders (you lose this station's Main this round).")]
+      main: [{ id: "launch_breach", name: "Launch & Breach", type: "breach",
+        text: "At close range: pick a hull and a tool, roll Athletics or Acrobatics against DC 15, and you are aboard. A failure leaves you latched to the outside of their hull, not adrift — you try again next round." }],
+      bonus: [{ id: "repel", name: "Repel Boarders", type: "repel",
+        text: "Leave your station to fight whoever is aboard. You lose this station's Main action this round." }]
     },
     engineer: {
       main: [{ id: "repair", name: "Repair System", type: "repair", text: "Pick a damaged system and roll d20 + INT. Nat 20 = auto-fix; nat 1 = auto-fail; otherwise solve a timed repair puzzle (the roll sets your time) to restore +2 HP. Can't repair a destroyed (0 HP) system." }, { id: "reroute", name: "Reroute Power", type: "reroute", text: "Pick a rail: +1d4 to one crew member next roll, +2 ship AC this round, or +1d6 on the next gunner hit. No mishap — a 10 percent chance of setting your own ship on fire for +1d4 was a deal nobody took twice." }],
@@ -293,6 +295,19 @@
     return out;
   };
 
+  /* The boarding tools from ship/ship-combat.md. `note` is the trade-off the
+     player is actually choosing between — the modifier alone does not say it. */
+  S.BOARDING_TOOLS = [
+    { id: "harpoon", name: "Grappling Harpoon", mod: 2, note: "No downside. The safe choice." },
+    { id: "clamps", name: "Magnetic Clamps", mod: 5, note: "Best odds against a metal hull — and an automatic failure against an energy-shielded or non-metal one.",
+      failsIf: (ship) => !!(ship?.shield?.on) },
+    { id: "mine", name: "Adhesive Breach Mine", mod: 99, note: "You are aboard, guaranteed. Everyone on that ship knows it.", loud: true },
+    { id: "cutter", name: "Plasma Cutter", mod: 0, note: "No bonus, but you are through the hull the moment you land." },
+    { id: "torpedo", name: "Boarding Torpedo", mod: 3, note: "The gunner fires you across. Spends a torpedo." }
+  ];
+  S.boardingTool = (id) => S.BOARDING_TOOLS.find((t) => t.id === id) || null;
+  S.BOARDING_DC = 15;
+
   S.QUICK_AIM_BONUS = 2;   // Quick Aim: spend the Bonus action for +2 to hit
   // Power a station action draws from the reactor (players only; the GM never spends). Keyed by action id; default 0.
   // Movement is fuel (above), not power; repair/boarding/pilot-maneuvers are free; everything that "runs on power" pays here.
@@ -309,6 +324,8 @@
     scan: 6, counter: 5, navsupport: 8, ping: 2,
     // Cloaking
     engage: 12, burst: 15, phase: 10, decoy: 8, stealth: 6,
+    // Boarding
+    launch_breach: 6, repel: 0,
     // The six rebuildable turrets. These MUST be here as well as being charged
     // in runTurret: the ⚡ badge on the button is looked up by action id, so a
     // missing entry means the button silently claims the shot is free.
