@@ -132,15 +132,68 @@ only the revealed projection (see sundowner's `MAINTAINING.md` §3).
 
 ---
 
+## 5b. Boarding and scene Levels
+
+Foundry v14 has native scene Levels, so a multi-deck ship is **one scene with N
+Levels** — `scene.view({level})` switches deck with no scene change and no texture
+reload. `multilevel-tokens` is not needed.
+
+**The rule that will bite you:** a wall, tile or light with an EMPTY `levels` set is
+on **every** level (`client/documents/wall.mjs:164`), and the map packs ship exactly
+that. `buildDeckScene()` therefore writes `levels:[thatLevelId]` on every placeable
+it copies. Omit it and deck 1's walls block deck 2.
+
+Scenes are built into **"SSV — Boarded Hulls"**, owned OBSERVER by default (players
+cannot `scene.view()` a non-active scene below that). Enemy crew are **records until
+somebody boards** — `materialiseCrew()` creates the tokens lazily, hidden and
+hostile, flagged with their `crewId` so a death takes their station offline.
+
+`S.assignSeats()` holds the one-crew-per-station rule and is pure, so the selftest
+holds it to that. Extras are spare hands with no seat — which is what makes killing
+the *right* person matter.
+
+## 5c. The canvas overlay
+
+One `PIXI.Container` per ship, glued to its token, holding the shield arcs, the
+firing cone and the FX. It replaced a path that composited ship+shield onto a canvas
+and uploaded a uniquely named `.webp` on **every shield change without ever deleting
+the last one** — check `Data/ssv-ship-icon/` on an old world and you will find one
+file per shield allocation ever made.
+
+Arcs are elliptical, derived from the token's own width and height, so all 56 hulls
+work with no art. Unshielded facings are drawn as hairlines on purpose: that is what
+makes the shielded arc read as a *choice* and makes flanking legible.
+
+**Canvas work must never swallow.** Everything goes through `canvasSafe(label, fn)`,
+which reports once per distinct message. A silent `catch {}` is how a call to a
+function deleted in a refactor survived a whole release looking like "the arcs just
+don't draw".
+
 ## 6. Verification
 
 ```bash
 node --check scripts/ship-combat-render.js && node --check scripts/ship-combat.js
 grep -nE '\b(game|ui|Hooks|canvas)\.' scripts/ship-combat-render.js   # empty
 node scripts/ship-combat-render.js --selftest
+node ../tools/fuzz_render.js
 node ../tools/check_shipcombat.js
 python3 ../tools/build_fleet.py --check
 ```
+
+Three of these exist because of bugs that actually shipped:
+
+- **`fuzz_render.js`** throws nulls, NaN, Infinity, negatives and junk types at every
+  pure function. It found damage returning `Infinity`, `applyStatus` throwing on a
+  number, and a zero-max hull that divided by zero in every bar.
+- **The round-trip guard** inside `--selftest` builds a record with every field set to
+  a non-default value, normalizes it, and requires every key to survive. Every
+  data-loss bug in this module had that one shape — `actorId` (enemy actors could
+  never be deleted), `statuses` (the Gull alone could not catch fire), `skin`, `art`,
+  `target`, `buff`. A new field on `defaultShip`/`defaultState` is covered the moment
+  it exists.
+- **The canvas pass** in `check_shipcombat.js` fires the hooks against a PIXI stub and
+  fails on any error the module reports. It catches a name a refactor orphaned —
+  which has happened twice.
 
 `tools/deploy.sh <version> "<notes>"` runs all of it, then commits, pushes, zips
 and cuts the release. Nothing ships that has not passed.
