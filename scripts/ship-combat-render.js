@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.26.0";
+  S.VERSION = "0.26.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -1047,19 +1047,31 @@
     const sci = seatOf("science");
     if (sci) out.push({ crewId: sci.id, action: "e_lock", why: "lay a lock before the guns speak" });
 
-    // The pilot's order lands before the guns do, so judge range from where the
-    // ship will BE, not where it is.
-    const moved = out.find((o) => o.action === "e_close") ? d - 1
-                : out.find((o) => o.action === "e_open") ? d + 1 : d;
+    // The pilot's order lands before the guns do, so judge BOTH range and arc from
+    // where the ship will be pointing afterwards, not where it is now. Closing and
+    // coming about put the nose on the target; opening the range turns the stern
+    // to them, which is what puts a fore mount out of the fight.
+    const pilotOrder = out.find((o) => ["e_close", "e_open", "e_about"].includes(o.action));
+    const moved = pilotOrder?.action === "e_close" ? Math.max(0, d - 1)
+                : pilotOrder?.action === "e_open" ? d + 1 : d;
+    const bearing = pilotOrder?.action === "e_open" ? "aft" : "fore";
+    const bears = (x) => {
+      const arc = String(x.arc || "fore");
+      return arc === "all" || arc === "turret" || arc === bearing;
+    };
     const usable = (ship.guns || []).filter((x) => x && x.id && S.gunOnline(ship, x.id)
-      && moved <= (Number(x.longMax) || 0));
+      && moved <= (Number(x.longMax) || 0) && bears(x));
     let n = 0;
     for (const st of ["gunner_port", "gunner_starboard"]) {
       const g = seatOf(st); if (!g) continue;
       // Give each gunner a different mount where the hull has one, so a frigate
       // with four guns does not fire the same one twice.
       const gun = usable[n] || usable[0];
-      if (gun) { out.push({ crewId: g.id, action: `e_fire:${gun.id}`, why: `${gun.label || gun.id} reaches ${moved} squares` }); n++; }
+      if (gun) { out.push({ crewId: g.id, action: `e_fire:${gun.id}`, why: `${gun.label || gun.id} bears at ${moved} squares` }); n++; }
+      else out.push({ crewId: g.id, action: "", skipped: true,
+                      why: (ship.guns || []).some((x) => moved <= (Number(x.longMax) || 0))
+                        ? `no mount bears on their ${bearing === "aft" ? "stern chase" : "bow"} at ${moved} squares`
+                        : `nothing aboard reaches ${moved} squares` });
     }
     return out;
   };
@@ -4305,6 +4317,20 @@
       const near = S.enemyStandingOrders(ship, { distance: 2 });
       ok(near.some((o) => o.action === "e_fire:auto"), "a brawler in the pocket fires");
       ok(near.every((o) => ship.crew[o.crewId] && !ship.crew[o.crewId].dead), "standing orders never give an order to a corpse");
+      ok(near.every((o) => o.action || o.skipped), "every order either names an action or says why it was skipped");
+      ok(near.every((o) => !!o.why), "…and every order carries its reasoning for the GM");
+      // Opening the range turns the stern to the target, so a fore mount cannot
+      // bear — the plan must not order a shot that gmEnemyFire will refuse.
+      const running = S.enemyStandingOrders({ ...ship, doctrine: "sniper" }, { distance: 1 });
+      ok(running.some((o) => o.action === "e_open"), "a sniper at 1 square runs");
+      ok(!running.some((o) => o.action === "e_fire:auto"),
+         "…and does not order a fore mount to fire over its own stern");
+      ok(running.filter((o) => o.skipped).length >= 1, "…it says the mount could not bear instead of going quiet");
+      // A turret mount bears either way.
+      const turreted = S.enemyStandingOrders({ ...ship, doctrine: "sniper",
+        guns: [{ id: "ring", label: "Ring Turret", toHit: 4, damage: "2d6", shortMax: 2, longMax: 8, arc: "turret" }] },
+        { distance: 1 });
+      ok(turreted.some((o) => o.action === "e_fire:ring"), "a turret mount fires while running");
       ok(S.enemyStandingOrders(null).length === 0, "enemyStandingOrders survives a null ship");
       const sniper = S.enemyStandingOrders({ ...ship, doctrine: "sniper" }, { distance: 2 });
       ok(sniper.some((o) => o.action === "e_open"), "a sniper in the pocket backs off");

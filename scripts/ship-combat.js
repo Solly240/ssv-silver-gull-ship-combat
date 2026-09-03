@@ -3253,6 +3253,22 @@
 
   /* ---- driving an enemy ship -------------------------------------------- */
 
+  /**
+   * What to CALL an enemy crew member in public.
+   *
+   * Their names and roles are manifest-tier scan results, and the enemy-turn
+   * chat was handing them over for free: "Apostle Gunner 1 fires the Votive
+   * Lance" told the crew the complement, the faction's rank names and which seat
+   * was manned, all without a scan. Unscanned, the ship acts — not a person.
+   */
+  function crewLabel(sh, crew) {
+    if (sh?.revealed?.crew || game.user.isGM) return crew?.name || "someone";
+    const st = crew?.station || "";
+    return { captain: "Her bridge", pilot: "Her helm", gunner_port: "Her port mount",
+             gunner_starboard: "Her starboard mount", engineer: "Someone below decks",
+             shields_officer: "Her shield board", science: "Her sensor watch" }[st] || "Someone aboard";
+  }
+
   /** Rotate or step an enemy's own token, the same way the pilot moves the Gull. */
   async function moveEnemyToken(shipId, kind) {
     const sh = getCombat().ships[shipId]; if (!sh?.tokenId) return false;
@@ -3295,10 +3311,10 @@
     const combat = getCombat();
     const sh = combat.ships[shipId]; if (!sh) return;
     const crew = sh.crew?.[crewId];
-    if (!crew || crew.dead) return ui.notifications?.warn("That seat is empty.");
+    if (!crew || crew.dead) { ui.notifications?.warn("That seat is empty."); return false; }
     const gun = (sh.guns || []).find((g) => g.id === gunId);
-    if (!gun) return ui.notifications?.warn(`${sh.name} has no gun "${gunId}".`);
-    if (!S.gunOnline(sh, gunId)) return ui.notifications?.warn(`${gun.label || gunId} is offline.`);
+    if (!gun) { ui.notifications?.warn(`${sh.name} has no gun "${gunId}".`); return false; }
+    if (!S.gunOnline(sh, gunId)) { ui.notifications?.warn(`${gun.label || gunId} is offline.`); return false; }
 
     const from = shipPoint(shipId), gull = shipPoint("gull");
     const measured = !!(from && gull);
@@ -3309,8 +3325,9 @@
     const bearing = measured ? S.facingFrom(from, gull) : "fore";
     const arc = String(gun.arc || "fore");
     if (measured && arc !== "all" && arc !== "turret" && arc !== bearing) {
-      return ui.notifications?.warn(
+      ui.notifications?.warn(
         `${gun.label || gunId} is a ${arc} mount — the Gull is off her ${S.FACING_LABEL[bearing]}. Come about first.`);
+      return false;
     }
     const dist = shipDistance(shipId, "gull");
     const range = S.rangePenalty(gun, dist ?? 0);
@@ -3320,7 +3337,7 @@
       await ChatMessage.create({
         content: `<b>${esc(sh.name)}</b> — the ${esc(gun.label || gunId)} cannot reach you (${dist} squares, max ${gun.longMax}).`,
         speaker: { alias: esc(sh.name) } });
-      return;
+      return false;
     }
 
     const gullState = S.normalize(getState());
@@ -3333,12 +3350,16 @@
     const hit = crit || roll.total >= ac[facing];
     const bits = `AC ${ac[facing]} on your ${S.FACING_LABEL[facing]}${range.toHit ? ` · long range ${range.toHit}` : ""}${bonus ? ` · +${bonus} laid on` : ""}`;
 
+    const whoPub = crewLabel(sh, crew);
     await ChatMessage.create({
-      content: `<b>${esc(sh.name)}</b> — ${esc(crew.name)} fires the <b>${esc(gun.label || gunId)}</b>: ` +
+      content: `<b>${esc(sh.name)}</b> — ${esc(whoPub)} fires the <b>${esc(gun.label || gunId)}</b>: ` +
                `<b>${roll.total}</b> vs ${bits} — ` +
                (hit ? `<b style="color:#e0454d">${crit ? "CRITICAL" : "hit"}</b>` : `<b style="color:#42d16a">miss</b>`) + unmeasured,
       speaker: { alias: esc(sh.name) }, rolls: [roll]
     });
+    if (whoPub !== crew.name) await ChatMessage.create({
+      content: `<span style="opacity:.7">GM · </span>that was <b>${esc(crew.name)}</b> at ${esc(S.station(crew.station)?.name || crew.station || "no station")}.`,
+      speaker: { alias: esc(sh.name) }, whisper: gmIds() });
 
     // Spend the seat and burn the aim bonus, in one write, before anything awaits.
     { const nx = getCombat(); const t = nx.ships[shipId];
@@ -3390,6 +3411,9 @@
     const combat = getCombat();
     const sh = combat.ships[shipId]; if (!sh) return;
     const crew = sh.crew?.[crewId]; if (!crew || crew.dead) return;
+    // Every public line names the SHIP's station, not the person, until the
+    // manifest has actually been scanned.
+    const who = crewLabel(sh, crew);
     const say = async (html) => { if (!quiet) await ChatMessage.create({ content: html, speaker: { alias: esc(sh.name) } }); };
     const spend = async (mut) => {
       // Read-modify-write with nothing awaited in between — the trap this repo
@@ -3405,32 +3429,32 @@
     switch (actionId) {
       case "e_close": case "e_open": {
         const ok = await moveEnemyToken(shipId, actionId === "e_close" ? "toward" : "away");
-        if (!ok) return ui.notifications?.warn(`${sh.name} has no token on this scene to move.`);
+        if (!ok) { ui.notifications?.warn(`${sh.name} has no token on this scene to move.`); return false; }
         await spend();
         const d = shipDistance(shipId, "gull");
-        return say(`<b>${esc(crew.name)}</b> ${actionId === "e_close" ? "closes" : "opens the range"} — now <b>${d ?? "?"}</b> squares off.`);
+        return say(`<b>${esc(who)}</b> ${actionId === "e_close" ? "closes" : "opens the range"} — now <b>${d ?? "?"}</b> squares off.`);
       }
       case "e_about": {
         const ok = await moveEnemyToken(shipId, "rotR90");
-        if (!ok) return ui.notifications?.warn(`${sh.name} has no token on this scene to turn.`);
+        if (!ok) { ui.notifications?.warn(`${sh.name} has no token on this scene to turn.`); return false; }
         await spend();
-        return say(`<b>${esc(crew.name)}</b> brings her about, presenting a fresh arc.`);
+        return say(`<b>${esc(who)}</b> brings her about, presenting a fresh arc.`);
       }
       case "e_evade":
         await spend((t, nx) => S.applyStatus(t, "evasive", { round: nx.round, rounds: 1, src: crew.name }));
-        return say(`<b>${esc(crew.name)}</b> throws her into an evasive weave — <b>+4 AC</b> until her next turn.`);
+        return say(`<b>${esc(who)}</b> throws her into an evasive weave — <b>+4 AC</b> until her next turn.`);
       case "e_rally": {
         const bad = (sh.statuses || []).find((x) => S.STATUSES[x.id]?.kind === "bad");
-        if (!bad) { await spend(); return say(`<b>${esc(crew.name)}</b> calls the deck steady — nothing to shake off.`); }
+        if (!bad) { await spend(); return say(`<b>${esc(who)}</b> calls the deck steady — nothing to shake off.`); }
         await spend((t) => S.clearStatus(t, bad.id));
-        return say(`<b>${esc(crew.name)}</b> rallies the crew — <b>${esc(S.STATUSES[bad.id].label)}</b> is cleared.`);
+        return say(`<b>${esc(who)}</b> rallies the crew — <b>${esc(S.STATUSES[bad.id].label)}</b> is cleared.`);
       }
       case "e_focus":
         await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
-        return say(`<b>${esc(crew.name)}</b> calls the target — every mount aboard gets <b>+2 to hit</b>.`);
+        return say(`<b>${esc(who)}</b> calls the target — every mount aboard gets <b>+2 to hit</b>.`);
       case "e_ram": {
         const d = shipDistance(shipId, "gull");
-        if (d != null && d > 1) return ui.notifications?.warn(`${sh.name} is ${d} squares off — close to 1 before ramming.`);
+        if (d != null && d > 1) { ui.notifications?.warn(`${sh.name} is ${d} squares off — close to 1 before ramming.`); return false; }
         await spend((t, nx) => S.applyStatus(t, "ramming_committed", { round: nx.round, rounds: 1, src: crew.name }));
         const dmg = await new Roll("4d6").evaluate();
         await ChatMessage.create({ content: `<b>${esc(sh.name)}</b> — <b style="color:#e0454d">RAMMING</b>. ${esc(crew.name)} puts the nose through you.`,
@@ -3442,27 +3466,27 @@
       }
       case "e_repair": {
         const hurt = Object.entries(sh.systemHp || {}).filter(([, hp]) => hp.cur < hp.max).sort((a, b) => a[1].cur - b[1].cur)[0];
-        if (!hurt) { await spend(); return say(`<b>${esc(crew.name)}</b> finds nothing broken.`); }
+        if (!hurt) { await spend(); return say(`<b>${esc(who)}</b> finds nothing broken.`); }
         await spend((t) => {
           const hp = t.systemHp[hurt[0]]; hp.cur = Math.min(hp.max, hp.cur + 2);
           t.systems[hurt[0]] = S.systemState(hp);
           if (hurt[0] === "shields" && hp.cur > 0) S.clearStatus(t, "shields_down");
         });
         const lbl = S.SYSTEMS.find((x) => x.id === hurt[0])?.label || hurt[0];
-        return say(`<b>${esc(crew.name)}</b> patches the <b>${esc(lbl)}</b> — back to ${Math.min(S.SYSTEM_HP_MAX, hurt[1].cur + 2)}/${S.SYSTEM_HP_MAX}.`);
+        return say(`<b>${esc(who)}</b> patches the <b>${esc(lbl)}</b> — back to ${Math.min(S.SYSTEM_HP_MAX, hurt[1].cur + 2)}/${S.SYSTEM_HP_MAX}.`);
       }
       case "e_reroute":
         await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
-        return say(`<b>${esc(crew.name)}</b> dumps the reactor into the mounts — <b>+2</b> on this ship's next shot.`);
+        return say(`<b>${esc(who)}</b> dumps the reactor into the mounts — <b>+2</b> on this ship's next shot.`);
       case "e_shield": {
         const me = shipPoint(shipId), gull = shipPoint("gull");
         const face = (me && gull) ? S.facingFrom(me, gull) : "fore";
         await spend((t) => { t.shield.on = true; t.shield.facing = face; });
-        return say(`<b>${esc(crew.name)}</b> walks the shield round to <b>${esc(S.FACING_LABEL[face])}</b> — the arc you are actually on.`);
+        return say(`<b>${esc(who)}</b> walks the shield round to <b>${esc(S.FACING_LABEL[face])}</b> — the arc you are actually on.`);
       }
       case "e_jam":
         await spend();
-        return say(`<b>${esc(crew.name)}</b> floods your fire-control band — <b>the Gull's next gunnery roll has disadvantage</b>.`);
+        return say(`<b>${esc(who)}</b> floods your fire-control band — <b>the Gull's next gunnery roll has disadvantage</b>.`);
       case "e_lock": {
         // Ghost Their Sensors, spent: the Cloaking Officer's block eats exactly
         // one enemy lock, then clears.
@@ -3470,17 +3494,17 @@
         if (gullNow.scanBlock) {
           gullNow.scanBlock = false; await setState(gullNow);
           await spend();
-          return say(`<b>${esc(crew.name)}</b> reaches for a lock and finds <b>nothing there</b> — the Gull's sensor ghost holds.`);
+          return say(`<b>${esc(who)}</b> reaches for a lock and finds <b>nothing there</b> — the Gull's sensor ghost holds.`);
         }
         await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
-        return say(`<b>${esc(crew.name)}</b> lays a sensor lock — <b>+2</b> on this ship's next attack.`);
+        return say(`<b>${esc(who)}</b> lays a sensor lock — <b>+2</b> on this ship's next attack.`);
       }
       case "e_cm":
         await spend();
-        return say(`<b>${esc(crew.name)}</b> spins up countermeasures — <b>your next scan of this hull has disadvantage</b>.`);
+        return say(`<b>${esc(who)}</b> spins up countermeasures — <b>your next scan of this hull has disadvantage</b>.`);
       case "e_brace":
         await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: crew.name }));
-        return say(`<b>${esc(crew.name)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
+        return say(`<b>${esc(who)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
       case "e_nogun":
         return ui.notifications?.warn(`${sh.name} has no gun online.`);
       default:
@@ -3508,12 +3532,21 @@
       speaker: { alias: esc(sh.name) }, whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id)
     });
     if (!plan.length) { ui.notifications?.info(`${sh.name}: nobody left to give an order to.`); return; }
+    const skipped = [];
     for (const step of plan) {
       // Re-read every step: an earlier order may have killed a seat or ended the ship.
       const now = getCombat().ships[shipId];
       if (!now || now.outcome) break;
-      await gmCrewAct(shipId, step.crewId, step.action);
+      const who = now.crew?.[step.crewId]?.name || step.crewId;
+      if (step.skipped || !step.action) { skipped.push(`${who} — ${step.why}`); continue; }
+      const done = await gmCrewAct(shipId, step.crewId, step.action);
+      // gmCrewAct returns falsy when it refused (out of arc, out of range, no
+      // token). Say so: a silently skipped order reads as the button not working.
+      if (done === false) skipped.push(`${who} — could not carry out ${step.action.replace(/^e_/, "").replace(/:/, " ")}`);
     }
+    if (skipped.length) await ChatMessage.create({
+      content: `<b>${esc(sh.name)}</b> — orders not carried out:<br>` + skipped.map((x) => `· ${esc(x)}`).join("<br>"),
+      speaker: { alias: esc(sh.name) }, whisper: gmIds() });
     refreshUI(); refreshFleet();
   }
 
@@ -4143,6 +4176,10 @@
       },
       goToDeck: (userId, shipId, deck) => gmGoToDeck(userId, shipId, deck, { trusted: true }),
       whereIs: () => getCombat().whereIs || {},
+      // Exposed for tools/check_shipcombat.js, which runs every enemy seat action
+      // against a stub. A ReferenceError in a branch nothing exercised is exactly
+      // how `who` shipped into three functions that never declared it.
+      _test: { gmCrewAct, gmEnemyFire, gmRunShip, crewLabel, moveEnemyToken },
       getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,
       getCombat, enterCombat, endCombat, nextTurn };
