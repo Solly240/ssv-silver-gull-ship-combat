@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.23.0";
+  S.VERSION = "0.23.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -308,7 +308,11 @@
     // Science / Sensors
     scan: 6, counter: 5, navsupport: 8, ping: 2,
     // Cloaking
-    engage: 12, burst: 15, phase: 10, decoy: 8, stealth: 6
+    engage: 12, burst: 15, phase: 10, decoy: 8, stealth: 6,
+    // The six rebuildable turrets. These MUST be here as well as being charged
+    // in runTurret: the ⚡ badge on the button is looked up by action id, so a
+    // missing entry means the button silently claims the shot is free.
+    flakspread: 8, apshot: 8, plasmashot: 9, cryobeam: 8, ionshot: 9, gravwell: 10
   };
   S.actionPower = (a) => (a && S.ACTION_POWER[a.id]) || 0;
 
@@ -394,7 +398,9 @@
   /** Add a status. `rounds` only means anything for scope:"rounds". Re-applying refreshes. */
   S.applyStatus = function (ship, id, { src = "", rounds = 1, round = 1, data = {} } = {}) {
     const def = S.STATUSES[id];
-    if (!ship || !def) return null;
+    // A truthy non-object (a number, a string) passed the old !ship check and then
+    // threw on .statuses.find. Refuse anything that is not a real record.
+    if (!ship || typeof ship !== "object" || !def) return null;
     ship.statuses = S.normalizeStatuses(ship.statuses);
     const expiresRound = def.scope === "rounds" ? round + Math.max(1, rounds)
       : def.scope === "round" ? round + 1 : null;
@@ -541,7 +547,10 @@
   S.RESIST = { immune: 0, half: 0.5, normal: 1, double: 2 };
   S.resolveDamage = function (ship, raw, facing, { type = "kinetic", ignoreShields = false, ignoreArmour = false } = {}) {
     const steps = [];
-    let dmg = Math.max(0, Math.round(Number(raw) || 0));
+    // Clamp hard: an Infinity or a NaN in here propagates into hull totals, bar
+    // widths and chat, and there is no legitimate packet above a few hundred.
+    const rawNum = Number(raw);
+    let dmg = Number.isFinite(rawNum) ? Math.max(0, Math.min(99999, Math.round(rawNum))) : 0;
     steps.push({ label: "raw", value: dmg });
 
     const mods = S.statusMods(ship);
@@ -886,6 +895,11 @@
       out.systemHp[id] = { cur, max: M };
       out.systems[id] = S.systemState(out.systemHp[id]);
     }
+    // A zero or negative max would divide by zero in every hull bar that reads it.
+    if (!(out.hull.max > 0)) out.hull.max = d.hull.max;
+    if (!Number.isFinite(out.hull.cur)) out.hull.cur = out.hull.max;
+    if (!(out.hull.max > 0)) out.hull.max = d.hull.max;
+    if (!Number.isFinite(out.hull.cur)) out.hull.cur = out.hull.max;
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
     if (out.morale.cur !== null) out.morale.cur = Math.max(0, Math.min(out.morale.cur, out.morale.max));
     for (const [cid, c] of Object.entries(stored.crew || {})) {
@@ -1138,6 +1152,9 @@
       if (S.FACINGS.includes(sh.facing)) out.shield.facing = sh.facing;
       out.shield.secondary = S.FACINGS.includes(sh.secondary) ? sh.secondary : null;
     }
+    // A zero or negative max would divide by zero in every hull bar that reads it.
+    if (!(out.hull.max > 0)) out.hull.max = d.hull.max;
+    if (!Number.isFinite(out.hull.cur)) out.hull.cur = out.hull.max;
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
     for (const g of ["fuel", "power"]) {
       if (!(out[g].max > 0)) out[g].max = d[g].max;
@@ -3467,6 +3484,84 @@
     const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
     ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
        "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
+
+
+    /* ── The round-trip guard ────────────────────────────────────────────────
+     * Every data-loss bug in this module so far had the same shape: the wiring
+     * set a field, normalize did not carry it, and the loss was invisible until
+     * something downstream quietly did nothing. (actorId — enemy actors could
+     * never be deleted. statuses — the Gull alone could not catch fire. skin,
+     * art, target, buff — all the same.)
+     *
+     * So rather than remembering to assert each new field, walk the whole shape:
+     * build a record with EVERY field set to a non-default value, normalize it,
+     * and require every key to survive. A new field added to defaultShip/
+     * defaultState is covered the moment it exists.
+     * ──────────────────────────────────────────────────────────────────────── */
+    const roundTrip = (label, defaults, normalize, fill) => {
+      const src = fill(JSON.parse(JSON.stringify(defaults)));
+      const out = normalize(src);
+      const walk = (a, b, path) => {
+        for (const k of Object.keys(a)) {
+          const p = path ? `${path}.${k}` : k;
+          if (b === undefined || !(k in b)) { fails.push(`${label}: normalize dropped "${p}"`); continue; }
+          if (a[k] && typeof a[k] === "object" && !Array.isArray(a[k])) walk(a[k], b[k], p);
+          else if (Array.isArray(a[k])) {
+            if (!Array.isArray(b[k])) fails.push(`${label}: "${p}" stopped being an array`);
+            else if (a[k].length && !b[k].length) fails.push(`${label}: normalize emptied the array "${p}"`);
+          } else if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) {
+            fails.push(`${label}: "${p}" changed on normalize (${JSON.stringify(a[k])} -> ${JSON.stringify(b[k])})`);
+          }
+        }
+      };
+      walk(src, out, "");
+    };
+
+    roundTrip("shipState", S.defaultState(), S.normalize, (d) => {
+      d.name = "Test Hull"; d.plating = "Testanium"; d.ship = "damaged";
+      d.hull = { cur: 77, max: 140 }; d.ac = { base: 16 };
+      d.shield = { on: true, facing: "port", secondary: "aft" };
+      d.fuel = { cur: 111, max: 400 }; d.power = { cur: 222, max: 400 };
+      d.tuning = { fuelPerItem: 30, powerPerItem: 31, convertFuel: 8, convertPower: 44 };
+      d.actorId = "ACTOR123"; d.armour = 5; d.resist = { energy: "half" }; d.outcome = "disabled";
+      d.statuses = [{ id: "on_fire", src: "test", expiresRound: 9, data: {} }];
+      for (const k of Object.keys(d.systemHp)) d.systemHp[k] = { cur: 3, max: 5 };
+      for (const k of Object.keys(d.systems)) d.systems[k] = "damaged";
+      for (const t of S.TURRETS) d.turrets[t.id] = { built: true, hp: { cur: 12, max: S.TURRET_HP_MAX }, mode: "detached" };
+      return d;
+    });
+
+    roundTrip("enemy ship", S.defaultShip({ id: "z1" }), S.normalizeShip, (d) => {
+      d.profileId = "scyphozoa"; d.name = "Test"; d.faction = "sovereign-horizon";
+      d.cls = "frigate"; d.doctrine = "ambusher"; d.disposition = "neutral";
+      d.hull = { cur: 90, max: 200 }; d.ac = { base: 14 }; d.armour = 3;
+      d.resist = { kinetic: "half" };
+      d.shield = { on: true, facing: "aft", secondary: "port" };
+      d.guns = [{ id: "g", label: "G", toHit: 4, damage: "2d8", shortMax: 2, longMax: 6, arc: "fore" }];
+      d.abilities = ["slip"]; d.boardingParty = 4;
+      d.morale = { cur: 2, max: 4 };
+      d.revealed = { ac: true, shields: true, systems: true, crew: true, deckmap: 2 };
+      d.actorId = "A1"; d.tokenId = "T1"; d.sceneId = "S1"; d.combatantId = "C1";
+      d.skin = "Junker"; d.art = "some/path.png"; d.sizeSq = [33, 48]; d.outcome = "derelict";
+      d.statuses = [{ id: "grappled", src: "x", expiresRound: 4, data: {} }];
+      d.systemHp = { shields: { cur: 2, max: 5 } }; d.systems = { shields: "damaged" };
+      d.crew = { c1: { id: "c1", name: "N", roleId: "gunner", station: "gunner_port", action: true,
+        bonus: true, granted: 2, maneuver: null, mp: 3, mpMax: 4, navMult: 2, gun: "flak",
+        target: "e9", actorId: "AA", tokenId: "TT", deck: 2, block: "Thug", tier: 3,
+        hp: { cur: 5, max: 11 }, dead: true } };
+      return d;
+    });
+
+    roundTrip("combatState", S.defaultCombat(), S.normalizeCombat, (d) => {
+      d.active = true; d.turn = 6; d.round = 4; d.activeShip = "e1";
+      d.spool = 2; d.gunBuff = "1d6";
+      d.initiative = [{ shipId: "e1", roll: 17 }];
+      d.crew = { k: { id: "k", name: "K", ownerUserId: "u1", controllerUserId: "u2", station: "captain",
+        action: true, bonus: true, granted: 1, maneuver: "evasive", mp: 5, mpMax: 6, navMult: 2,
+        gun: "flak", target: "e1", prof: { captain: true },
+        buff: { flat: 2, adv: true, die: "1d4", turretAim: true } } };
+      return d;
+    });
 
     // --- turrets ------------------------------------------------------------
     ok(S.TURRETS.length === 6, "six rebuildable turrets");

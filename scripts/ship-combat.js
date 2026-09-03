@@ -347,9 +347,12 @@
   }
   async function gmEditGauge(kind) {
     if (!game.user.isGM) return;
-    const st = getState();
-    const cur = await promptNumber(`Set ${kind}`, `${kind.toUpperCase()} current (max ${st[kind].max})`, st[kind].cur, st[kind].max);
+    const shown = getState();
+    const cur = await promptNumber(`Set ${kind}`, `${kind.toUpperCase()} current (max ${shown[kind].max})`, shown[kind].cur, shown[kind].max);
     if (cur == null) return;
+    // Re-read AFTER the dialog. A prompt can sit open for a minute, and writing
+    // the object we read before it would revert anything that happened meanwhile.
+    const st = getState();
     st[kind].cur = Math.max(0, Math.min(cur, st[kind].max));
     await setState(st);
   }
@@ -672,7 +675,7 @@
     if (a.type === "ram") { await runRam(crew, isBonus); return; }
     if (a.type === "flee") { await runFlee(crew, isBonus); return; }
     if (a.type === "cloak") { await runCloak(crew, isBonus, a.cloak); return; }
-    if (a.type === "turret") { await runTurret(crew, isBonus, a.turret); return; }
+    if (a.type === "turret") { await runTurret(crew, isBonus, a.turret, a.id); return; }
     if (a.type === "adjust") { await runAdjustAim(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
@@ -865,6 +868,7 @@
   }
   // GM: was it a hit? (asked on the GM's screen). On hit, damage is rolled — by the GM if the GM fired, else by the shooter.
   async function gmResolveGunHit(gunnerName, gun, total, str) {
+    if (!game.user.isGM) return;
     const hit = await chooseDlg("Did it hit?", `<b>${esc(gunnerName)}</b>'s <b>${esc(gun.label)}</b> — to-hit <b>${total}</b>. Did it hit the target?`, [{ value: "hit", label: "✓ Hit — roll damage" }, { value: "miss", label: "✗ Miss" }]);
     if (hit !== "hit") { if (hit === "miss") await ChatMessage.create({ content: `<b>${esc(gunnerName)}</b> — the <b>${esc(gun.label)}</b> shot <b>missed</b>.`, speaker: gunSpeaker }); return; }
     const dmg = await gunDamageDialog(gun.damage, str);
@@ -881,9 +885,16 @@
     const sh = combat.ships[crew.target]; if (!sh) return;
 
     const from = shipPoint("gull"), me = shipPoint(sh.id);
-    const facing = from && me ? S.facingFrom(me, from) : "fore";
+    // With no token for one of them — spawned on another scene, or deleted by
+    // hand — range and facing cannot be measured. Fall back to point-blank on the
+    // bow, but SAY SO: silently treating an unplaced ship as adjacent and
+    // unshielded is the kind of thing that reads as the dice being wrong.
+    const measured = !!(from && me);
+    const facing = measured ? S.facingFrom(me, from) : "fore";
     const dist = shipDistance("gull", sh.id);
     const range = S.rangePenalty(gun, dist ?? 0);
+    const unmeasured = measured ? "" :
+      `<br><span style="color:#f2b03d">No token on the map for one of these ships — range and facing could not be measured, so this resolved at point-blank on the bow.</span>`;
     if (dist != null && !range.ok) {
       await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(sh.name)}</b> is <b>out of range</b> for the ${esc(gun.label)} (${dist} squares, max ${gun.longMax}).`, speaker: gunSpeaker });
       return;
@@ -904,7 +915,7 @@
         await saveCombat(next);
         note = `<br><span style="color:#f2b03d">The round still walks across their ${esc(S.FACING_LABEL[facing])} shield — that facing drops for a round.</span>`;
       }
-      await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${note}`, speaker: gunSpeaker });
+      await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${note}${unmeasured}`, speaker: gunSpeaker });
       refreshUI();
       return;
     }
@@ -918,7 +929,7 @@
     if (range.halve) raw = Math.floor(raw / 2);
     await ChatMessage.create({
       content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — ` +
-               `<b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${range.halve ? " <span style='opacity:.7'>(halved at long range)</span>" : ""}`,
+               `<b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${range.halve ? " <span style='opacity:.7'>(halved at long range)</span>" : ""}${unmeasured}`,
       speaker: gunSpeaker, rolls: [dmgRoll]
     });
     await gmApplyDamage(sh.id, raw, facing, { crit, type: "kinetic" });
@@ -1467,12 +1478,12 @@
    * A turret shot. Same resolution path as the wing guns — target, range,
    * facing, AC, damage — plus the mount's own signature on a hit.
    */
-  async function runTurret(crew, isBonus, turretId) {
+  async function runTurret(crew, isBonus, turretId, turretAction) {
     const t = S.turret(turretId); if (!t) return;
     const ship = S.normalize(getState());
     if (!S.turretBuilt(ship, t.id)) return ui.notifications?.warn(`The ${t.name} has not been rebuilt yet.`);
     if (!S.turretOnline(ship, t.id)) return ui.notifications?.warn(`The ${t.name} is offline.`);
-    const pw = S.ACTION_POWER.attack;
+    const pw = S.actionPower({ id: turretAction }) || S.ACTION_POWER.attack;
     if (!spendCheck(pw)) return;
 
     const hostiles = Object.values(getCombat().ships).filter((s) => s.id !== "gull" && s.disposition !== "ally" && !s.outcome);
@@ -1495,9 +1506,12 @@
     const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh) return;
     const crew = combat.crew[crewId] || { name: "Gunner" };
     const from = shipPoint("gull"), me = shipPoint(shipId);
-    const facing = from && me ? S.facingFrom(me, from) : "fore";
+    const measured = !!(from && me);
+    const facing = measured ? S.facingFrom(me, from) : "fore";
     const dist = shipDistance("gull", shipId);
     const range = S.rangePenalty(t.gun, dist ?? 0);
+    const unmeasured = measured ? "" :
+      `<br><span style="color:#f2b03d">No token on the map for one of these ships — resolved at point-blank on the bow.</span>`;
     if (dist != null && !range.ok) {
       await ChatMessage.create({ content: `<b>${esc(t.name)}</b> — <b>${esc(sh.name)}</b> is out of range (${dist} sq, max ${t.gun.longMax}).`, speaker: gunSpeaker });
       return;
@@ -1509,7 +1523,7 @@
     const hit = total >= ac[facing] || crit;
     const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${range.toHit ? ` · long ${range.toHit}` : ""}${adjust ? ` · Adjust Aim +${adjust}` : ""}`;
     if (!hit) {
-      await ChatMessage.create({ content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.`, speaker: gunSpeaker });
+      await ChatMessage.create({ content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${unmeasured}`, speaker: gunSpeaker });
       return;
     }
     // Shield-breaker hits harder into a hull that is already open.
@@ -1519,7 +1533,7 @@
     let raw = Math.max(1, dmgRoll.total);
     if (range.halve) raw = Math.floor(raw / 2);
     await ChatMessage.create({
-      content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>`,
+      content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${unmeasured}`,
       speaker: gunSpeaker, rolls: [dmgRoll] });
     await gmApplyDamage(shipId, raw, facing, { crit, type: t.signature === "emp" ? "energy" : "kinetic",
       ignoreArmour: t.signature === "pierce" });
@@ -1529,31 +1543,40 @@
 
   /** What each mount does beyond damage. This is why you rebuilt it. */
   async function gmTurretSignature(t, shipId, byName) {
-    const next = getCombat(); const sh = next.ships[shipId]; if (!sh) return;
-    const round = next.round || 1;
-    let note = "";
+    if (!game.user.isGM) return;
+    if (!getCombat().ships[shipId]) return;
+    // Every dialog happens FIRST, then one read-modify-write with nothing awaited
+    // in the middle. The EMP picker can sit open while a player fires at the same
+    // hull; writing a record read before it would revert their damage.
+    let applyStatus = null, dropShield = false, note = "";
     switch (t.signature) {
       case "shieldbreak":
-        sh.shield.on = false;
-        S.applyStatus(sh, "shields_down", { round, rounds: 1, src: t.name });
+        applyStatus = "shields_down"; dropShield = true;
         note = "Their shields blow out — <b>Shields Down</b>."; break;
       case "freeze":
-        S.applyStatus(sh, "frozen", { round, src: t.name });
+        applyStatus = "frozen";
         note = "Hull frosted — <b>Frozen</b>. The next kinetic hit has advantage and doubles."; break;
       case "emp": {
         const pick = await chooseDlg(t.name, "Which system does the charge take out?",
           [{ value: "engines_disabled", label: "Engines — no movement or maneuver" },
            { value: "shields_down", label: "Shields — the facing drops" }]);
-        if (pick) { S.applyStatus(sh, pick, { round, rounds: 1, src: t.name });
-          note = pick === "engines_disabled" ? "Their drive dies — <b>Engines Down</b>." : "Their shields drop — <b>Shields Down</b>."; }
+        if (!pick) return;
+        applyStatus = pick;
+        note = pick === "engines_disabled" ? "Their drive dies — <b>Engines Down</b>." : "Their shields drop — <b>Shields Down</b>.";
         break; }
       case "grapple":
-        S.applyStatus(sh, "grappled", { round, rounds: 1, src: t.name });
+        applyStatus = "grappled";
         note = "Caught in the well — <b>Grappled</b>. No movement, and attacks against them have advantage."; break;
       case "spread": note = "Flak spread — the GM may apply the same roll to two more contacts in the arc."; break;
       case "pierce": note = "Armour-piercing — their plating did nothing."; break;
     }
-    await saveCombat(next);
+    if (applyStatus || dropShield) {
+      const next = getCombat(); const sh = next.ships[shipId];
+      if (!sh) return;
+      if (dropShield) sh.shield.on = false;
+      if (applyStatus) S.applyStatus(sh, applyStatus, { round: next.round || 1, rounds: 1, src: t.name });
+      await saveCombat(next);
+    }
     if (note) await ChatMessage.create({ content: `<b>${esc(t.name)}</b> — ${note}`, speaker: gunSpeaker });
   }
 
