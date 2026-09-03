@@ -202,6 +202,46 @@ executes, and a blunt search-and-replace put one into three functions.
 
 ---
 
+## 5b0. Where people stand on a deck
+
+Deck art is a transparent PNG on a map image **far larger than the hull** — the
+Leiothrix's is 1147x840 inside a 7000x7000 scene, down in one corner. So "the
+middle of the scene" is open space beside the ship, and both the boarding drop and
+the enemy crew used it: boarders arrived about fourteen squares off her hull.
+
+Everything that places a token on a deck now goes through the hull box:
+
+| | |
+|---|---|
+| `deckInterior(scene, levelId)` | the bounding box of that level's walls — the pack's walls trace the hull |
+| `S.deckBounds(walls, fallback)` | pure; falls back to the scene box when a deck has no walls |
+| `S.breachPoint(bounds, facing, grid)` | one entry point per arc, inset inside the skin. Deck art is drawn nose-up, so **fore is the top edge** |
+| `S.deckSpots(bounds, grid, n)` | where a deck's own crew stand, spread across the middle 70% |
+
+**Boarding chooses an arc.** `runBreach` defaults to the facing you are actually
+flying on, draws four red rings on the target's token (`showBreachMarkers`) and
+lets the boarder pick another. The chosen facing rides through `gmBreach` →
+`gmGoToDeck({facing})` and is remembered in `whereIs` so the deck panel can say
+where they came in.
+
+**A token MOVES between ships.** `liftTokenFrom(actorId, keepSceneId)` deletes the
+actor's token from every other module-owned deck scene first — boarding used to
+create one on the destination and leave the old one behind, so a boarder stood on
+the Gull and on the enemy at once.
+
+**Enemy boarding parties are real.** `boardingParty` sat on every hull and in the
+spawn browser for a long time with nothing to spawn it; `gmEnemyBoard` puts those
+marines on the Gull's deck 1, through the arc they came from, once
+(`boardersSent`). It is the captain's `e_board` action and the `boarder` doctrine
+reaches for it at range 1.
+
+**SPACE ⇄ DECKS moves the camera.** It used to switch only the console panel, so
+a boarder pressing SPACE got the space readout over the enemy's engine room.
+`viewSpace()` / `viewMyDeck()` change the scene; your token does not move — you
+are aboard, you are just looking out of the window.
+
+---
+
 ## 5b. Boarding and scene Levels
 
 Foundry v14 has native scene Levels, so a multi-deck ship is **one scene with N
@@ -405,6 +445,30 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
   teardown; only `finish(false)` runs `onFail`. The action is already spent by the
   time the puzzle opens, so tearing it down silently ate the whole repair.
   `S.abortRepairPuzzle()` / `S.abortNavGame()` are the Esc-safe doors.
+- **A scene cannot lose its last Level on v14.** `Level._preDeleteOperation` throws
+  "must have at least one level", so `buildDeckScene`'s rebuild — delete all the
+  Levels, then create the new ones — threw *after* it had already deleted the
+  walls and lights. **Rebuild has never worked on v14.** Create the replacements
+  first, delete the originals second.
+- **The deck art is a TILE, not the background.** These packs lay a transparent
+  ship PNG over a nebula `background`, so reading `background.src` gets you deep
+  space. Prefer the largest tile whose name contains "Interior".
+- **A guard keyed on state that the guarded function itself writes needs a
+  trusted door.** `goDeck` refuses a hull you are not already aboard, and
+  `whereIs` is only written by `gmGoToDeck` — so `gmBreach`, the moment access is
+  granted, refused itself.
+- **`shipPoint("gull")` must read the scene DOCUMENT.** It used the *canvas*,
+  which only knows the scene the GM is looking at — so the instant anyone boarded
+  (which switches the GM's view to a deck) the Gull had no position: `measured`
+  went false, the arc and range checks were skipped, and every enemy fired at
+  point-blank against her bow.
+- **A socket rule that denies everyone fails silently.** `swapResult` checked
+  `pendingSwap.occId`, a field that has never existed, so every station-swap
+  answer was dropped. The gate now asserts each rule ADMITS its legitimate sender,
+  not just that it refuses a stranger.
+- **`anyCrew` is the wrong rule for the inventory.** It is used *between* fights,
+  when `combat.crew` is empty — so every player-side inventory action was silently
+  refused out of combat. That is what `player` is for.
 - **Never put a backtick inside the CSS template literals.** They are one big
   template string; a backtick in a comment ends it and the file stops parsing.
   `node --check` catches it, which is why it runs first in the gate.

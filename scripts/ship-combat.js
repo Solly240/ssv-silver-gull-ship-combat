@@ -1990,7 +1990,13 @@
       const tiles = [...(doc?.tiles ?? [])].map((t) => ({
         src: t.texture?.src || t.img || "", area: (Number(t.width) || 0) * (Number(t.height) || 0) }))
         .filter((t) => t.src);
-      const interior = tiles.filter((t) => /interior/i.test(t.src)).sort((a, b) => b.area - a.area)[0];
+      // Prefer a STILL, non-alert interior. The packs ship `_alert` (red-alert)
+      // and `.webm` (animated) variants of the same deck, and picking either as
+      // the default background is wrong: alert is a state, and a Level background
+      // wants an image.
+      const score = (t) => (/\.webm$/i.test(t.src) ? 2 : 0) + (/alert/i.test(t.src) ? 4 : 0);
+      const interior = tiles.filter((t) => /interior/i.test(t.src))
+        .sort((a, b) => (score(a) - score(b)) || (b.area - a.area))[0];
       if (interior) return interior.src;
       const biggest = tiles.sort((a, b) => b.area - a.area)[0];
       // A tile has to actually be the floor, not a thruster decal in the corner.
