@@ -1434,7 +1434,7 @@
     requestAnimationFrame(() => {
       _uiQueued = false;
       renderBar(); refreshOpen(); refreshFleet();
-      try { drawGunCone(); } catch (e) {}
+      drawGunCone();
     });
   }
 
@@ -3269,6 +3269,13 @@
       (c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.controllerUserId === game.user.id);
   }
 
+  /** The Gull's own placed token on the current scene. */
+  function shipTokenObject() {
+    const a = shipIconActor();
+    if (!a || typeof canvas === "undefined" || !canvas?.tokens) return null;
+    return canvas.tokens.placeables.find((t) => t.document?.actorId === a.id) || null;
+  }
+
   const shipIdForToken = (tokenId) => {
     if (shipTokenObject()?.id === tokenId) return "gull";
     const hit = Object.values(getCombat().ships || {}).find((sh) => sh.tokenId === tokenId);
@@ -3451,9 +3458,27 @@
      per-ship overlay above draws, so every hull on the board gets its arcs, its
      cone and its shield facings — not just the Gull. These three names are kept
      because the hooks and refreshUI call them. */
-  const drawGunCone = () => refreshOverlays();
-  const positionGunCone = () => positionAllOverlays();
-  const clearGunCone = () => clearOverlays();
+  /**
+   * Canvas work is called from hooks that fire per frame, so it has always been
+   * wrapped in try/catch. It used to swallow — which is how a call to a function
+   * deleted in a refactor survived for a whole release looking like "the arcs
+   * just don't draw". Report once per distinct message instead.
+   */
+  const _reported = new Set();
+  function canvasSafe(label, fn) {
+    try { return fn(); }
+    catch (e) {
+      const key = `${label}:${e.message}`;
+      if (!_reported.has(key)) {
+        _reported.add(key);
+        console.error(`${MODULE_ID} | ${label} failed —`, e);
+        if (game.user?.isGM) ui.notifications?.error(`Ship Combat: ${label} failed — ${e.message}. See the console.`);
+      }
+    }
+  }
+  const drawGunCone = () => canvasSafe("canvas overlay", refreshOverlays);
+  const positionGunCone = () => canvasSafe("overlay position", positionAllOverlays);
+  const clearGunCone = () => canvasSafe("overlay teardown", clearOverlays);
 
   Hooks.once("ready", async () => {
     if (game.user.isGM) {
@@ -3494,7 +3519,7 @@
     });
 
     // Firing-arc cone on the map: (re)build on canvas ready / token add-remove; follow the ship every frame.
-    Hooks.on("canvasReady", () => { try { drawGunCone(); } catch (e) {} });
+    Hooks.on("canvasReady", () => { drawGunCone(); });
     // Is this token one of ours? Cached per render pass — refreshToken fires per
     // token per animation frame, so this must not walk the ship list each time.
     let _shipTokIds = new Set(), _shipTokStamp = 0;
@@ -3508,16 +3533,16 @@
       return ids;
     };
     const isShipToken = (doc) => doc && (shipTokenIds().has(doc.id) || doc.actorId === shipIconActor()?.id);
-    Hooks.on("createToken", (doc) => { if (isShipToken(doc)) { _shipTokStamp = 0; try { refreshOverlays(); } catch (e) {} } });
-    Hooks.on("deleteToken", (doc) => { _shipTokStamp = 0; try { refreshOverlays(); } catch (e) {} });
+    Hooks.on("createToken", (doc) => { if (isShipToken(doc)) { _shipTokStamp = 0; drawGunCone(); } });
+    Hooks.on("deleteToken", (doc) => { _shipTokStamp = 0; drawGunCone(); });
     Hooks.on("updateToken", (doc, change) => {
       if (!isShipToken(doc)) return;
-      try { if ("width" in change || "height" in change) refreshOverlays(); else positionAllOverlays(); } catch (e) {}
+      if ("width" in change || "height" in change) drawGunCone(); else positionGunCone();
     });
     // refreshToken fires each animation frame — keep the overlays glued on while ships move and turn.
-    Hooks.on("refreshToken", (tok) => { if (overlays.size && isShipToken(tok?.document)) { try { positionOverlay(shipIdForToken(tok.document.id), tok); } catch (e) {} } });
+    Hooks.on("refreshToken", (tok) => { if (overlays.size && isShipToken(tok?.document)) { canvasSafe("overlay follow", () => positionOverlay(shipIdForToken(tok.document.id), tok)); } });
     Hooks.on("canvasTearDown", () => { stopPulse(); clearOverlays(); });
-    try { drawGunCone(); } catch (e) {}
+    drawGunCone();
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
