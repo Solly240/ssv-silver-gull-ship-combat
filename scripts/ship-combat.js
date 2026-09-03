@@ -982,6 +982,49 @@
   }
 
   // Fire: optional Quick Aim (+2, spends Bonus) → to-hit (gun + STR + bonuses) → the GM confirms Hit/Miss → damage.
+  /**
+   * Make sure this gunner has something to shoot at, asking if they do not.
+   *
+   * Firing used to fall through to the GM's manual "did it hit?" dialog whenever
+   * nobody had pressed the separate 🎯 target button first — so the auto-resolver
+   * (range, facing, AC, shields, armour) was opt-in and most shots were
+   * adjudicated by hand. Now the gun asks.
+   *
+   * A token TARGETED on the map (Foundry's own T key, or a right-click) wins:
+   * that is the most direct "click the ship I am shooting at" there is.
+   */
+  async function ensureTarget(crew, gun) {
+    const combat = getCombat();
+    const live = Object.values(combat.ships).filter((s) => s.id !== "gull"
+      && s.disposition !== "ally" && s.outcome !== "destroyed");
+    if (!live.length) return null;                     // nothing on the board — GM adjudicates
+
+    // 1. a token the player has targeted on the map
+    const targeted = [...(game.user.targets || [])];
+    const byToken = targeted.length
+      ? live.find((s) => targeted.some((t) => t.id === s.tokenId)) : null;
+    if (byToken) {
+      if (crew.target !== byToken.id) await layTarget(crew, byToken.id);
+      return byToken.id;
+    }
+
+    // 2. one already laid and still alive
+    if (crew.target && live.some((s) => s.id === crew.target)) return crew.target;
+
+    // 3. ask — with the range and the facing this shot would strike
+    const chosen = live.length === 1 ? live[0].id : await pickTargetDialog(crew.id, { returnOnly: true });
+    if (!chosen) return null;
+    await layTarget(crew, chosen);
+    return chosen;
+  }
+
+  /** Lay the gun and WAIT for the write, so the shot resolves against it. */
+  async function layTarget(crew, shipId) {
+    if (game.user.isGM) { await gmSelectTarget(crew.id, shipId, null); return; }
+    emit({ type: "selectTarget", toGM: true, crewId: crew.id, shipId, userId: game.user.id });
+    await awaitCombat((c) => c.crew?.[crew.id]?.target === shipId, 2500);
+  }
+
   async function runGunFire(crewId) {
     const crew = getCombat().crew[crewId]; if (!isGunner(crew)) return;
     if (!S.systemWorks(getState(), "weapons")) return ui.notifications?.warn("Weapons are down — repair them before firing.");
@@ -989,6 +1032,17 @@
     const gun = S.gun(crew.gun); if (!gun) return ui.notifications?.warn("Pick a gun first.");
     const atkPw = S.ACTION_POWER.attack;
     if (!game.user.isGM && S.normalize(getState()).power.cur < atkPw) return ui.notifications?.warn(`Not enough power — Fire needs ${atkPw} (convert fuel first).`);
+    // Pick the ship FIRST — before the roll, so cancelling costs nothing.
+    const targetId = await ensureTarget(crew, gun);
+    const laid = targetId ? getCombat().ships[targetId] : null;
+    if (laid) {
+      const d = shipDistance("gull", targetId);
+      const band = d != null ? S.rangeBand(gun, d) : null;
+      if (band === "out") {
+        return ui.notifications?.warn(
+          `${laid.name} is ${d} squares off — out of range for the ${gun.label} (max ${gun.longMax}). The Pilot has to close.`);
+      }
+    }
     const str = strMod();
     const res = await gunToHitDialog(crew, gun, str);
     if (!res) return;
@@ -1000,7 +1054,7 @@
     // record and the facing from where the two tokens actually are, so swinging
     // round to an unshielded arc is a mechanic rather than a GM ruling. Without a
     // target — an un-tokened enemy, a narrative shot — the GM still adjudicates.
-    const tgt = crew.target && getCombat().ships[crew.target];
+    const tgt = targetId && getCombat().ships[targetId];
     if (tgt && !tgt.outcome) {
       if (game.user.isGM) await gmResolveAgainstShip(crew.id, gun, res, str);
       else { emit({ type: "gunHitCheck", toGM: true, crewId: crew.id, gunnerName: crew.name, gunId: gun.id, total: res.total, die: res.die, str, userId: game.user.id });
@@ -1154,78 +1208,83 @@
     const gun = S.gun(crew.gun); if (!gun) return ui.notifications?.warn("Pick a gun first.");
     const calledPw = S.ACTION_POWER.called;
     if (!game.user.isGM && S.normalize(getState()).power.cur < calledPw) return ui.notifications?.warn(`Not enough power — Called Shot needs ${calledPw} (convert fuel first).`);
-    // The list is the TARGET's systems, not our own — picking from the Gull's
-    // eight was a stand-in from before enemy ships existed. Unscanned, you are
-    // shooting at a compartment you cannot name.
+    // The dossier ("3. GUNNER — PORT TURRET"): "same roll at −5 to hit, no hull
+    // damage either way. Engines: inflicts Engines Disabled 1 round. Weapons:
+    // Weapon Offline 2 rounds. Shields: Shields Down 1 round." A rebalance pass
+    // had dropped the −5 and turned it into system HP damage; this is the
+    // printed rule, and the three statuses already exist in the appendix.
     const tgt = getCombat().ships[crew.target];
-    if (!tgt) return ui.notifications?.warn("Lay the gun on a contact first — Called Shot needs a target.");
-    const tv = S.shipView(tgt, { isGM: game.user.isGM });
-    const known = !!tv.known?.systems && tv.systems;
-    const opts = known
-      ? Object.keys(tv.systems).filter((id) => tv.systemHp?.[id]?.cur > 0)
-          .map((id) => ({ value: id, label: `${S.SYSTEMS.find((x) => x.id === id)?.label || id} (${tv.systemHp[id].cur}/${tv.systemHp[id].max})` }))
-      : [{ value: "__blind", label: "A compartment you cannot identify — she has not been scanned" }];
-    if (!opts.length) return ui.notifications?.warn(`${tgt.name} has nothing left worth aiming at.`);
+    const targetId = tgt ? crew.target : await ensureTarget(crew, gun);
+    const laid = targetId ? getCombat().ships[targetId] : null;
+    if (!laid) return ui.notifications?.warn("Lay the gun on a contact first — Called Shot needs a target.");
     const target = await chooseDlg("Called Shot",
-      known ? `Which of <b>${esc(tv.name)}</b>'s systems?`
-            : `<b>${esc(tv.name)}</b> is unscanned — the Science officer has to resolve her systems before you can pick one. You can still fire blind.`,
-      opts);
+      `<b>${esc(S.shipView(laid, { isGM: game.user.isGM }).name)}</b> — what are you shooting out?` +
+      `<br><span style="opacity:.7">−5 to hit, and no hull damage either way.</span>`,
+      [{ value: "engine",  label: "Engines — Engines Disabled for 1 round" },
+       { value: "weapons", label: "Weapons — Weapon Offline for 2 rounds" },
+       { value: "shields", label: "Shields — Shields Down for 1 round" }]);
     if (!target) return;
     const str = strMod();
     const res = await gunToHitDialog(crew, gun, str, { noAim: true });   // Called Shot: no Quick Aim
     if (!res) return;
     if (!(await consumeSlot(crew, "action", calledPw))) return;   // refused: no action left, or not enough power
-    if (res.die === 1) {
-      await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun.label)}</b> Called Shot on <b>${esc(tv.name)}</b><br>` +
-        `To-hit <b>${res.total}</b> (d20 1) — <b style="color:#e0454d">MISFIRE — 1 damage to your own Weapons / Turrets</b>`,
-        speaker: gunSpeaker, rolls: res.roll ? [res.roll] : undefined });
-      if (game.user.isGM) gmWeaponsMishap(null); else emit({ type: "weaponsMishap", toGM: true, userId: game.user.id });
-      return;
-    }
-    // It lands on the TARGET now, instead of a chat line saying enemy ships are
-    // coming soon. The GM's client does the write, as with every other shot.
-    const amount = res.die === 20 ? 2 : 1;
-    if (game.user.isGM) await gmCalledShot(crew.id, crew.target, target, amount, res);
-    else emit({ type: "calledShot", toGM: true, crewId: crew.id, shipId: crew.target,
-                systemId: target, amount, total: res.total, die: res.die, userId: game.user.id });
+    if (game.user.isGM) await gmCalledShot(crew.id, targetId, target, res, str);
+    else emit({ type: "calledShot", toGM: true, crewId: crew.id, shipId: targetId,
+                systemId: target, total: res.total, die: res.die, str, userId: game.user.id });
   }
 
   /**
-   * Apply a Called Shot to an enemy system.
-   *
-   * A blind shot (she has not been scanned) hits a compartment at random — you
-   * aimed at something, you just could not say what.
+   * Resolve a Called Shot: −5 to hit, no hull damage, a status on a success.
+   * A natural 1 still backfires into our own Weapons.
    */
-  async function gmCalledShot(crewId, shipId, systemId, amount, res) {
+  async function gmCalledShot(crewId, shipId, systemId, res, str = 0) {
     if (!game.user.isGM) return;
-    const next = getCombat();
-    const crew = next.crew[crewId], sh = next.ships[shipId];
+    const combat = getCombat();
+    const crew = combat.crew[crewId], sh = combat.ships[shipId];
     if (!crew || !sh) return;
-    const live = Object.entries(sh.systemHp || {}).filter(([, hp]) => hp.cur > 0);
-    if (!live.length) {
-      return ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — Called Shot on <b>${esc(sh.name)}</b>: nothing left aboard her to break.`, speaker: gunSpeaker });
-    }
-    const pickId = (systemId && systemId !== "__blind" && sh.systemHp?.[systemId]?.cur > 0)
-      ? systemId : live[Math.floor(Math.random() * live.length)][0];
-    const amt = Math.max(1, Math.min(S.SYSTEM_HP_MAX, Number(amount) || 1));
-    const hp = sh.systemHp[pickId];
-    hp.cur = Math.max(0, hp.cur - amt);
-    sh.systems[pickId] = S.systemState(hp);
-    if (pickId === "shields" && hp.cur <= 0) sh.shield.on = false;
-    await saveCombat(next);
+    const gun = S.gun(crew.gun) || { label: "gun" };
+    const CALLED = {
+      engine:  { status: "engines_disabled", rounds: 1, what: "Engines" },
+      weapons: { status: "weapon_offline",   rounds: 2, what: "Weapons" },
+      shields: { status: "shields_down",     rounds: 1, what: "Shields" }
+    };
+    const pick = CALLED[systemId] || CALLED.engine;
 
-    const label = S.SYSTEMS.find((x) => x.id === pickId)?.label || pickId;
-    const dead = hp.cur <= 0;
-    const known = !!sh.revealed?.systems;
+    if (res.die === 1) {
+      await ChatMessage.create({
+        content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun.label)}</b> Called Shot on ` +
+                 `<b>${esc(sh.name)}</b>'s ${esc(pick.what)}: <b style="color:#e0454d">MISFIRE</b> — 1 damage to your own Weapons.`,
+        speaker: gunSpeaker });
+      return gmWeaponsMishap(null);
+    }
+
+    const from = shipPoint("gull"), me = shipPoint(shipId);
+    const facing = (from && me) ? S.facingFrom(me, from) : "fore";
+    const ac = S.shipAC(sh, Object.values(sh.crew || {}));
+    const total = res.total + S.CALLED_SHOT_PENALTY;
+    const hit = total >= ac[facing] || res.die === 20;
+    const acKnown = !!sh.revealed?.ac;
+    const bits = acKnown ? `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}` : `the ${S.FACING_LABEL[facing]}`;
+
+    if (!hit) {
+      await sayRedacted(
+        `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>Called Shot</b> on <b>${esc(sh.name)}</b>'s ` +
+        `${esc(pick.what)}: <b>${total}</b> (${res.total} ${S.CALLED_SHOT_PENALTY}) vs ${bits} — <b>miss</b>. No hull damage either way.`,
+        acKnown ? "" : `AC ${ac[facing]} on the ${esc(S.FACING_LABEL[facing])}.`, gunSpeaker);
+      return;
+    }
+
+    const next = getCombat(); const t = next.ships[shipId]; if (!t) return;
+    S.applyStatus(t, pick.status, { round: next.round, rounds: pick.rounds, src: crew.name });
+    if (pick.status === "shields_down") t.shield.on = false;
+    await saveCombat(next);
     playFx({ kind: "tracer", fromId: "gull", toId: shipId, color: 0xf2b03d, width: 4 });
-    await sayRedacted(
-      `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>Called Shot</b> on <b>${esc(sh.name)}</b>: ` +
-      `<b>${res.total}</b> (d20 ${res.die})${res.die === 20 ? ` <b style="color:#42d16a">CRITICAL</b>` : ""} — ` +
-      (known
-        ? `<b>${esc(label)}</b> takes <b>${amt}</b>${dead ? ` and is <b style="color:#e0454d">destroyed</b>` : ` (${hp.cur}/${hp.max})`}.`
-        : `something inside her ${dead ? `<b style="color:#e0454d">lets go</b>` : `takes it`}. <span style="opacity:.6">Scan her systems to aim properly.</span>`),
-      known ? "" : `it was her <b>${esc(label)}</b> — now ${hp.cur}/${hp.max}${dead ? ", destroyed" : ""}.`,
-      gunSpeaker);
+    await ChatMessage.create({
+      content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>Called Shot</b> on <b>${esc(sh.name)}</b>: ` +
+               `<b>${total}</b> vs ${bits} — <b style="color:#42d16a">hit</b>.<br>` +
+               `Her <b>${esc(pick.what)}</b> take it: <b style="color:#e0454d">${esc(S.STATUSES[pick.status].label)}</b> for ` +
+               `<b>${pick.rounds}</b> round${pick.rounds === 1 ? "" : "s"}. <span style="opacity:.7">No hull damage.</span>`,
+      speaker: gunSpeaker });
     refreshUI(); refreshFleet();
   }
   /**
@@ -1458,7 +1517,7 @@
       case "selectTarget":   gmSelectTarget(msg.crewId, msg.shipId, msg.userId); break;
       // The result is RECOMPUTED from the roll, never taken from the payload: a
       // crafted `result` would otherwise reveal a hull the party never scanned.
-      case "calledShot":     gmCalledShot(msg.crewId, msg.shipId, msg.systemId, msg.amount, { total: msg.total, die: msg.die }); break;
+      case "calledShot":     gmCalledShot(msg.crewId, msg.shipId, msg.systemId, { total: msg.total, die: msg.die }, msg.str); break;
       case "applyScan":      gmApplyScan(msg.shipId, S.scanResult(Number(msg.total) - S.SCAN_DC), msg.gunnerName, { total: msg.total, die: msg.die }, msg.painted); break;
       case "buffCrew":       gmBuffCrew(msg.crewId, msg.kind, msg.byName); break;
       case "reroute":        gmReroute(msg.rail, msg.crewId, msg.byName); break;
@@ -1501,14 +1560,26 @@
     const included = await includeDialog(cur);
     if (!included) return;
     const next = S.defaultCombat();
-    next.active = true; next.turn = 1; next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
+    next.active = true; next.turn = 1; next.round = 1;
+    next.rolesEnabled = cur.rolesEnabled; next.roster = cur.roster;
+    // KEEP THE FLEET. `defaultCombat()` starts empty, and copying only the roster
+    // across meant pressing ⚔ ENTER SHIP COMBAT silently deleted every enemy ship
+    // the GM had already spawned from Fleet Command — the records went, while
+    // their actors and tokens stayed on the map as orphans. The turn bar and the
+    // fleet board are one system; this is the seam where they came apart.
+    next.ships = cur.ships || {};
+    next.activeShip = "gull";
     for (const m of cur.roster) {
       if (!included.has(m.id)) continue;
       next.crew[m.id] = { id: m.id, name: m.name, ownerUserId: m.userId || "", controllerUserId: m.userId || game.user.id, station: "", action: false, bonus: false, granted: 0, maneuver: null, mp: 0, mpMax: 0, navMult: 1, gun: null, prof: { ...(m.prof || {}) } };   // carried over from the roster, so it survives end/start of combat
     }
     await saveCombat(next);
     emit({ type: "pickPrompt" });
-    ui.notifications?.info("Ship combat started — players, pick your station.");
+    const n = Object.keys(next.ships).length;
+    ui.notifications?.info(n
+      ? `Ship combat started with ${n} contact${n === 1 ? "" : "s"} on the board — players, pick your station.`
+      : "Ship combat started — players, pick your station. Press F to spawn the opposition.");
+    if (n) await gmRollInitiative();
   }
   async function endCombat() {
     if (!game.user.isGM) return;
@@ -1771,6 +1842,7 @@
     get gmBarHidden() { return gmBarHidden(); },
     toggleCollapse: () => { setBarCollapsed(!barCollapsed()); renderBar(); },
     enterCombat, endCombat, nextTurn,
+    openFleet,
     editCrew: editCrewDialog,
     openRoles: rolesDialog,
     addCrew: addCrewDialog,
@@ -3198,21 +3270,29 @@
     await saveCombat(next);
   }
 
-  async function pickTargetDialog(crewId) {
-    const crew = getCombat().crew[crewId]; if (!crew) return;
+  /** `returnOnly` hands the id back instead of laying it — used by ensureTarget,
+   *  which needs to wait for the write before it resolves the shot. */
+  async function pickTargetDialog(crewId, { returnOnly = false } = {}) {
+    const crew = getCombat().crew[crewId]; if (!crew) return null;
     const gun = S.gun(crew.gun);
-    const list = targetList(gun);
-    if (!list.length) return ui.notifications?.warn("Nothing hostile on the board — the GM spawns ships from Fleet Command (F).");
+    const list = targetList(gun).filter((t) => !t.outcome);
+    if (!list.length) { ui.notifications?.warn("Nothing hostile on the board — the GM spawns ships from Fleet Command (F)."); return null; }
     const opts = list.map((t) => ({
       value: t.id,
       label: `${t.name} — ${t.dist == null ? "range unknown" : `${t.dist} sq (${t.band})`}` +
-             `${t.facing ? ` · you strike their ${S.FACING_LABEL[t.facing]}` : ""}`
+             `${t.facing ? ` · you strike their ${S.FACING_LABEL[t.facing]}` : ""}` +
+             `${t.band === "out" ? " ⚠ OUT OF RANGE" : ""}`
     }));
-    opts.push({ value: "", label: "— no target —" });
-    const chosen = await chooseDlg("Lay the gun on", "Range and facing are measured from the two tokens on the map.", opts);
-    if (chosen === null) return;
+    if (!returnOnly) opts.push({ value: "", label: "— no target —" });
+    const chosen = await chooseDlg("Lay the gun on",
+      "Range and the facing you strike are measured from the two tokens on the map." +
+      "<br><span style=\"opacity:.7\">Tip: target a token on the map (press <b>T</b> over it) and the gun uses that.</span>",
+      opts, crew.target || undefined);
+    if (chosen === null || chosen === undefined) return null;
+    if (returnOnly) return chosen || null;
     if (game.user.isGM) await gmSelectTarget(crewId, chosen, null);
     else emit({ type: "selectTarget", toGM: true, crewId, shipId: chosen, userId: game.user.id });
+    return chosen || null;
   }
 
   /**

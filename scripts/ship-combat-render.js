@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.27.7";
+  S.VERSION = "0.28.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -127,10 +127,9 @@
     },
     pilot: {
       main: [
-        N("evasive", "Evasive Maneuvers", "+4 ship AC; forward gunners at disadvantage; 6 Movement Points."),
-        N("steady", "Steady Approach", "+0 AC; gunners normal; 4 Movement Points."),
-        N("come_about", "Come About", "No AC change; forward gunners get +2 to hit. 2 Movement Points."),
-        N("aggressive", "Aggressive Positioning", "−4 AC; forward gunners advantage; 3 Movement Points; enables Ram.")
+        N("evasive", "Evasive Maneuvers", "+5 ship AC; forward gunners at disadvantage; 5 Movement Points."),
+        N("steady", "Steady Approach", "+0 AC; gunners normal; 3 Movement Points."),
+        N("aggressive", "Aggressive Positioning", "−5 AC; forward gunners advantage; 2 Movement Points; enables Ram.")
       ],
       bonus: [N("reposition", "Reposition", "Spend Movement Points: Move Forward, Rotate 45°/90°, or Enter Hiding.")]
     },
@@ -234,15 +233,16 @@
   // S.shipAC already adds the maneuver's own `ac`, so applying the status too
   // would count Evasive twice and put the ship back in the unreadable band this
   // retune existed to escape. Show it; never stack it.
+  /* The crew dossier's own table (source/pdfs/ssv-silver-gull-crew-dossier.pdf,
+     "2. PILOT / HELM"). A rebalance pass had narrowed these to ±4 and added a
+     fourth "Come About" maneuver; the printed rules are ±5 and three. */
   S.MANEUVERS = {
-    evasive:    { label: "Evasive",    mp: 6, ac:  4, gun:  0, gunAdv: -1, status: "evasive",
-                  blurb: "+4 ship AC; forward gunners fire at disadvantage." },
-    steady:     { label: "Steady",     mp: 4, ac:  0, gun:  0, gunAdv:  0, status: null,
+    evasive:    { label: "Evasive Maneuvers",     mp: 5, ac:  5, gun: 0, gunAdv: -1, status: "evasive",
+                  blurb: "+5 ship AC; forward gunners fire at disadvantage." },
+    steady:     { label: "Steady Approach",       mp: 3, ac:  0, gun: 0, gunAdv:  0, status: null,
                   blurb: "No modifier either way." },
-    come_about: { label: "Come About", mp: 2, ac:  0, gun: +2, gunAdv:  0, status: null,
-                  blurb: "Line the ship up: forward gunners get +2 to hit. The Pilot's move that serves gunnery." },
-    aggressive: { label: "Aggressive", mp: 3, ac: -4, gun:  0, gunAdv: +1, status: "aggressive",
-                  blurb: "−4 ship AC; forward gunners fire with advantage; enables Ram." }
+    aggressive: { label: "Aggressive Positioning", mp: 2, ac: -5, gun: 0, gunAdv: +1, status: "aggressive",
+                  blurb: "−5 ship AC; forward gunners fire with advantage; enables Ram." }
   };
   // Fuel each move burns (players only — anything the GM drives is free). Rotate 45 = 1, Rotate 90 = 2, Forward = 4.
   S.MOVE_FUEL = { rotL45: 1, rotR45: 1, rotL90: 2, rotR90: 2, forward: 4 };
@@ -317,6 +317,8 @@
   S.BOARDING_DC = 15;
 
   S.QUICK_AIM_BONUS = 2;   // Quick Aim: spend the Bonus action for +2 to hit
+  // "Called Shot — same roll at −5 to hit, no hull damage either way." (dossier)
+  S.CALLED_SHOT_PENALTY = -5;
   // Power a station action draws from the reactor (players only; the GM never spends). Keyed by action id; default 0.
   // Movement is fuel (above), not power; repair/boarding/pilot-maneuvers are free; everything that "runs on power" pays here.
   S.ACTION_POWER = {
@@ -357,14 +359,14 @@
 
   S.STATUSES = {
     // --- Pilot posture -----------------------------------------------------
-    evasive:          { label: "Evasive",        kind: "good", scope: "round",    ac: 4,
-                        blurb: "+4 AC; forward gunners fire at disadvantage." },
-    aggressive:       { label: "Aggressive",     kind: "bad",  scope: "round",    ac: -4,
-                        blurb: "−4 AC; forward gunners fire with advantage; enables Ram." },
+    evasive:          { label: "Evasive Bonus",   kind: "good", scope: "round",    ac: 5,
+                        blurb: "+5 AC this round; forward gunners fire at disadvantage." },
+    aggressive:       { label: "Aggressive Exposed", kind: "bad", scope: "round",  ac: -5,
+                        blurb: "−5 AC this round; forward gunners fire with advantage; enables Ram." },
     hidden:           { label: "In Cover",       kind: "good", scope: "until",    incomingAdv: -1,
                         blurb: "Attacks against you have disadvantage until you move or fire." },
-    rerouted:         { label: "Power Rerouted", kind: "good", scope: "round",  ac: 2,
-                        blurb: "+2 ship AC this round — the Engineer put the reactor into the shields." },
+    rerouted:         { label: "Power Rerouted", kind: "good", scope: "round",  ac: 5,
+                        blurb: "+5 temp AC this round — the Engineer put the reactor into the shields. Stacks with the maneuver." },
     ramming_committed:{ label: "Ramming",        kind: "warn", scope: "round",
                         blurb: "Committed to a ram — you cannot change maneuver this round." },
 
@@ -519,7 +521,13 @@
     }
     const ac = base + manMod + mods.ac;
     const out = { base, maneuver: manMod, maneuverLabel: manLabel, status: mods.ac, dr: {} };
-    for (const f of S.FACINGS) { out[f] = ac; out.dr[f] = S.shieldDR(state, f); }
+    // Shields are a PER-FACING AC bonus as well as damage halving, so the four
+    // facings no longer share a number — which is the whole point of allocating.
+    for (const f of S.FACINGS) {
+      const d = S.shieldDR(state, f);
+      out.dr[f] = d;
+      out[f] = ac + (d.ac || 0);
+    }
     return out;
   };
 
@@ -531,9 +539,16 @@
    */
   // How far past maximum an overcharged gauge may run before it is nonsense.
   S.OVERCHARGE_CAP = 2;
-  S.MICRO_DR = 3;
+  /* The crew dossier, "7. SHIELDS / COMMS OFFICER" and the status appendix:
+       Shield Facing Bonus — "Half damage + 5 AC vs. attacks from the allocated direction"
+       Micro-Shield Bonus  — "+2 AC vs. attacks from a second direction" (no halving)
+     A rebalance pass had turned the first into damage-reduction only and the
+     second into a flat −3 to damage. Both are back on the printed rules. */
+  S.SHIELD_AC = 5;        // the allocated facing
+  S.MICRO_AC = 2;         // a second facing, from Micro-Adjust (+3 with the perk)
+  S.MICRO_DR = 0;         // Micro-Adjust does NOT halve or reduce damage
   S.shieldDR = function (state, facing) {
-    const none = { half: false, flat: 0, label: "" };
+    const none = { half: false, flat: 0, ac: 0, label: "" };
     if (!state) return none;
     // Unknown shields are assumed to work — see S.systemKnown.
     if (S.systemKnown(state, "shields") && !S.systemWorks(state, "shields")) return none;
@@ -545,8 +560,12 @@
     if (down && down.data && down.data.facing === facing) return none;
     const sh = state.shield || {};
     const half = !!(sh.on && sh.facing === facing);
-    const flat = sh.secondary === facing ? S.MICRO_DR : 0;
-    return { half, flat, label: half ? "SHIELDED" : flat ? "MICRO" : "" };
+    const micro = sh.secondary === facing;
+    // AC is the shield's headline effect; the halving rides along on the
+    // allocated facing only.
+    const ac = (half ? S.SHIELD_AC : 0) + (micro ? S.MICRO_AC : 0);
+    return { half, flat: micro ? S.MICRO_DR : 0, ac,
+             label: half ? "SHIELDED" : micro ? "MICRO" : "" };
   };
 
   /* ---------------------------------------------------------------------- */
@@ -991,7 +1010,7 @@
       { id: "e_close", label: "Close", hint: "Burn toward the Gull — one range band." },
       { id: "e_open", label: "Open range", hint: "Fall back a band and present a fresh arc." },
       { id: "e_about", label: "Come about", hint: "Rotate 90° to bring the shielded facing round." },
-      { id: "e_evade", label: "Evade", hint: "Evasive: +4 AC until this ship's next turn." }
+      { id: "e_evade", label: "Evade", hint: "Evasive: +5 AC until this ship's next turn." }
     ],
     engineer: [
       { id: "e_repair", label: "Repair", hint: "Bring the worst-hurt system back by 2." },
@@ -1006,7 +1025,7 @@
       { id: "e_cm", label: "Countermeasures", hint: "The Gull's next scan of this hull has disadvantage." }
     ],
     "": [
-      { id: "e_brace", label: "Brace", hint: "A spare hand shores up a bulkhead — +2 AC this round." }
+      { id: "e_brace", label: "Brace", hint: "A spare hand shores up a bulkhead — +5 AC this round." }
     ]
   };
 
@@ -2562,10 +2581,18 @@
     if (!combat.active) {
       if (cctx.isGM && !cctx.gmBarHidden) {
         root.style.display = "flex";
+        // The fleet is part of THIS system, so the bar says so: how many contacts
+        // are already on the board, and a way straight to the board that spawns
+        // them. Without it the two halves looked like separate features.
+        const waiting = Object.keys(cctx.getCombat?.().ships || {}).length;
         root.innerHTML = `<div class="ct-top"><span class="ct-turn">SHIP COMBAT</span>` +
           `<button class="ct-btn enter" data-act="enter">⚔ ENTER SHIP COMBAT</button>` +
-          `<button class="ct-btn" data-act="crew">Crew</button></div>`;
+          `<button class="ct-btn" data-act="fleet" title="Fleet Command (F) — spawn and drive the opposition">` +
+            `🛰 Fleet${waiting ? ` <b>${waiting}</b>` : ""}</button>` +
+          `<button class="ct-btn" data-act="crew">Crew</button></div>` +
+          (waiting ? `<div class="ct-sub">${waiting} contact${waiting === 1 ? "" : "s"} standing by — they come with you into the fight.</div>` : "");
         root.querySelector('[data-act="enter"]').onclick = () => cctx.enterCombat();
+        root.querySelector('[data-act="fleet"]').onclick = () => cctx.openFleet && cctx.openFleet();
         root.querySelector('[data-act="crew"]').onclick = () => cctx.editCrew();
       } else { root.style.display = "none"; root.innerHTML = ""; }
       return;
@@ -3859,6 +3886,10 @@
 .sgfleet .fl-actbtn:disabled{opacity:.4;cursor:default}
 `;
 
+  S.FLEET_CSS += `
+.sgct .ct-sub{font:11px/1.4 'Courier New',monospace;color:#7fd4e8;opacity:.8;padding:2px 12px 6px;letter-spacing:.03em}
+`;
+
   S.SCAN_CSS = `
 .sgscan{position:fixed;inset:0;z-index:96;display:flex;align-items:center;justify-content:center;
   background:rgba(2,6,12,.82);font-family:'Courier New',monospace;color:#cfeef0;}
@@ -4026,17 +4057,38 @@
     ok(S.systemState({ cur: 4, max: 5 }) === "damaged", "4/5 is damaged");
     ok(S.systemState({ cur: 0, max: 5 }) === "destroyed", "0/5 is destroyed");
 
-    // --- directional AC: shields are DR now, never AC ---------------------
+    // --- the printed rules the module must not drift from again ------------
+    // Every number here is quoted from source/pdfs/ssv-silver-gull-crew-dossier.pdf.
+    // A balance pass once changed all of them at once; this block is what makes
+    // that visible instead of silent.
+    ok(S.SHIELD_AC === 5, "Allocate Shields is +5 AC (dossier: 'half damage + 5 AC')");
+    ok(S.MICRO_AC === 2, "Micro-Adjust is +2 AC");
+    ok(S.MICRO_DR === 0, "…and Micro-Adjust does NOT reduce damage");
+    ok(S.CALLED_SHOT_PENALTY === -5, "Called Shot is −5 to hit");
+    ok(S.QUICK_AIM_BONUS === 2, "Quick Aim is +2 to hit");
+    ok(S.SCAN_DC === 15, "Scan is DC 15");
+    ok(S.BOARDING_DC === 15, "Boarding is DC 15 baseline");
+    ok(S.STATUSES.evasive.ac === 5 && S.STATUSES.aggressive.ac === -5, "Evasive/Aggressive are ±5 AC");
+    ok(S.STATUSES.rerouted.ac === 5, "Reroute Power is +5 temp AC");
+    ok(S.STATUSES.on_fire.dot === "1d4", "On Fire is 1d4 a turn");
+
+    // --- directional AC, straight off the crew dossier ---------------------
+    //   Shield Facing Bonus  — half damage AND +5 AC from the allocated direction
+    //   Micro-Shield Bonus   — +2 AC from a second direction, no halving
+    //   Evasive / Aggressive — +5 / −5 AC
     const st = S.normalize({ ac: { base: 13 }, shield: { on: true, facing: "fore", secondary: "aft" } });
     const crewEvasive = [{ station: "pilot", maneuver: "evasive" }];
     const a1 = S.shipAC(st, { crew: crewEvasive });
-    ok(a1.fore === 13 + 4, `evasive AC should be 17 on every facing, got ${a1.fore}`);
-    ok(a1.fore === a1.aft && a1.aft === a1.port && a1.port === a1.starboard, "all four facings share one AC");
+    ok(a1.fore === 13 + 5 + 5, `evasive + shielded bow should be AC 23, got ${a1.fore}`);
+    ok(a1.aft === 13 + 5 + 2, `evasive + micro-adjusted stern should be AC 20, got ${a1.aft}`);
+    ok(a1.port === 13 + 5 && a1.starboard === 13 + 5, "an unshielded facing gets the maneuver only");
+    ok(a1.fore > a1.port, "the facings no longer share one number — that is the point of allocating");
     ok(a1.dr.fore.half === true, "the allocated facing halves damage");
-    ok(a1.dr.aft.flat === S.MICRO_DR, "the micro-adjust facing takes a flat reduction");
-    ok(a1.dr.port.half === false && a1.dr.port.flat === 0, "unshielded facings get nothing");
+    ok(a1.dr.fore.ac === S.SHIELD_AC, "…and carries +5 AC");
+    ok(a1.dr.aft.half === false && a1.dr.aft.ac === S.MICRO_AC, "micro-adjust is +2 AC and no halving");
+    ok(a1.dr.port.half === false && a1.dr.port.ac === 0, "unshielded facings get nothing");
     ok(S.shipAC(st, crewEvasive).fore === a1.fore, "shipAC accepts a bare crew array as well as a combat object");
-    ok(S.shipAC(st, []).fore === 13, "an empty crew means no maneuver modifier");
+    ok(S.shipAC(st, []).fore === 13 + 5, "an empty crew means no maneuver modifier — the shield still counts");
     const broken = S.normalize({ ac: { base: 13 }, systemHp: { shields: { cur: 0, max: 5 } }, shield: { on: true, facing: "fore" } });
     ok(S.shieldDR(broken, "fore").half === false, "a destroyed shield generator grants no reduction");
 
@@ -4044,12 +4096,15 @@
     const sh = S.normalize({ ac: { base: 13 } });
     sh.statuses = [];
     S.applyStatus(sh, "aggressive", { round: 1 });
-    ok(S.shipAC(sh, []).fore === 13 - 4, "aggressive is -4 AC");
+    // Measure on an UNSHIELDED facing: a default ship has her bow shield up, and
+    // that is now +5 AC of its own.
+    ok(S.shipAC(sh, []).aft === 13 - 5, `aggressive is -5 AC (got ${S.shipAC(sh, []).aft})`);
+    ok(S.shipAC(sh, []).fore === 13 - 5 + S.SHIELD_AC, "…and the shielded bow gets its +5 back");
     // The maneuver's AC and its status must never both apply.
     const dbl = S.normalize({ ac: { base: 13 } });
     dbl.statuses = [];
     S.applyStatus(dbl, "evasive", { round: 1 });
-    ok(S.shipAC(dbl, [{ station: "pilot", maneuver: "evasive" }]).fore === 13 + 4 + 4,
+    ok(S.shipAC(dbl, [{ station: "pilot", maneuver: "evasive" }]).aft === 13 + 5 + 5,
        "a maneuver AND its status stack — which is exactly why picking a maneuver must not apply one");
     S.applyStatus(sh, "shields_down", { round: 1, rounds: 2 });
     ok(S.statusMods(sh).noShield === true, "shields_down suppresses shield DR");
@@ -4122,6 +4177,11 @@
     ok(S.GUNS.every((g) => g.arc === "fore"), "the two wing guns are fixed forward");
     ok(S.TURRETS.every((t) => t.gun.arc === "turret"), "every rebuildable turret traverses");
     for (const [k, m] of Object.entries(S.MANEUVERS)) ok(Number.isFinite(m.mp) && m.mp > 0, `maneuver ${k} needs MP`);
+    // The dossier's own table: Evasive +5/5MP, Steady 0/3MP, Aggressive −5/2MP.
+    ok(Object.keys(S.MANEUVERS).length === 3, "there are three maneuvers, as printed");
+    ok(S.MANEUVERS.evasive.ac === 5 && S.MANEUVERS.evasive.mp === 5, "Evasive is +5 AC and 5 Movement Points");
+    ok(S.MANEUVERS.steady.ac === 0 && S.MANEUVERS.steady.mp === 3, "Steady is +0 AC and 3 Movement Points");
+    ok(S.MANEUVERS.aggressive.ac === -5 && S.MANEUVERS.aggressive.mp === 2, "Aggressive is −5 AC and 2 Movement Points");
 
     // --- every station action has an id, name and text --------------------
     for (const stn of S.STATIONS) {
@@ -4321,7 +4381,8 @@
     ok(buffed.crew.k.buff.flat === 1 && buffed.crew.k.buff.adv === true && buffed.crew.k.buff.die === "1d4",
        "a crew member's Rally, Command and Reroute buffs survive normalize");
     ok(S.normalizeCombat({ spool: 99 }).spool === 3, "the spool cannot exceed three folds");
-    ok(!!S.STATUSES.rerouted && S.STATUSES.rerouted.ac === 2, "Reroute Power has a status to hang +2 AC on");
+    ok(!!S.STATUSES.rerouted && S.STATUSES.rerouted.ac === 5,
+       "Reroute Power grants the dossier's +5 temp AC, and stacks with the maneuver");
     // Every status id the appendix names must exist under exactly that key —
     // applyStatus silently refuses an unknown one, and a typo is invisible.
     for (const id of ["evasive", "aggressive", "hidden", "ramming_committed", "shields_down",
