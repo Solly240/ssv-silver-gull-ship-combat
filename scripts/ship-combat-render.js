@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.21.1";
+  S.VERSION = "0.22.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -111,13 +111,13 @@
   S.STATION_ACTIONS = {
     captain: {
       main: [
-        N("cmd_adv", "Command · Double Advantage", "Give one crew Double Advantage on their Main Action this round."),
+        { id: "cmd_adv", name: "Command · Advantage", type: "command", text: "Give one crew member advantage on their Main Action this round. Double advantage was removed — extra sources are +2 flat, because rolling three d20s against a ten-point AC band makes every DC meaningless." },
         { id: "grant", name: "Grant Actions", type: "grant", text: "Give one crew +1 extra action (a purple star, usable as a Main or Bonus). They spend it after their normal action of that type. Lasts one turn." },
-        N("bc_flee", "Big Call · Flee", "Opposed Piloting vs enemy Pilot (DC 15). Success disengages next round; failure gives the enemy a free attack."),
-        N("bc_ram", "Big Call · Ram", "Pilot must be Aggressive & within 3 spaces. Hit: +4d6, ignores Shield Facing; you take ¼ back."),
+        { id: "bc_flee", name: "Big Call · Spool the Drive", type: "flee", text: "Begin a hyperfold spool: three successes across the fight and you are gone. While spooling you cannot go Evasive, and the drive is a target. A failure costs you time, not blood." },
+        { id: "bc_ram", name: "Big Call · Ram", type: "ram", text: "The Pilot must be on Aggressive Positioning and the target within 3 squares. On a hit: 4d6, ignoring their shield facing entirely — and you take a quarter of it back." },
         N("bc_allhands", "Big Call · All Hands", "Every station gets +3 to their Main check this round OR an extra Bonus Action; you lose your Rally this round.")
       ],
-      bonus: [N("rally", "Rally", "Give one ally a flat +1 to their Main Action roll.")]
+      bonus: [{ id: "rally", name: "Rally", type: "rally", text: "Give one crew member a flat +1 to their Main Action roll this round." }]
     },
     pilot: {
       main: [
@@ -141,8 +141,8 @@
       bonus: [N("repel", "Repel Boarders", "Leave your station to fight enemy boarders (you lose this station's Main this round).")]
     },
     engineer: {
-      main: [{ id: "repair", name: "Repair System", type: "repair", text: "Pick a damaged system and roll d20 + INT. Nat 20 = auto-fix; nat 1 = auto-fail; otherwise solve a timed repair puzzle (the roll sets your time) to restore +2 HP. Can't repair a destroyed (0 HP) system." }, N("reroute", "Reroute Power", "Buff an ally (+1d4 roll, +5 temp AC to Pilot, or +1d6 damage); risk of a self-mishap.")],
-      bonus: [N("patch", "Patch Job", "Flat 1d4 Hull or Shield back, or clear one negative status.")]
+      main: [{ id: "repair", name: "Repair System", type: "repair", text: "Pick a damaged system and roll d20 + INT. Nat 20 = auto-fix; nat 1 = auto-fail; otherwise solve a timed repair puzzle (the roll sets your time) to restore +2 HP. Can't repair a destroyed (0 HP) system." }, { id: "reroute", name: "Reroute Power", type: "reroute", text: "Pick a rail: +1d4 to one crew member next roll, +2 ship AC this round, or +1d6 on the next gunner hit. No mishap — a 10 percent chance of setting your own ship on fire for +1d4 was a deal nobody took twice." }],
+      bonus: [{ id: "patch", name: "Patch Job", type: "patch", text: "No check: 1d4 hull back, or clear one negative status from the ship." }]
     },
     shields_officer: {
       main: [
@@ -161,7 +161,7 @@
     science: {
       main: [{ id: "scan", name: "Scan", type: "scan",
         text: "Int/Investigation vs DC 15 against one contact. Meet it for hull, armour, resistances and shield facing; beat it by 3 for every system and advantage for one gunner; by 10 for the crew manifest and advantage for both. A FAILED scan still names her class, allegiance and hot arc, and leaves her Painted — the next scan of her has advantage." }, N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), { id: "navsupport", name: "Navigation Support", type: "navsupport", text: "Play a quick nav mini-game (plot the course or thread the gates). The better you fly it, the bigger the Pilot's Movement-Point multiplier this turn — ×1.5 (rough) up to ×2.5 (perfect). Applies to their maneuver even if they've already started moving." }],
-      bonus: [N("ping", "Quick Ping", "No roll — ask the GM one factual question about the enemy, get a truthful answer.")]
+      bonus: [{ id: "ping", name: "Quick Ping", type: "ping", text: "No roll. Ask the GM one factual question about a contact and get a truthful answer. This is the ability that found the Apostles three self-destruct modules." }]
     },
     cloaking: {
       main: [N("engage", "Engage Cloak", "Enemy attacks at disadvantage until you fire or take damage."), N("burst", "Cloak Burst", "Undetectable for 1 round."), N("phase", "Phase Shift", "Auto-dodge one attack."), N("decoy", "Decoy Drop", "Drop a decoy to misdirect.")],
@@ -246,6 +246,8 @@
                         blurb: "−4 AC; forward gunners fire with advantage; enables Ram." },
     hidden:           { label: "In Cover",       kind: "good", scope: "until",    incomingAdv: -1,
                         blurb: "Attacks against you have disadvantage until you move or fire." },
+    rerouted:         { label: "Power Rerouted", kind: "good", scope: "round",  ac: 2,
+                        blurb: "+2 ship AC this round — the Engineer put the reactor into the shields." },
     ramming:          { label: "Ramming",        kind: "warn", scope: "round",
                         blurb: "Committed to a ram — you cannot change maneuver this round." },
 
@@ -522,6 +524,8 @@
     for (const st of S.STATIONS) rolesEnabled[st.id] = !!st.defaultUnlocked;
     return { active: false, turn: 1, round: 1, rolesEnabled, roster: S.defaultRoster(), crew: {},
              pendingSwap: null,
+             spool: 0,             // Captain's hyperfold spool: three successes and the fight is over
+             gunBuff: "",          // Engineer's gun rail: added to the next gunner hit
              ships: {},            // every ship in the engagement, the Gull included as "gull"
              initiative: [],       // [{shipId, roll}] sorted high-to-low
              activeShip: "gull" };
@@ -540,6 +544,8 @@
         ? stored.initiative.filter((e) => e && e.shipId).map((e) => ({ shipId: String(e.shipId), roll: Number(e.roll) || 0 }))
         : [],
       activeShip: String(stored.activeShip || "gull"),
+      spool: Math.max(0, Math.min(3, Number(stored.spool) || 0)),
+      gunBuff: String(stored.gunBuff || ""),
       rolesEnabled: { ...d.rolesEnabled },
       roster: Array.isArray(stored.roster) && stored.roster.length ? [] : S.defaultRoster(),
       crew: {},
@@ -570,6 +576,10 @@
         navMult: Number.isFinite(c.navMult) && c.navMult >= 1 ? c.navMult : 1,     // pilot: Science nav-support multiplier this turn
         gun: S.gun(c.gun) ? c.gun : null,                                          // gunner: which gun is selected in the turn bar
         target: String(c.target || ""),   // gunner: which enemy ship this gun is laid on (persists across turns)
+        // What the Captain and Engineer have handed this seat for the round.
+        buff: (c.buff && typeof c.buff === "object")
+          ? { flat: Math.max(0, Number(c.buff.flat) || 0), adv: !!c.buff.adv, die: String(c.buff.die || "") }
+          : { flat: 0, adv: false, die: "" },
         prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
@@ -3342,6 +3352,15 @@
     const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
     ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
        "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
+
+    // --- crew buffs and the spool survive normalize ------------------------
+    const buffed = S.normalizeCombat({ spool: 2, gunBuff: "1d6",
+      crew: { k: { name: "K", station: "captain", buff: { flat: 1, adv: true, die: "1d4" } } } });
+    ok(buffed.spool === 2 && buffed.gunBuff === "1d6", "the spool track and the gun rail survive normalize");
+    ok(buffed.crew.k.buff.flat === 1 && buffed.crew.k.buff.adv === true && buffed.crew.k.buff.die === "1d4",
+       "a crew member's Rally, Command and Reroute buffs survive normalize");
+    ok(S.normalizeCombat({ spool: 99 }).spool === 3, "the spool cannot exceed three folds");
+    ok(!!S.STATUSES.rerouted && S.STATUSES.rerouted.ac === 2, "Reroute Power has a status to hang +2 AC on");
 
     // --- scanning ----------------------------------------------------------
     ok(S.scanResult(-6).tier === "silhouette", "a failed scan still returns the silhouette tier");

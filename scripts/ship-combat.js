@@ -644,6 +644,13 @@
     // Science Nav Support: play the nav mini-game → set the Pilot's Movement-Point multiplier. Own consume.
     if (a.type === "navsupport") { await runNavSupport(crew, isBonus); return; }
     if (a.type === "scan") { await runScan(crew, isBonus); return; }
+    if (a.type === "rally") { await runBuffCrew(crew, isBonus, "rally"); return; }
+    if (a.type === "command") { await runBuffCrew(crew, isBonus, "command"); return; }
+    if (a.type === "reroute") { await runReroute(crew, isBonus); return; }
+    if (a.type === "patch") { await runPatch(crew, isBonus); return; }
+    if (a.type === "ping") { await runPing(crew, isBonus); return; }
+    if (a.type === "ram") { await runRam(crew, isBonus); return; }
+    if (a.type === "flee") { await runFlee(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -875,8 +882,12 @@
       return;
     }
 
-    const dmgRoll = await new Roll(`${gun.damage} + ${str}`).evaluate();
+    const rail = getCombat().gunBuff;
+    const dmgRoll = await new Roll(`${gun.damage} + ${str}${rail ? ` + ${rail}` : ""}`).evaluate();
     let raw = Math.max(1, dmgRoll.total);
+    if (rail) {   // one hit only — the Engineer routed it for this shot
+      const nx = getCombat(); nx.gunBuff = ""; await saveCombat(nx);
+    }
     if (range.halve) raw = Math.floor(raw / 2);
     await ChatMessage.create({
       content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — ` +
@@ -1031,6 +1042,11 @@
       case "selectGun":      gmSelectGun(msg.crewId, msg.gun, msg.userId); break;
       case "selectTarget":   gmSelectTarget(msg.crewId, msg.shipId, msg.userId); break;
       case "applyScan":      gmApplyScan(msg.shipId, msg.result, msg.gunnerName, { total: msg.total, die: msg.die }, msg.painted); break;
+      case "buffCrew":       gmBuffCrew(msg.crewId, msg.kind, msg.byName); break;
+      case "reroute":        gmReroute(msg.rail, msg.crewId, msg.byName); break;
+      case "patch":          gmPatch(msg.pick, msg.byName); break;
+      case "ram":            gmRam(msg.shipId, msg.byName); break;
+      case "spool":          gmSpool({ total: msg.total, die: msg.die }, msg.byName); break;
       case "applyDamage":    gmApplyDamage(msg.shipId, msg.raw, msg.facing, msg.opts || {}); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
       case "gunHitCheck":    gmGunHitCheck(msg); break;
@@ -1084,7 +1100,11 @@
   async function nextTurn() {
     if (!game.user.isGM) return;
     const next = getCombat();
-    for (const c of Object.values(next.crew)) { c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null; c.mp = 0; c.mpMax = 0; c.navMult = 1; c.gun = null; }
+    for (const c of Object.values(next.crew)) {
+      c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null; c.mp = 0; c.mpMax = 0; c.navMult = 1; c.gun = null;
+      c.buff = { flat: 0, adv: false, die: "" };   // Rally, Command and Reroute last one round
+    }
+    next.gunBuff = "";
     next.turn = (next.turn || 1) + 1; next.pendingSwap = null;
     await saveCombat(next);
     // Micro-Adjust's secondary shield lasts only until the start of the next turn.
@@ -1383,6 +1403,199 @@
   /*  Fleet Command (key F)                                                 */
   /* ====================================================================== */
 
+  /* ---- the station actions that used to be chat lines -------------------- */
+
+  const crewChoices = (combat, filter) => Object.values(combat.crew)
+    .filter((c) => c.station && (!filter || filter(c)))
+    .map((c) => ({ value: c.id, label: `${c.name} — ${S.station(c.station)?.name || c.station}` }));
+
+  /** Captain: Rally (+1) and Command (advantage). Both mark the target crew. */
+  async function runBuffCrew(crew, isBonus, kind) {
+    const combat = getCombat();
+    const opts = crewChoices(combat, (c) => c.id !== crew.id);
+    if (!opts.length) return ui.notifications?.warn("Nobody else is at a station.");
+    const target = await chooseDlg(kind === "rally" ? "Rally" : "Command", "Who?", opts);
+    if (!target) return;
+    const pw = S.ACTION_POWER[kind === "rally" ? "rally" : "cmd_adv"];
+    if (!spendCheck(pw)) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmBuffCrew(target, kind, crew.name);
+    else emit({ type: "buffCrew", toGM: true, crewId: target, kind, byName: crew.name, userId: game.user.id });
+  }
+  async function gmBuffCrew(crewId, kind, byName) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const t = next.crew[crewId]; if (!t) return;
+    t.buff = t.buff || {};
+    if (kind === "rally") t.buff.flat = (t.buff.flat || 0) + 1;
+    else t.buff.adv = true;
+    await saveCombat(next);
+    await ChatMessage.create({
+      content: `<b>Captain</b> · ${esc(byName)} — ${kind === "rally" ? `<b>Rally</b>: ${esc(t.name)} gets <b>+1</b> on their Main Action.`
+        : `<b>Command</b>: ${esc(t.name)} has <b>advantage</b> on their Main Action.`}`,
+      speaker: { alias: "SSV Silver Gull" } });
+    refreshUI();
+  }
+
+  /** Engineer: Reroute Power — three rails, no mishap. */
+  async function runReroute(crew, isBonus) {
+    const pw = S.ACTION_POWER.reroute;
+    if (!spendCheck(pw)) return;
+    const rail = await chooseDlg("Reroute Power", "Which rail?", [
+      { value: "roll", label: "To a crew member — +1d4 on their next roll" },
+      { value: "shields", label: "To the shields — +2 ship AC this round" },
+      { value: "guns", label: "To the guns — +1d6 on the next gunner hit" }
+    ]);
+    if (!rail) return;
+    let targetId = null;
+    if (rail === "roll") {
+      const opts = crewChoices(getCombat());
+      targetId = await chooseDlg("Reroute Power", "To whom?", opts);
+      if (!targetId) return;
+    }
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmReroute(rail, targetId, crew.name);
+    else emit({ type: "reroute", toGM: true, rail, crewId: targetId, byName: crew.name, userId: game.user.id });
+  }
+  async function gmReroute(rail, crewId, byName) {
+    if (!game.user.isGM) return;
+    const next = getCombat();
+    let msg = "";
+    if (rail === "roll" && next.crew[crewId]) {
+      const t = next.crew[crewId]; t.buff = t.buff || {}; t.buff.die = "1d4";
+      msg = `<b>${esc(t.name)}</b> gets <b>+1d4</b> on their next roll.`;
+    } else if (rail === "guns") {
+      next.gunBuff = "1d6";
+      msg = `The next gunner hit deals <b>+1d6</b>.`;
+    }
+    await saveCombat(next);
+    if (rail === "shields") {
+      const ship = getState();
+      S.applyStatus(ship, "rerouted", { round: next.round });
+      await setState(ship);
+      msg = `Shields hardened — <b>+2 ship AC</b> this round.`;
+    }
+    await ChatMessage.create({ content: `<b>Engineer</b> · ${esc(byName)} — Reroute Power. ${msg}`, speaker: { alias: "SSV Silver Gull" } });
+    refreshUI();
+  }
+
+  /** Engineer: Patch Job — 1d4 hull, or clear a status. No check. */
+  async function runPatch(crew, isBonus) {
+    const pw = S.ACTION_POWER.patch;
+    if (!spendCheck(pw)) return;
+    const ship = S.normalize(getState());
+    const bad = (ship.statuses || []).filter((st) => S.STATUSES[st.id]?.kind === "bad");
+    const opts = [{ value: "hull", label: "Patch the hull — 1d4 back" },
+      ...bad.map((st) => ({ value: `st:${st.id}`, label: `Clear ${S.STATUSES[st.id].label}` }))];
+    const pick = await chooseDlg("Patch Job", "What are you patching?", opts);
+    if (!pick) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmPatch(pick, crew.name);
+    else emit({ type: "patch", toGM: true, pick, byName: crew.name, userId: game.user.id });
+  }
+  async function gmPatch(pick, byName) {
+    if (!game.user.isGM) return;
+    const ship = S.normalize(getState());
+    let msg = "";
+    if (pick === "hull") {
+      const r = await new Roll("1d4").evaluate();
+      ship.hull.cur = Math.min(ship.hull.max, ship.hull.cur + r.total);
+      msg = `patches <b>${r.total}</b> hull back — now <b>${ship.hull.cur}</b>/${ship.hull.max}.`;
+      await setState(ship);
+      await ChatMessage.create({ content: `<b>Engineer</b> · ${esc(byName)} — Patch Job: ${msg}`, speaker: { alias: "SSV Silver Gull" }, rolls: [r] });
+    } else {
+      const id = pick.slice(3);
+      S.clearStatus(ship, id);
+      await setState(ship);
+      await ChatMessage.create({ content: `<b>Engineer</b> · ${esc(byName)} — Patch Job: clears <b>${esc(S.STATUSES[id]?.label || id)}</b>.`, speaker: { alias: "SSV Silver Gull" } });
+    }
+    refreshUI();
+  }
+
+  /** Science: Quick Ping — no roll, one true answer. */
+  async function runPing(crew, isBonus) {
+    const pw = S.ACTION_POWER.ping;
+    if (!spendCheck(pw)) return;
+    const q = await promptText("Quick Ping", "One factual question about a contact — the GM answers truthfully");
+    if (!q) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await ChatMessage.create({
+      content: `<b>Science / Sensors</b> · ${esc(crew.name)} — <b>Quick Ping</b><br>` +
+               `<i>&ldquo;${esc(q)}&rdquo;</i><br><span style="opacity:.7">No roll. The GM answers truthfully.</span>`,
+      speaker: { alias: "SSV Silver Gull" } });
+    ui.notifications?.info("Quick Ping sent — the GM answers truthfully.");
+  }
+
+  /** Captain: Ram. Aggressive, within 3, ignores their shields, a quarter comes back. */
+  async function runRam(crew, isBonus) {
+    const combat = getCombat();
+    const pilot = Object.values(combat.crew).find((c) => c.station === "pilot");
+    if (!pilot?.maneuver || pilot.maneuver !== "aggressive")
+      return ui.notifications?.warn("The Pilot must be on Aggressive Positioning to ram.");
+    const near = Object.values(combat.ships).filter((s) => s.id !== "gull" && !s.outcome
+      && (shipDistance("gull", s.id) ?? 99) <= 3);
+    if (!near.length) return ui.notifications?.warn("Nothing within 3 squares to ram.");
+    const pw = S.ACTION_POWER.bc_ram;
+    if (!spendCheck(pw)) return;
+    const target = near.length === 1 ? near[0].id
+      : await chooseDlg("Ram", "Which hull?", near.map((s) => ({ value: s.id, label: `${s.name} — ${shipDistance("gull", s.id)} sq` })));
+    if (!target) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmRam(target, crew.name);
+    else emit({ type: "ram", toGM: true, shipId: target, byName: crew.name, userId: game.user.id });
+  }
+  async function gmRam(shipId, byName) {
+    if (!game.user.isGM) return;
+    const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh) return;
+    const roll = await new Roll("4d6").evaluate();
+    const from = shipPoint("gull"), me = shipPoint(shipId);
+    const facing = from && me ? S.facingFrom(me, from) : "fore";
+    await ChatMessage.create({
+      content: `<b>Captain</b> · ${esc(byName)} — <b>RAM</b> on <b>${esc(sh.name)}</b>. The Gull goes in nose-first.`,
+      speaker: { alias: "SSV Silver Gull" }, rolls: [roll] });
+    // Ignores their shield facing entirely — that is the whole point of a ram.
+    const res = await gmApplyDamage(shipId, roll.total, facing, { ignoreShields: true, type: "kinetic" });
+    const back = Math.floor(roll.total / 4);
+    S.applyStatus2Gull("ramming_committed");
+    await gmApplyDamage("gull", back, "fore", { ignoreShields: true, type: "kinetic" });
+    await ChatMessage.create({ content: `The Gull takes <b>${back}</b> back from the impact.`, speaker: { alias: "SSV Silver Gull" } });
+  }
+  // Small helper so the ram can mark the Gull without a round-trip.
+  S.applyStatus2Gull = (id) => { try { const st = getState(); S.applyStatus(st, id, { round: getCombat().round }); setState(st); } catch (e) {} };
+
+  /** Captain: spool the hyperfold drive. Three successes and the fight is over. */
+  async function runFlee(crew, isBonus) {
+    const pw = S.ACTION_POWER.bc_flee;
+    if (!spendCheck(pw)) return;
+    const res = await stationRollValue(crew, "cha", false);
+    if (!res) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmSpool(res, crew.name);
+    else emit({ type: "spool", toGM: true, total: res.total, die: res.die, byName: crew.name, userId: game.user.id });
+  }
+  async function gmSpool(res, byName) {
+    if (!game.user.isGM) return;
+    const next = getCombat();
+    const hit = res.total >= 15;
+    next.spool = Math.max(0, Math.min(3, (next.spool || 0) + (hit ? 1 : 0)));
+    await saveCombat(next);
+    const done = next.spool >= 3;
+    await ChatMessage.create({
+      content: `<b>Captain</b> · ${esc(byName)} — <b>spooling the hyperfold drive</b>: ${res.total} vs DC 15 — ` +
+        `<b style="color:${hit ? "#42d16a" : "#f2b03d"}">${hit ? "one more fold locked in" : "the numbers will not settle"}</b>` +
+        `<br>Spool <b>${next.spool}/3</b>.` +
+        (done ? `<br><b style="color:#38e1c4">The drive catches. On your next turn the Gull is gone.</b>` : ""),
+      speaker: { alias: "SSV Silver Gull" } });
+    refreshUI();
+  }
+
+  /** Enough power for this action? Players pay, the GM never does. */
+  function spendCheck(pw) {
+    if (game.user.isGM || !pw) return true;
+    if (S.normalize(getState()).power.cur >= pw) return true;
+    ui.notifications?.warn(`Not enough power — that needs ${pw} (convert fuel first).`);
+    return false;
+  }
+
   /* ---- Science: Scan ---------------------------------------------------- */
 
   /**
@@ -1444,6 +1657,9 @@
   /** d20 + an ability mod, with optional advantage. Roll or manual, like every other station. */
   async function stationRollValue(crew, abil, advantage) {
     const mod = abilityMod(abil);
+    // Whatever the Captain and Engineer handed this seat this round.
+    const buff = crew.buff || { flat: 0, adv: false, die: "" };
+    if (buff.adv) advantage = true;
     const choice = await rollChoiceDialog(
       `Scan — ${crew.name}`,
       `<p>Intelligence <b>${signMod(mod)}</b> is added automatically.${advantage ? " <b>Advantage</b> — the target is Painted." : ""}</p>` +
@@ -1464,7 +1680,12 @@
       if (!Number.isFinite(manual)) { ui.notifications?.warn("Enter your d20 result (1–20)."); return null; }
       die = Math.max(1, Math.min(20, manual));
     }
-    return { die, total: die + mod + bonus, roll };
+    let extra = 0, extraRoll = null;
+    if (buff.die) { extraRoll = await new Roll(buff.die).evaluate(); extra = extraRoll.total; }
+    const note = [buff.flat ? `Rally +${buff.flat}` : "", buff.adv ? "Command (advantage)" : "",
+                  buff.die ? `Reroute +${buff.die} = ${extra}` : ""].filter(Boolean).join(" · ");
+    if (note) ui.notifications?.info(note);
+    return { die, total: die + mod + bonus + buff.flat + extra, roll, note };
   }
 
   const abilityMod = (a) => Number(game.user.character?.system?.abilities?.[a]?.mod) || 0;
@@ -2043,7 +2264,9 @@
       for (const c of Object.values(next.crew)) {
         c.action = false; c.bonus = false; c.granted = 0; c.maneuver = null;
         c.mp = 0; c.mpMax = 0; c.navMult = 1; c.gun = null;
+        c.buff = { flat: 0, adv: false, die: "" };
       }
+      next.gunBuff = "";
       const ship = getState();
       let dirty = false;
       if (ship.shield.secondary) { ship.shield.secondary = null; dirty = true; }
