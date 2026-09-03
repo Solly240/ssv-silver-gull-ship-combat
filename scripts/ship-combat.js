@@ -1156,13 +1156,36 @@
   }
   async function endCombat() {
     if (!game.user.isGM) return;
+    // Session 4 ended with a crew member still floating outside a ship that was
+    // about to explode, because nothing tracked where anyone was. Now it does,
+    // so say so before the fight closes and takes their scene with it.
+    const stranded = Object.entries(getCombat().whereIs || {})
+      .filter(([, w]) => w.shipId && w.shipId !== "gull")
+      .map(([uid, w]) => `${game.users.get(uid)?.name || uid} (aboard ${getCombat().ships[w.shipId]?.name || "an enemy hull"})`);
+    const adriftList = (S.normalize(getState()).adriftCrew || [])
+      .map((uid) => `${game.users.get(uid)?.name || uid} (adrift)`);
+    const out = [...stranded, ...adriftList];
+    if (out.length) {
+      const go = await confirmDlg("Still out there",
+        `<b>${out.join("<br>")}</b><br><br>They have not been recovered. Ending the fight now strands them — ` +
+        `boarders cannot teleport home, and anyone adrift is in open space.<br><br>End it anyway?`);
+      if (!go) return;
+      await ChatMessage.create({
+        content: `<b style="color:#e0454d">Combat ended with crew unrecovered:</b><br>${esc(out.join(" · "))}`,
+        speaker: { alias: "SSV Silver Gull" } });
+    }
     // Take the enemy ships, their tokens and their actors with it — otherwise the
     // world quietly accumulates a folder of every hull ever spawned.
     await gmClearFleet({ silent: true });
     const next = getCombat();
     next.active = false; next.crew = {}; next.pendingSwap = null;
     next.ships = {}; next.initiative = []; next.activeShip = "gull"; next.round = 1;
+    next.whereIs = {}; next.spool = 0; next.gunBuff = "";
     await saveCombat(next);
+    const ship = S.normalize(getState());
+    if ((ship.adriftCrew || []).length || S.hasStatus(ship, "adrift")) {
+      ship.adriftCrew = []; S.clearStatus(ship, "adrift"); await setState(ship);
+    }
   }
   async function nextTurn() {
     if (!game.user.isGM) return;
@@ -2875,25 +2898,27 @@
 
   /** Crew are RECORDS here. Actors and tokens are made lazily, only on boarding. */
   function buildCrew(hull, opts) {
-    const crew = {}, want = Math.min(opts.crew, hull.crew.max);
+    const crew = {};
     const names = CREW_NAMES[hull.faction] || CREW_NAMES[""];
-    let made = 0, seq = 0;
-    // Fill the bridge first: dropping the headcount should thin the marines, not
-    // leave a warship with nobody flying it.
-    const order = ["captain", "pilot", "gunner", "engineer", "marine", "zealot"];
-    const roles = (hull.crew.roles || []).slice().sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
-    for (const r of roles) {
-      for (let i = 0; i < r.n && made < want; i++, made++) {
-        const cid = `c${++seq}`;
-        const label = names[r.role] || r.role;
-        crew[cid] = {
-          id: cid, name: r.n > 1 ? `${label} ${i + 1}` : label, roleId: r.role,
-          station: r.role === "gunner" && i === 1 ? "gunner_starboard" : (ROLE_STATION[r.role] || ""),
-          block: CREW_BLOCKS[r.role]?.[opts.tier - 1] || "", tier: opts.tier,
-          action: false, bonus: false, deck: 1, dead: false
-        };
-      }
-    }
+    // S.assignSeats holds the one-crew-per-station rule and the bridge-first
+    // ordering; it is pure, so the selftest can hold it to that.
+    const seats = S.assignSeats(hull.crew.roles, Math.min(opts.crew, hull.crew.max));
+    const counts = {};
+    seats.forEach((seat, n) => {
+      const cid = `c${n + 1}`;
+      const label = names[seat.roleId] || seat.roleId;
+      counts[seat.roleId] = (counts[seat.roleId] || 0) + 1;
+      const total = seats.filter((x) => x.roleId === seat.roleId).length;
+      crew[cid] = {
+        id: cid, name: total > 1 ? `${label} ${counts[seat.roleId]}` : label, roleId: seat.roleId,
+        station: seat.station,
+        block: CREW_BLOCKS[seat.roleId]?.[opts.tier - 1] || "", tier: opts.tier,
+        // Spread them over the decks the hull actually has, so a boarding party
+        // does not find the entire complement standing in one room.
+        deck: 1 + (n % Math.max(1, hull.decks || 1)),
+        action: false, bonus: false, dead: false
+      };
+    });
     return crew;
   }
 

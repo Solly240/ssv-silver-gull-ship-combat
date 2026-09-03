@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.24.2";
+  S.VERSION = "0.24.3";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -837,6 +837,52 @@
   /*  combatState.ships.gull is a view over it.                                */
   /* ---------------------------------------------------------------------- */
 
+
+  /* ---------------------------------------------------------------------- */
+  /*  Seating an enemy crew                                                  */
+  /*                                                                          */
+  /*  One crew member per station, exactly as the Gull's own rule says. A role */
+  /*  with more people than seats leaves the extras unassigned — they are      */
+  /*  spare hands, and a boarding party's best move is still killing whoever   */
+  /*  is actually sitting somewhere.                                          */
+  /*                                                                          */
+  /*  The seat lists also mean a bigger crew fills more of the bridge: the     */
+  /*  second engineer takes Shields, the third takes Science, so a frigate can */
+  /*  jam and scan while a fighter cannot.                                    */
+  /* ---------------------------------------------------------------------- */
+  S.ROLE_SEATS = {
+    captain:  ["captain"],
+    pilot:    ["pilot"],
+    gunner:   ["gunner_port", "gunner_starboard"],
+    engineer: ["engineer", "shields_officer", "science"],
+    marine:   [],
+    zealot:   []
+  };
+
+  /**
+   * Turn a roster into seats. `roles` is [{role, n}]; `want` is how many are
+   * actually aboard. Bridge roles are filled first so dropping the headcount
+   * never leaves a warship with nobody flying it.
+   * Returns [{roleId, station, index}] in seating order.
+   */
+  S.assignSeats = function (roles, want) {
+    const order = ["captain", "pilot", "gunner", "engineer", "marine", "zealot"];
+    const list = (Array.isArray(roles) ? roles : []).slice()
+      .sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
+    const taken = new Set(), out = [];
+    let made = 0;
+    const cap = Math.max(0, Number(want) || 0);
+    for (const r of list) {
+      const seats = S.ROLE_SEATS[r.role] || [];
+      for (let i = 0; i < (Number(r.n) || 0) && made < cap; i++, made++) {
+        const seat = seats.find((x) => !taken.has(x)) || "";
+        if (seat) taken.add(seat);
+        out.push({ roleId: r.role, station: seat, index: i });
+      }
+    }
+    return out;
+  };
+
   S.DISPOSITIONS = ["hostile", "neutral", "ally"];
 
   S.defaultShip = function (over = {}) {
@@ -1117,6 +1163,9 @@
       armour: 0,
       resist: {},
       outcome: "",
+      adriftCrew: [],       // user ids in open space — see endCombat
+      phaseCharges: 0,      // banked Phase Shifts (Cloaking Officer)
+      decoys: 0,            // decoys running (Cloaking Officer)
       actorId: ""   // GM-selected ship (dnd5e vehicle) actor; falls back to a name lookup
     };
   };
@@ -1160,6 +1209,10 @@
       armour: Math.max(0, Number(stored.armour) || 0),
       resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
       outcome: ["", "derelict", "destroyed", "disabled", "surrendered", "fled"].includes(stored.outcome) ? stored.outcome : "",
+      // Who is in open space. Combat is not allowed to quietly end on top of them.
+      adriftCrew: Array.isArray(stored.adriftCrew) ? stored.adriftCrew.map(String) : [],
+      phaseCharges: Math.max(0, Math.min(3, Number(stored.phaseCharges) || 0)),
+      decoys: Math.max(0, Math.min(3, Number(stored.decoys) || 0)),
       actorId: String(stored.actorId ?? d.actorId)
     };
     // Per-system HP drives the status string. Use stored HP if present, else migrate from the old string.
@@ -3675,6 +3728,7 @@
       d.fuel = { cur: 111, max: 400 }; d.power = { cur: 222, max: 400 };
       d.tuning = { fuelPerItem: 30, powerPerItem: 31, convertFuel: 8, convertPower: 44 };
       d.actorId = "ACTOR123"; d.armour = 5; d.resist = { energy: "half" }; d.outcome = "disabled";
+      d.adriftCrew = ["u7"]; d.phaseCharges = 2; d.decoys = 1;
       d.statuses = [{ id: "on_fire", src: "test", expiresRound: 9, data: {} }];
       for (const k of Object.keys(d.systemHp)) d.systemHp[k] = { cur: 3, max: 5 };
       for (const k of Object.keys(d.systems)) d.systems[k] = "damaged";
@@ -3714,6 +3768,25 @@
         buff: { flat: 2, adv: true, die: "1d4", turretAim: true } } };
       return d;
     });
+
+    // --- seating an enemy crew ---------------------------------------------
+    const ROSTER = [{ role: "captain", n: 1 }, { role: "pilot", n: 1 }, { role: "gunner", n: 3 },
+                    { role: "engineer", n: 2 }, { role: "marine", n: 5 }];
+    const seats = S.assignSeats(ROSTER, 12);
+    ok(seats.length === 12, `twelve aboard means twelve seats resolved (${seats.length})`);
+    const manned = seats.map((x) => x.station).filter(Boolean);
+    ok(new Set(manned).size === manned.length,
+       `one crew member per station — got duplicates: ${manned.join(",")}`);
+    ok(manned.includes("gunner_port") && manned.includes("gunner_starboard"), "two gunners take both gun seats");
+    ok(seats.filter((x) => x.roleId === "gunner" && !x.station).length === 1, "the third gunner is a spare hand");
+    ok(manned.includes("shields_officer"), "a second engineer takes the shields seat");
+    ok(seats.every((x) => x.roleId !== "marine" || !x.station), "marines hold no station — they are the boarding party");
+    // dropping the headcount must thin the marines, not the bridge
+    const small = S.assignSeats(ROSTER, 4);
+    ok(small.length === 4, "a reduced crew seats only that many");
+    ok(small.map((x) => x.roleId).join(",") === "captain,pilot,gunner,gunner", "…and fills the bridge first");
+    ok(S.assignSeats(ROSTER, 0).length === 0, "a crewless hull seats nobody");
+    ok(S.assignSeats(null, 5).length === 0, "a missing roster seats nobody rather than throwing");
 
     // --- turrets ------------------------------------------------------------
     ok(S.TURRETS.length === 6, "six rebuildable turrets");
