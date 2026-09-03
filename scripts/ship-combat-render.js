@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.26.5";
+  S.VERSION = "0.27.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -1022,8 +1022,17 @@
         hint: `${g.damage || "?"} damage, +${g.toHit ?? 0} to hit, ${g.shortMax ?? 0}–${g.longMax ?? 0} squares, ${g.arc || "fore"} arc.`
       }));
     }
-    const list = S.ENEMY_SEAT_ACTIONS[st] || S.ENEMY_SEAT_ACTIONS[""];
-    return list.map((a) => ({ ...a }));
+    const list = (S.ENEMY_SEAT_ACTIONS[st] || S.ENEMY_SEAT_ACTIONS[""]).map((a) => ({ ...a }));
+    // Only a hull that actually carries marines offers to launch them, and only
+    // once — `boardersSent` is the spent flag.
+    if (st === "captain" && Number(ship.boardingParty) > 0) {
+      list.push({ id: "e_board", label: `Launch boarders (${ship.boardingParty})`,
+        hint: ship.boardersSent
+          ? "Her pods are away — there is nobody left aboard to send."
+          : `Put ${ship.boardingParty} marines onto the Gull's deck 1. She has to be within 1 square.`,
+        disabled: !!ship.boardersSent });
+    }
+    return list;
   };
 
   /**
@@ -1050,8 +1059,14 @@
     const cap = seatOf("captain");
     if (cap) {
       const bad = (ship.statuses || []).find((x) => S.STATUSES[x.id]?.kind === "bad");
-      out.push({ crewId: cap.id, action: bad ? "e_rally" : "e_focus",
-                 why: bad ? `shake off ${S.STATUSES[bad.id].label}` : "call the target before the guns speak" });
+      // A boarder in the pocket with marines still aboard sends them — that is
+      // the whole reason the hull carries them.
+      if (Number(ship.boardingParty) > 0 && !ship.boardersSent && d <= 1) {
+        out.push({ crewId: cap.id, action: "e_board", why: `alongside with ${ship.boardingParty} marines aboard` });
+      } else {
+        out.push({ crewId: cap.id, action: bad ? "e_rally" : "e_focus",
+                   why: bad ? `shake off ${S.STATUSES[bad.id].label}` : "call the target before the guns speak" });
+      }
     }
     const shields = seatOf("shields_officer");
     if (shields) out.push({ crewId: shields.id, action: "e_shield", why: "cover the arc the Gull is on" });
@@ -1094,6 +1109,95 @@
     return out;
   };
 
+  /* ---------------------------------------------------------------------- */
+  /*  Where people stand on a deck                                            */
+  /*                                                                          */
+  /*  Deck art is a transparent PNG on a map image much larger than the hull, so  */
+  /*  "the middle of the scene" is usually open space OUTSIDE the ship. Both   */
+  /*  the boarding drop and the enemy crew used it, which is how a boarding    */
+  /*  party could arrive inside a bulkhead — or in the void alongside.         */
+  /*                                                                          */
+  /*  The pack's own walls trace the hull, so their bounding box IS the ship.  */
+  /*  Everything here works off that box and is pure, so the selftest holds it.*/
+  /* ---------------------------------------------------------------------- */
+
+  /** The hull's box from its walls. Falls back to the scene when a deck has none. */
+  S.deckBounds = function (walls, fallback) {
+    const fb = fallback && Number(fallback.w) > 0 && Number(fallback.h) > 0
+      ? { x: Number(fallback.x) || 0, y: Number(fallback.y) || 0, w: Number(fallback.w), h: Number(fallback.h) }
+      : { x: 0, y: 0, w: 1000, h: 1000 };
+    const pts = [];
+    for (const w of (Array.isArray(walls) ? walls : [])) {
+      const c = w && (w.c || w.coords);
+      if (!Array.isArray(c) || c.length < 4) continue;
+      const [x1, y1, x2, y2] = c.map(Number);
+      if ([x1, y1, x2, y2].some((n) => !Number.isFinite(n))) continue;
+      pts.push([x1, y1], [x2, y2]);
+    }
+    if (pts.length < 2) return { ...fb, fromWalls: false };
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const w = maxX - minX, h = maxY - minY;
+    // A degenerate box (a single stray wall) is worse than the scene box.
+    if (!(w > 0 && h > 0)) return { ...fb, fromWalls: false };
+    return { x: minX, y: minY, w, h, fromWalls: true };
+  };
+
+  /**
+   * The four places a boarder can cut in, one per facing.
+   *
+   * Deck art in these packs is drawn nose-up, the same convention the token
+   * rotation uses, so fore is the top edge. The point is inset a square and a
+   * half so you land INSIDE the hull rather than straddling the wall you cut.
+   */
+  S.BREACH_FACINGS = ["fore", "starboard", "aft", "port"];
+  S.breachPoint = function (bounds, facing, grid) {
+    const b = bounds || { x: 0, y: 0, w: 1000, h: 1000 };
+    const g = Number(grid) > 0 ? Number(grid) : 100;
+    // Never inset past the middle of a small hull.
+    const inX = Math.min(g * 1.5, b.w / 3), inY = Math.min(g * 1.5, b.h / 3);
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const at = {
+      fore:      { x: cx,             y: b.y + inY },
+      aft:       { x: cx,             y: b.y + b.h - inY },
+      port:      { x: b.x + inX,      y: cy },
+      starboard: { x: b.x + b.w - inX, y: cy }
+    }[facing] || { x: cx, y: cy };
+    return { x: Math.round(at.x), y: Math.round(at.y), facing: S.BREACH_FACINGS.includes(facing) ? facing : "fore" };
+  };
+  /** All four, for the picker and for the markers drawn on the enemy token. */
+  S.breachPoints = function (bounds, grid) {
+    return S.BREACH_FACINGS.map((f) => S.breachPoint(bounds, f, grid));
+  };
+
+  /**
+   * Where a deck's own crew stand: spread across the hull box, not a blind hex
+   * spiral around the middle of the map image.
+   */
+  S.deckSpots = function (bounds, grid, n) {
+    const b = bounds || { x: 0, y: 0, w: 1000, h: 1000 };
+    const g = Number(grid) > 0 ? Number(grid) : 100;
+    const count = Math.max(0, Math.floor(Number(n) || 0));
+    if (!count) return [];
+    // A grid across the middle 70% of the hull, so nobody is standing on the skin.
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    const padX = b.w * 0.15, padY = b.h * 0.15;
+    const usableW = Math.max(g, b.w - padX * 2), usableH = Math.max(g, b.h - padY * 2);
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const r = Math.floor(i / cols), c = i % cols;
+      out.push({
+        x: Math.round(b.x + padX + (usableW * (c + 0.5)) / cols),
+        y: Math.round(b.y + padY + (usableH * (r + 0.5)) / rows)
+      });
+    }
+    return out;
+  };
+
   S.DISPOSITIONS = ["hostile", "neutral", "ally"];
 
   S.defaultShip = function (over = {}) {
@@ -1119,6 +1223,8 @@
       // Focus Fire / Sensor Lock / Reroute all lay a to-hit bonus on this ship's
       // next shot. It lives on the ship, not the seat, because any gunner spends it.
       aimBonus: 0,
+      // Her marines are away. Without this the pods relaunch every single round.
+      boardersSent: false,
       morale: { cur: 4, max: 4 },      // Resolve. cur === null means it never breaks.
       revealed: { ac: false, shields: false, systems: false, crew: false, deckmap: 0 },
       // The documents and art this record is bound to. actorId in particular is
@@ -1163,6 +1269,7 @@
       crew: {},
       boardingParty: Math.max(0, num(stored.boardingParty, 0)),
       aimBonus: Math.max(0, Math.min(20, num(stored.aimBonus, 0))),
+      boardersSent: !!stored.boardersSent,
       morale: stored.morale && stored.morale.cur === null
         ? { cur: null, max: null }
         : { max: Math.max(1, num(stored.morale?.max, d.morale.max)), cur: num(stored.morale?.cur, d.morale.max) },
@@ -3351,7 +3458,12 @@
       </div>
       <div class="dk-strip">${strip}</div>
       ${d.breachInfo ? `<div class="dk-note">${d.breachInfo}</div>` : ""}
-      ${!d.isOwnShip && d.canReturn ? `<button class="dk-btn warn" data-return>⟵ Back to the Gull</button>` : ""}
+      ${!d.isOwnShip && d.canReturn && kctx.isGM
+        ? `<button class="dk-btn warn" data-return title="GM: they have been physically recovered">⟵ GM: recover them to the Gull</button>`
+        : ""}
+      ${!d.isOwnShip && !kctx.isGM
+        ? `<div class="dk-note">You cannot walk home. Someone has to come and get you — until then the SPACE view is how you watch the fight.</div>`
+        : ""}
       ${d.isOwnShip && kctx.isGM ? `<button class="dk-btn" data-rebuild>⟳ Rebuild this deck plan</button>` : ""}
     </div>`;
     wireDeckHead(rightEl, kctx);
@@ -4282,7 +4394,7 @@
         disposition: "neutral", hull: { cur: 7, max: 99 }, ac: { base: 17 }, armour: 3,
         resist: { energy: "half" }, shield: { on: true, facing: "aft", secondary: "port" },
         guns: [{ id: "g", label: "G", toHit: 4, damage: "2d6", shortMax: 1, longMax: 6, arc: "fore" }],
-        abilities: ["unmeasurable"], boardingParty: 4, aimBonus: 6,
+        abilities: ["unmeasurable"], boardingParty: 4, aimBonus: 6, boardersSent: true,
         morale: { cur: 2, max: 5 }, actorId: "A", tokenId: "T", sceneId: "S", combatantId: "C",
         skin: "Original", art: "a.png", sizeSq: [11, 22], outcome: "derelict",
         revealed: { ac: true, shields: true, systems: true, crew: true, deckmap: 2 },
@@ -4307,6 +4419,50 @@
       ok(S.normalizeShip(back).aimBonus === 6, "aimBonus survives a second normalize");
       // and idempotence, so a reload cannot mutate a stored fleet
       ok(JSON.stringify(S.normalizeShip(back)) === JSON.stringify(back), "normalizeShip is idempotent");
+    }
+
+    // --- deck geometry: nobody lands in the void beside the ship ------------
+    {
+      // A hull drawn small in the corner of a big canvas — the shape that made
+      // "the middle of the scene" the wrong answer.
+      const walls = [{ c: [1000, 400, 1600, 400] }, { c: [1600, 400, 1600, 1200] },
+                     { c: [1600, 1200, 1000, 1200] }, { c: [1000, 1200, 1000, 400] }];
+      const scene = { x: 0, y: 0, w: 4000, h: 3000 };
+      const b = S.deckBounds(walls, scene);
+      ok(b.fromWalls === true, "the hull box comes from the walls, not the canvas");
+      ok(b.x === 1000 && b.y === 400 && b.w === 600 && b.h === 800, `hull box is wrong: ${JSON.stringify(b)}`);
+      ok(S.deckBounds([], scene).fromWalls === false, "a deck with no walls falls back to the scene box");
+      ok(S.deckBounds(null, null).w > 0, "deckBounds survives nulls");
+      ok(S.deckBounds([{ c: [5, 5, 5, 5] }], scene).fromWalls === false, "a degenerate wall box is rejected");
+
+      const inside = (p) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+      for (const f of S.BREACH_FACINGS) {
+        const p = S.breachPoint(b, f, 100);
+        ok(inside(p), `the ${f} breach point lands outside the hull: ${JSON.stringify(p)}`);
+        ok(p.facing === f, `breachPoint kept the facing for ${f}`);
+      }
+      // fore is the top edge, aft the bottom, port the left — the token convention.
+      const bp = Object.fromEntries(S.breachPoints(b, 100).map((p) => [p.facing, p]));
+      ok(bp.fore.y < bp.aft.y, "fore is forward of aft on the deck");
+      ok(bp.port.x < bp.starboard.x, "port is to the left of starboard");
+      ok(Math.abs(bp.fore.x - bp.aft.x) < 2, "fore and aft share the centreline");
+      ok(S.breachPoints(b, 100).length === 4, "there are four ways in");
+      ok(inside(S.breachPoint(b, "nonsense", 100)), "an unknown facing still lands inside");
+      // a tiny hull must not invert
+      const tiny = { x: 0, y: 0, w: 120, h: 120 };
+      for (const f of S.BREACH_FACINGS) {
+        const p = S.breachPoint(tiny, f, 100);
+        ok(p.x >= 0 && p.x <= 120 && p.y >= 0 && p.y <= 120, `a tiny hull's ${f} point escaped it`);
+      }
+
+      for (const n of [0, 1, 2, 5, 12, 30]) {
+        const spots = S.deckSpots(b, 100, n);
+        ok(spots.length === n, `deckSpots(${n}) returned ${spots.length}`);
+        for (const p of spots) ok(inside(p), `a crew spot landed outside the hull: ${JSON.stringify(p)}`);
+        const keys = new Set(spots.map((p) => `${p.x},${p.y}`));
+        ok(keys.size === n, `deckSpots(${n}) stacked people on the same square`);
+      }
+      ok(S.deckSpots(null, 0, 3).length === 3, "deckSpots survives a null box");
     }
 
     // --- deck plans: every skin of every hull must be boardable -------------
@@ -4371,6 +4527,35 @@
          "…and does not order a fore mount to fire over its own stern");
       ok(running.filter((o) => o.skipped).length >= 1, "…it says the mount could not bear instead of going quiet");
       // A turret mount bears either way.
+      // Boarding parties: offered only when she carries them, only once.
+      const pods = S.normalizeShip({ ...ship, id: "p", boardingParty: 8 });
+      const capActs = S.enemySeatActions(pods, pods.crew.c1);
+      ok(capActs.some((a) => a.id === "e_board"), "a hull with marines offers to launch them");
+      ok(!S.enemySeatActions(ship, ship.crew.c1).some((a) => a.id === "e_board"),
+         "…and a hull without them does not");
+      const spent = S.normalizeShip({ ...ship, id: "p2", boardingParty: 8, boardersSent: true });
+      ok(S.enemySeatActions(spent, spent.crew.c1).find((a) => a.id === "e_board")?.disabled === true,
+         "once her pods are away the button is dead");
+      ok(S.normalizeShip({ boardersSent: true }).boardersSent === true,
+         "boardersSent survives normalize — without it she relaunches every round");
+      ok(S.enemyStandingOrders(pods, { distance: 1 }).some((o) => o.action === "e_board"),
+         "a hull alongside with marines aboard launches them");
+      ok(!S.enemyStandingOrders(pods, { distance: 5 }).some((o) => o.action === "e_board"),
+         "…but not from five squares out");
+      ok(!S.enemyStandingOrders(spent, { distance: 1 }).some((o) => o.action === "e_board"),
+         "…and not twice");
+      // every id the orders emit must be one gmCrewAct implements
+      const KNOWN = new Set(["e_close","e_open","e_about","e_evade","e_rally","e_focus","e_ram",
+        "e_repair","e_reroute","e_shield","e_jam","e_lock","e_cm","e_brace","e_board","e_nogun"]);
+      for (const doc of Object.keys(S.DOCTRINES)) for (const dist of [0, 1, 3, 8, 20]) {
+        for (const o of S.enemyStandingOrders({ ...pods, doctrine: doc }, { distance: dist })) {
+          if (!o.action) continue;
+          const base = o.action.startsWith("e_fire:") ? "e_fire" : o.action;
+          ok(base === "e_fire" || KNOWN.has(base),
+             `standing orders emitted "${o.action}", which no handler implements`);
+        }
+      }
+
       const turreted = S.enemyStandingOrders({ ...ship, doctrine: "sniper",
         guns: [{ id: "ring", label: "Ring Turret", toHit: 4, damage: "2d6", shortMax: 2, longMax: 8, arc: "turret" }] },
         { distance: 1 });

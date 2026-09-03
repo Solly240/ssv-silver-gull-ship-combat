@@ -276,8 +276,17 @@ Three of these exist because of bugs that actually shipped:
 - **The socket cross-check** asserts every `case` has a `SOCKET_RULES` entry, every
   rule has a case, and every `emit({type:…})` is covered.
 - **The enemy-action smoke run** invokes every seat action against seven hull states
-  and fails on a `ReferenceError`. It also greps the resulting public chat for
-  unscanned crew names.
+  and every doctrine (~1,000 calls) and fails on any programming error — not a
+  whitelist of three strings, which let "x is not a function" through. It also greps
+  the resulting public chat for unscanned crew names.
+- **The socket cross-check also refuses an empty rule.** `{}` would satisfy "has an
+  entry" while authorising everyone, so a rule must name at least one restriction.
+- **The stale-write sweep sees `await new Roll(...)`** — the first version only
+  matched `await ident(`, and missed `gmRollInitiative` rolling a d20 per ship
+  between its read and its write.
+- **`check_hulls.js` validates DECK art too.** The Brutus tug shipped with both of
+  its boarding decks pointing at `Supplements/Triple Booster.png`, so the party
+  would have boarded a thruster sprite.
 
 `tools/deploy.sh <version> "<notes>"` runs all of it, then commits, pushes, zips
 and cuts the release. Nothing ships that has not passed.
@@ -372,6 +381,33 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
   false *and* applied a one-round status; nothing ever set `shield.on` back, so one
   lucky miss disarmed an enemy for the whole fight. The status is now facing-scoped
   and `shield.on` is left alone.
+- **`gmBreach` must call `gmGoToDeck` with `trusted: true`.** The goDeck guard asks
+  whether you are already aboard, and `whereIs` is only ever written *by*
+  `gmGoToDeck` — so a breach without the flag refuses **itself** and the boarder
+  never moves. A hardening change caused that; `check_shipcombat.js` now asserts
+  the call site.
+- **A `check` on a socket rule runs *after* `seat`, not instead of it.** `gunHitCheck`
+  is seat-authorised but its handler acts on `msg.crewId`, so one gunner could fire
+  the other's gun until the rule carried both.
+- **`consumeSlot` can refuse** — no action left, or not enough power — and for a long
+  time every one of its fourteen callers ignored the answer and fired anyway. It
+  returns a boolean now; callers bail.
+- **Only the seat that owns a move may make it.** `gmGrant` checked that you control
+  the crew member, not that they are sitting in the Captain's chair; `swapResult`
+  was `anyCrew`, so anyone could answer someone else's station-swap prompt.
+- **Precision fire replaces the hull hit; it does not add to one.** `gmEnemyFire`
+  applied full hull damage *and* the system hit, one line under a comment saying it
+  would not and one line above a chat message telling the crew their hull was spared.
+- **A bare custom property is not animatable.** `@keyframes {--sweep: 360deg}` needs
+  `@property` to register the type, so the active-ship ring silently never moved.
+  Animate a real property (`transform`) instead.
+- **Esc must FAIL a timed mini-game, not remove it.** `closeRepairPuzzle()` is the raw
+  teardown; only `finish(false)` runs `onFail`. The action is already spent by the
+  time the puzzle opens, so tearing it down silently ate the whole repair.
+  `S.abortRepairPuzzle()` / `S.abortNavGame()` are the Esc-safe doors.
+- **Never put a backtick inside the CSS template literals.** They are one big
+  template string; a backtick in a comment ends it and the file stops parsing.
+  `node --check` catches it, which is why it runs first in the gate.
 
 ---
 

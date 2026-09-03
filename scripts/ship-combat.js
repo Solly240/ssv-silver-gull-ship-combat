@@ -101,8 +101,13 @@
       // Flipping to DECKS resolves the panel's data first, then re-renders — the
       // renderer stays synchronous so it can also run in preview.html.
       setView: async (v) => {
-        if (v === "decks") { deckData = await deckCtx(); deckMode = true; invMode = false; gmActMode = false; }
-        else { deckMode = false; }
+        if (v === "decks") {
+          deckData = await deckCtx(); deckMode = true; invMode = false; gmActMode = false;
+          await viewMyDeck();
+        } else {
+          deckMode = false;
+          await viewSpace();
+        }
         swapAnim = true; refreshOpen();
       },
       goDeck: async (n) => { await goToDeck(n); deckData = await deckCtx(); refreshOpen(); },
@@ -1148,9 +1153,10 @@
     const d = D2(); if (d) return d.confirm({ window: { title }, content: `<p>${content}</p>` }).catch(() => false);
     return Dialog.confirm({ title, content: `<p>${content}</p>` });
   }
-  async function chooseDlg(title, intro, options) {  // options: [{value,label}] → value|null
+  async function chooseDlg(title, intro, options, preselect) {  // options: [{value,label}] → value|null
     const body = `<div style="display:flex;flex-direction:column;gap:6px;">${intro ? `<p>${intro}</p>` : ""}` +
-      `<select name="v" style="width:100%">${options.map((o) => `<option value="${o.value}">${esc(o.label)}</option>`).join("")}</select></div>`;
+      `<select name="v" style="width:100%">${options.map((o) =>
+        `<option value="${o.value}"${o.value === preselect ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select></div>`;
     const read = (form) => form.elements.v.value;
     const d = D2();
     if (d) return d.prompt({ window: { title }, content: body, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
@@ -1310,7 +1316,7 @@
       case "spool":          gmSpool({ total: msg.total, die: msg.die }, msg.byName); break;
       case "cloak":          gmCloak(msg.which, msg.byName); break;
       case "goDeck":         gmGoToDeck(msg.userId, msg.shipId, msg.deck); break;
-      case "breach":         gmBreach(msg.crewId, msg.shipId, msg.toolId, msg.total, { die: msg.die }); break;
+      case "breach":         gmBreach(msg.crewId, msg.shipId, msg.toolId, msg.total, { die: msg.die }, msg.facing); break;
       case "viewDeck":       viewDeck(msg.sceneId, msg.levelId); break;
       case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
       case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
@@ -1908,7 +1914,8 @@
       canReturn: !isGull,
       breachInfo: isGull
         ? "Your own hull. Enemy boarders appear here, and this is where recovered crew come back to."
-        : `You breached at the <b>⌁ boarding point</b>. You cannot teleport home — someone has to physically recover you before the fight ends.`
+        : `You cut in on her <b>${esc(S.FACING_LABEL[(getCombat().whereIs || {})[game.user.id]?.facing] || "hull")}</b>. ` +
+          `You cannot teleport home — someone has to physically recover you before the fight ends.`
     };
   }
 
@@ -1919,7 +1926,42 @@
     else emit({ type: "goDeck", toGM: true, shipId: me.shipId, deck, userId: game.user.id });
   }
 
-  async function gmGoToDeck(userId, shipId, deck, { trusted = false } = {}) {
+  /**
+   * The hull's box on one level, measured from the walls the pack shipped.
+   *
+   * Deck art is a transparent PNG on a canvas far larger than the ship, so the
+   * centre of the SCENE is usually open space beside the hull. Everything that
+   * places a token on a deck goes through this.
+   */
+  function deckInterior(scene, levelId) {
+    const walls = scene.walls.filter((w) => {
+      const lv = w._source?.levels;
+      // An empty `levels` set means EVERY level (client/documents/wall.mjs).
+      return !Array.isArray(lv) || !lv.length || lv.includes(levelId);
+    }).map((w) => ({ c: w.c }));
+    return S.deckBounds(walls, { x: 0, y: 0, w: scene.width, h: scene.height });
+  }
+
+  /**
+   * Take an actor's token OFF every other deck scene this module owns.
+   *
+   * Boarding used to CREATE a token on the destination and leave the old one
+   * behind, so a boarder stood on the Gull and on the enemy at the same time.
+   */
+  async function liftTokenFrom(actorId, keepSceneId) {
+    if (!actorId) return 0;
+    let n = 0;
+    for (const sc of game.scenes) {
+      if (sc.id === keepSceneId) continue;
+      if (!sc.getFlag(MODULE_ID, "deckScene")) continue;
+      const ids = sc.tokens.filter((t) => t.actorId === actorId).map((t) => t.id);
+      if (!ids.length) continue;
+      try { await sc.deleteEmbeddedDocuments("Token", ids); n += ids.length; } catch (e) {}
+    }
+    return n;
+  }
+
+  async function gmGoToDeck(userId, shipId, deck, { trusted = false, facing = "" } = {}) {
     if (!game.user.isGM) return;
     const isGull = shipId === "gull";
     // A player may walk the decks of their OWN ship, or of a hull they have
@@ -1941,23 +1983,29 @@
     const levelId = levelForDeck(scene, deck);
     if (!levelId) return notifyUser(userId, `That hull has no deck ${deck}.`);
 
-    // Put the player's own token on that deck, at the first open square.
+    // Put the player's own token on that deck — at the airlock they cut, if they
+    // cut one, otherwise in the middle of the HULL (not the middle of the canvas).
     const user = game.users.get(userId);
     const actor = user?.character || game.actors.find((a) => a.type === "character" && a.testUserPermission(user, "OWNER"));
     if (actor) {
       const g = scene.grid?.size || 100;
-      const at = { x: Math.round(scene.width / 2), y: Math.round(scene.height / 2) };
+      const box = deckInterior(scene, levelId);
+      const at = facing
+        ? S.breachPoint(box, facing, g)
+        : { x: Math.round(box.x + box.w / 2), y: Math.round(box.y + box.h / 2) };
+      // Off every other hull first: standing on two ships at once is not boarding.
+      await liftTokenFrom(actor.id, scene.id);
       const existing = scene.tokens.find((t) => t.actorId === actor.id);
-      if (existing) await existing.update({ level: levelId });
+      if (existing) await existing.update({ level: levelId, x: at.x, y: at.y });
       else {
-        const td = (await actor.getTokenDocument({ ...at, actorLink: true })).toObject();
+        const td = (await actor.getTokenDocument({ x: at.x, y: at.y, actorLink: true })).toObject();
         delete td._id; td.level = levelId;
         await scene.createEmbeddedDocuments("Token", [td]);
       }
     }
 
     const next = getCombat();
-    next.whereIs = { ...(next.whereIs || {}), [userId]: { shipId, deck } };
+    next.whereIs = { ...(next.whereIs || {}), [userId]: { shipId, deck, facing: facing || "" } };
     await saveCombat(next);
     emit({ type: "viewDeck", toUser: userId, sceneId: scene.id, levelId });
     if (userId === game.user.id) await viewDeck(scene.id, levelId);
@@ -1968,6 +2016,51 @@
     const scene = game.scenes.get(sceneId); if (!scene) return;
     try { await scene.view({ level: levelId }); }
     catch (e) { try { await scene.view(); } catch (e2) { console.warn(`${MODULE_ID} | could not view deck`, e2); } }
+  }
+
+  /**
+   * The scene the ship battle is on: wherever the Gull's own token sits, and the
+   * active scene otherwise. Remembered so a boarder can look back out at the
+   * fight from inside an enemy hull.
+   */
+  function spaceScene() {
+    const icon = shipIconActor();
+    if (icon) {
+      const sc = game.scenes.find((x) => !x.getFlag(MODULE_ID, "deckScene") && x.tokens.some((t) => t.actorId === icon.id));
+      if (sc) return sc;
+    }
+    const act = game.scenes.active;
+    if (act && !act.getFlag(MODULE_ID, "deckScene")) return act;
+    return game.scenes.find((x) => !x.getFlag(MODULE_ID, "deckScene")) || null;
+  }
+
+  /**
+   * Move the CAMERA between the battle and the deck you are standing on.
+   *
+   * The SPACE/DECKS control used to switch only the console PANEL, so a boarder
+   * pressing SPACE got the space readout while their canvas still showed the
+   * enemy's engine room. Your token does not move — you are still aboard; you
+   * are just looking out of the window.
+   */
+  async function viewSpace() {
+    const sc = spaceScene();
+    if (!sc) return ui.notifications?.warn("No space scene to go back to.");
+    if (game.scenes.current?.id === sc.id) return;
+    try { await sc.view(); }
+    catch (e) { ui.notifications?.warn("You do not have permission to view the battle map — ask the GM."); }
+  }
+
+  /** …and the other way: back to the deck this user is actually standing on. */
+  async function viewMyDeck() {
+    const me = whereAmI(game.user.id);
+    const isGull = me.shipId === "gull";
+    const hull = isGull ? await gullHull() : hullFor(me.shipId).hull;
+    const name = isGull ? getState().name : hullFor(me.shipId).name;
+    const skin = isGull ? "Original" : (getCombat().ships[me.shipId]?.skin || Object.keys(hull?.skins || {})[0]);
+    const scene = findDeckScene(name, skin);
+    if (!scene) return;                       // no plan built yet — the panel says so
+    if (game.scenes.current?.id === scene.id) return;
+    await viewDeck(scene.id, levelForDeck(scene, me.deck || 1));
   }
 
   /** Back to the Gull — only if someone has physically recovered you. */
@@ -2019,19 +2112,6 @@
   }
 
   /** Spread N tokens around a point without stacking them. */
-  function spread(cx, cy, n, g) {
-    const out = [];
-    let ring = 0;
-    while (out.length < n) {
-      const per = ring === 0 ? 1 : ring * 6;
-      for (let i = 0; i < per && out.length < n; i++) {
-        const a = (i / per) * Math.PI * 2;
-        out.push({ x: Math.round(cx + Math.cos(a) * ring * g), y: Math.round(cy + Math.sin(a) * ring * g) });
-      }
-      ring++;
-    }
-    return out;
-  }
 
   /**
    * Put an enemy ship's crew on its own decks, as hidden tokens.
@@ -2049,7 +2129,9 @@
     const made = [];
     for (const [deck, list] of Object.entries(byDeck)) {
       const levelId = levelForDeck(scene, Number(deck));
-      const spots = spread(scene.width / 2, scene.height / 2, list.length, g * 1.4);
+      // Inside the hull, spread across it — the old hex spiral around the middle
+      // of the CANVAS put half a crew in the void beside their own ship.
+      const spots = S.deckSpots(deckInterior(scene, levelId), g, list.length);
       for (let i = 0; i < list.length; i++) {
         const c = list[i];
         const actor = await actorForBlock(c.block, c.name);
@@ -2075,6 +2157,80 @@
     return docs.length;
   }
 
+  /**
+   * An enemy boarding party crosses onto the GULL.
+   *
+   * `boardingParty` has been carried on every hull since the fleet was authored
+   * and shown in the spawn browser as a corner flag, but nothing ever spawned
+   * them — the Leiothrix and the Apostle pod ships were advertising marines that
+   * did not exist. They land on the Gull's deck 1, at the arc they came from.
+   */
+  async function gmEnemyBoard(shipId) {
+    if (!game.user.isGM) return false;
+    const combat = getCombat();
+    const sh = combat.ships[shipId]; if (!sh) return false;
+    const n = Math.max(0, Number(sh.boardingParty) || 0);
+    if (!n) { ui.notifications?.warn(`${sh.name} carries no boarding party.`); return false; }
+    if (sh.boardersSent) { ui.notifications?.warn(`${sh.name} has already sent her marines.`); return false; }
+    const d = shipDistance(shipId, "gull");
+    if (d != null && d > 1) {
+      ui.notifications?.warn(`${sh.name} is ${d} squares off — she has to close to 1 to launch pods.`);
+      return false;
+    }
+
+    // The Gull's own two-deck scene, built on demand exactly like an enemy's.
+    const hull = await gullHull();
+    const name = getState().name;
+    let scene = findDeckScene(name, "Original");
+    if (!scene && hull) scene = await buildDeckScene({ ...hull, name }, "Original");
+    if (!scene) { ui.notifications?.error("The Gull has no deck plan to board — build it from the DECKS panel."); return false; }
+
+    const levelId = levelForDeck(scene, 1);
+    const g = scene.grid?.size || 100;
+    const box = deckInterior(scene, levelId);
+    // They cut in on the arc they are actually on, same rule the players get.
+    const gullP = shipPoint("gull"), meP = shipPoint(shipId);
+    const face = (gullP && meP) ? S.facingFrom(gullP, meP) : "fore";
+    const entry = S.breachPoint(box, face, g);
+    const spots = S.deckSpots({ x: entry.x - g * 1.5, y: entry.y - g * 1.5, w: g * 3, h: g * 3 }, g, n);
+
+    const fac = S.faction(sh.faction);
+    const label = { "apostles-threshold": "Apostle Zealot", "iron-directorate": "Directorate Trooper",
+                    "sovereign-horizon": "Horizon Corsair", "frostwatch": "Frostwatch Constable" }[sh.faction] || "Boarder";
+    const tier = Math.max(1, Math.min(4, Number(Object.values(sh.crew)[0]?.tier) || 1));
+    const block = (sh.faction === "apostles-threshold" ? CREW_BLOCKS.zealot : CREW_BLOCKS.marine)[tier - 1];
+
+    const made = [];
+    for (let i = 0; i < n; i++) {
+      const actor = await actorForBlock(block, `${label} ${i + 1}`);
+      if (!actor) continue;
+      const proto = actor.prototypeToken.toObject();
+      made.push({ ...proto, name: `${label} ${i + 1}`, actorId: actor.id, actorLink: false,
+        x: spots[i].x, y: spots[i].y, level: levelId, hidden: false, disposition: -1,
+        flags: { [MODULE_ID]: { boardingCrew: true, shipId, boarder: true } } });
+    }
+    if (!made.length) { ui.notifications?.error(`No stat block "${block}" in any bestiary — cannot spawn her marines.`); return false; }
+    await scene.createEmbeddedDocuments("Token", made);
+
+    const next = getCombat();
+    if (next.ships[shipId]) next.ships[shipId].boardersSent = true;
+    await saveCombat(next);
+    const gull = S.normalize(getState());
+    S.applyStatus(gull, "boarded", { round: next.round, src: sh.name });
+    await setState(gull);
+
+    await ChatMessage.create({
+      content: `<b style="color:#e0454d">BOARDERS</b> — <b>${esc(sh.name)}</b> puts <b>${made.length}</b> ` +
+               `${esc(label.toLowerCase())}${made.length === 1 ? "" : "s"} through your <b>${esc(S.FACING_LABEL[face])}</b> ` +
+               `onto <b>deck 1</b>.` +
+               (fac ? `<br><span style="opacity:.75">${esc(fac.wants)}</span>` : "") +
+               `<br><i>Switch to DECKS in the ship console — they are aboard now.</i>`,
+      speaker: { alias: esc(sh.name) } });
+    playFx({ kind: "alert", fraction: 0.13 });
+    refreshUI(); refreshFleet();
+    return true;
+  }
+
   /** Launch & Breach: cross into an enemy hull. */
   async function runBreach(crew, isBonus) {
     const combat = getCombat();
@@ -2089,6 +2245,23 @@
     if (!targetId) return;
     const target = combat.ships[targetId];
 
+    // Which arc to cut into. The default is the one you are actually flying on —
+    // and the shielded facing is called out, because cutting through a live
+    // shield is the thing that stops most tools.
+    const meP = shipPoint(targetId), gullP = shipPoint("gull");
+    const onArc = (meP && gullP) ? S.facingFrom(meP, gullP) : "fore";
+    const tv = S.shipView(target, { isGM: game.user.isGM });
+    const shieldFace = tv.known?.shields ? tv.shield?.on && tv.shield.facing : null;
+    showBreachMarkers(targetId, onArc);
+    const facing = await chooseDlg("Launch & Breach",
+      `Where do you cut in? You are on her <b>${esc(S.FACING_LABEL[onArc])}</b>.` +
+      (tv.known?.shields ? "" : `<br><span style="opacity:.7">Her shield facing is unscanned — you are guessing.</span>`),
+      S.BREACH_FACINGS.map((f) => ({ value: f,
+        label: `${S.FACING_LABEL[f]}${f === onArc ? " — the arc you are on" : ""}` +
+               (shieldFace === f ? " ⚠ SHIELDED" : "") })), onArc);
+    hideBreachMarkers();
+    if (!facing) return;
+
     const toolId = await chooseDlg("Launch & Breach", "What are you crossing with?",
       S.BOARDING_TOOLS.map((t) => ({ value: t.id, label: `${t.name} ${t.mod === 99 ? "(automatic)" : t.mod >= 0 ? `+${t.mod}` : t.mod} — ${t.note}` })));
     if (!toolId) return;
@@ -2102,11 +2275,11 @@
     if (!res) return;
     if (!(await consumeSlot(crew, isBonus ? "bonus" : "action", pw))) return;   // refused: no action left, or not enough power
     const total = res.total + (tool.mod === 99 ? 99 : tool.mod);
-    if (game.user.isGM) await gmBreach(crew.id, targetId, toolId, total, res);
-    else emit({ type: "breach", toGM: true, crewId: crew.id, shipId: targetId, toolId, total, die: res.die, userId: game.user.id });
+    if (game.user.isGM) await gmBreach(crew.id, targetId, toolId, total, res, facing);
+    else emit({ type: "breach", toGM: true, crewId: crew.id, shipId: targetId, toolId, total, die: res.die, facing, userId: game.user.id });
   }
 
-  async function gmBreach(crewId, shipId, toolId, total, res) {
+  async function gmBreach(crewId, shipId, toolId, total, res, facing = "") {
     if (!game.user.isGM) return;
     const combat = getCombat();
     const crew = combat.crew[crewId], sh = combat.ships[shipId];
@@ -2138,6 +2311,7 @@
     await ChatMessage.create({
       content: `<b>Boarding</b> · ${esc(crew.name)} — <b>${total}</b> vs DC ${S.BOARDING_DC} with the ${esc(tool.name)} — <b style="color:#42d16a">aboard ${esc(sh.name)}</b>.` +
                (tool.loud ? `<br><span style="color:#f2b03d">The mine was heard across the whole hull. No surprise.</span>` : "") +
+               (S.BREACH_FACINGS.includes(facing) ? `<br>Cut in on her <b>${esc(S.FACING_LABEL[facing])}</b>.` : "") +
                `<br><i>No teleport home — somebody has to physically recover them before this fight ends.</i>`,
       speaker: { alias: "SSV Silver Gull" }, rolls: res.roll ? [res.roll] : undefined });
 
@@ -2147,7 +2321,7 @@
     // gmGoToDeck itself — so without it a successful breach refused itself and
     // the boarder never moved.
     const uid = crew.controllerUserId || crew.ownerUserId;
-    if (uid) await gmGoToDeck(uid, shipId, 1, { trusted: true });
+    if (uid) await gmGoToDeck(uid, shipId, 1, { trusted: true, facing: S.BREACH_FACINGS.includes(facing) ? facing : "" });
   }
 
   /**
@@ -3663,6 +3837,9 @@
       case "e_brace":
         await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: who }));
         return say(`<b>${esc(who)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
+      case "e_board":
+        await spend();
+        return gmEnemyBoard(shipId);
       case "e_nogun":
         ui.notifications?.warn(`${sh.name} has no gun online.`);
         return false;
@@ -4211,6 +4388,55 @@
   function playFx(spec) {
     runFx(spec);
     if (game.user.isGM) emit({ type: "vfx", spec, userId: game.user.id });
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /*  Breach markers                                                          */
+  /*                                                                          */
+  /*  Four rings around the target while the boarding picker is open — one per */
+  /*  arc, the one you are flying on lit — so the choice is a place on the map */
+  /*  and not four words in a dropdown.                                        */
+  /* ---------------------------------------------------------------------- */
+  let _breachMarks = null;
+  function hideBreachMarkers() {
+    canvasSafe("breach markers", () => {
+      if (!_breachMarks) return;
+      _breachMarks.parent?.removeChild(_breachMarks);
+      _breachMarks.destroy({ children: true });
+      _breachMarks = null;
+    });
+  }
+  function showBreachMarkers(shipId, litFacing) {
+    hideBreachMarkers();
+    canvasSafe("breach markers", () => {
+      if (!pixiOk()) return;
+      const layer = fxLayer(); if (!layer) return;
+      const tok = canvas.tokens?.placeables.find((t) => t.id === getCombat().ships[shipId]?.tokenId);
+      if (!tok) return;
+      const grid = canvas.scene?.grid?.size || 100;
+      const w = (tok.document.width || 1) * grid, h = (tok.document.height || 1) * grid;
+      const c = new PIXI.Container();
+      c.position.set(tok.center?.x ?? tok.document.x, tok.center?.y ?? tok.document.y);
+      c.rotation = ((tok.document.rotation || 0) * Math.PI) / 180;
+      // Just OUTSIDE the hull, in the token's own frame, so they rotate with her.
+      const at = { fore: [0, -h * 0.62], aft: [0, h * 0.62], port: [-w * 0.62, 0], starboard: [w * 0.62, 0] };
+      for (const [face, [ox, oy]] of Object.entries(at)) {
+        const g2 = new PIXI.Graphics();
+        const lit = face === litFacing;
+        const r = Math.max(12, Math.min(w, h) * 0.16);
+        if (typeof g2.lineStyle === "function") {
+          g2.lineStyle(lit ? 4 : 2, OVL.red, lit ? 0.95 : 0.5);
+          g2.drawCircle(ox, oy, r);
+          if (lit) { g2.lineStyle(2, OVL.red, 0.6); g2.drawCircle(ox, oy, r * 1.45); }
+        } else {
+          g2.circle(ox, oy, r).stroke({ width: lit ? 4 : 2, color: OVL.red, alpha: lit ? 0.95 : 0.5 });
+          if (lit) g2.circle(ox, oy, r * 1.45).stroke({ width: 2, color: OVL.red, alpha: 0.6 });
+        }
+        c.addChild(g2);
+      }
+      layer.addChild(c);
+      _breachMarks = c;
+    });
   }
 
   /** Sequencer/JB2A garnish. A module update should break sparkles, not combat. */
