@@ -1717,7 +1717,7 @@
    "id": "brutus-tug-ship",
    "name": "Brutus - Tug Ship",
    "pack": "HyperdriveFleet-Brutus-TugShip.scenes",
-   "artRoot": "modules/",
+   "artRoot": "modules/HyperdriveFleet-Brutus-TugShip/Ship Images/",
    "faction": "",
    "cls": "cruiser",
    "doctrine": "turtle",
@@ -1725,8 +1725,8 @@
     43,
     68
    ],
-   "decks": 2,
-   "hull": 110,
+   "decks": 1,
+   "hull": 440,
    "acBase": 11,
    "armour": 0,
    "resist": {},
@@ -1773,38 +1773,20 @@
     "Original": {
      "exterior": {
       "sceneId": "9icYYMNEIfO3qxHF",
-      "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Exterior.png",
-      "artAnim": "HyperdriveFleet-Brutus-TugShip/Ship Images/Animated/Brutus_Original_Exterior.webm"
+      "art": "GL_Brutus_Whooops_Exterior.png",
+      "artAnim": "Animated/Brutus_Original_Exterior.webm"
      },
-     "decks": {
-      "1": {
-       "sceneId": "2lB3USmdU5X0SP24",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png",
-       "artAnim": "HyperdriveFleet-Brutus-TugShip/Ship Images/Animated/Brutus_Original_Interior_Level1_alert.webm",
-       "alertSceneId": "C7AmPtCJR0HuDG86"
-      },
-      "2": {
-       "sceneId": "oN3qBOZMzFGZBEXV",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png",
-       "artAnim": "HyperdriveFleet-Brutus-TugShip/Ship Images/Animated/Brutus_Original_Interior_Level2_alert.webm",
-       "alertSceneId": "RlIjvBl68XVBmTM6"
-      }
-     }
+     "decks": {}
     },
     "Whoops": {
      "exterior": {
       "sceneId": "avMgJaRxTt03mZoQ",
-      "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Exterior.png"
+      "art": "GL_Brutus_Whooops_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "Ah3EW6OE5qLxuZqz",
-       "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Interior_Level01.png"
-      },
-      "2": {
-       "sceneId": "lk4qyvYxlLL2u27B",
-       "art": "HyperdriveFleet-Animated-Brutus-TugShip/Ship Images/Brutus_Whoops_Interior_Level2.webm",
-       "artAnim": "HyperdriveFleet-Animated-Brutus-TugShip/Ship Images/Brutus_Whoops_Interior_Level2.webm"
+       "art": "GL_Brutus_Whooops_Interior_Level01.png"
       }
      }
     }
@@ -2480,13 +2462,7 @@
       "art": "GL_Cargo_Camel_Original_Exterior_EnginesOff.png",
       "artAnim": "Cargo Camel Original Exterior 4K.webm"
      },
-     "decks": {
-      "1": {
-       "sceneId": "KSejo7DLeX9WHg2R",
-       "art": "Cargo Camel Original Interior 4K.webm",
-       "artAnim": "Cargo Camel Original Interior 4K.webm"
-      }
-     }
+     "decks": {}
     },
     "Arctic": {
      "exterior": {
@@ -3138,8 +3114,8 @@
      },
      "decks": {
       "1": {
-       "sceneId": "PNpQGLCL4zfDg07X",
-       "art": "GL_Dragonette_Original_Interior.png"
+       "sceneId": "RBTGjBH7SrjoKlM6",
+       "art": "GL_Dragonette_ScrapShip_Interior.png"
       }
      }
     },
@@ -3339,11 +3315,6 @@
       "artAnim": "Dynamo Whoops Exterior 4K.webm"
      },
      "decks": {
-      "1": {
-       "sceneId": "Lr2pkh5JO6hFxRCu",
-       "art": "Dynamo Whoops Interior Level 1 4K.webm",
-       "artAnim": "Dynamo Whoops Interior Level 1 4K.webm"
-      },
       "2": {
        "sceneId": "7Nyf8djrgEOaAOpc",
        "art": "GL_Dynamo_Whoops_Interior_Lvl2.png"
@@ -4161,7 +4132,7 @@
     30
    ],
    "decks": 1,
-   "hull": 110,
+   "hull": 440,
    "acBase": 11,
    "armour": 0,
    "resist": {},
@@ -5443,7 +5414,7 @@
     86
    ],
    "decks": 1,
-   "hull": 110,
+   "hull": 440,
    "acBase": 11,
    "armour": 0,
    "resist": {},
@@ -7812,7 +7783,7 @@
     85
    ],
    "decks": 1,
-   "hull": 110,
+   "hull": 440,
    "acBase": 11,
    "armour": 6,
    "resist": {},
@@ -9386,13 +9357,7 @@
       "sceneId": "4qwUgM7NX5mA9cQk",
       "art": "GL_Squengis_Orginal_Exterior.png"
      },
-     "decks": {
-      "1": {
-       "sceneId": "UcpFWbkKtoWBmfps",
-       "art": "Animated/Squengis_Original_Interior.webm",
-       "artAnim": "Animated/Squengis_Original_Interior.webm"
-      }
-     }
+     "decks": {}
     },
     "NoShields": {
      "exterior": {
@@ -10181,7 +10146,7 @@
     80
    ],
    "decks": 1,
-   "hull": 110,
+   "hull": 440,
    "acBase": 11,
    "armour": 0,
    "resist": {},
@@ -11540,7 +11505,7 @@
     72
    ],
    "decks": 3,
-   "hull": 110,
+   "hull": 440,
    "acBase": 11,
    "armour": 0,
    "resist": {},
