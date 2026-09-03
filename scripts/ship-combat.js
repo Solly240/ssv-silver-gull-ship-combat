@@ -2005,12 +2005,21 @@
     };
     const sources = [];
     const missing = [];
+    // A still beats an animation; anything beats nothing.
+    const rank = (a) => (!a ? 3 : /alert/i.test(a) ? 2 : /\.webm$/i.test(a) ? 1 : 0);
     for (const k of deckKeys) {
-      const doc = await pack.getDocument(deckMap[k].sceneId);
-      if (!doc) { missing.push(k); continue; }
-      const art = (hull.artRoot + deckMap[k].art) || artOf(doc);
-      if (!art) missing.push(k);
-      sources.push({ deck: Number(k), doc, art });
+      const ids = deckMap[k].alts?.length ? deckMap[k].alts : [deckMap[k].sceneId];
+      let best = null;
+      for (const id of ids) {
+        const doc = await pack.getDocument(id);
+        if (!doc) continue;
+        const art = (hull.artRoot + deckMap[k].art) || artOf(doc);
+        if (!best || rank(art) < rank(best.art)) best = { deck: Number(k), doc, art };
+        if (rank(art) === 0) break;                       // a still — stop looking
+      }
+      if (!best) { missing.push(k); continue; }
+      if (!best.art) missing.push(k);
+      sources.push(best);
     }
     if (!sources.length) return null;
     // A deck that would not load must be SAID, not silently skipped: the levels
@@ -2158,9 +2167,16 @@
       const m = e.name.match(/\b\d\d[a-z]\s+(.+?)\s+Interior(?:\s+Level\s?0?(\d))?/i);
       if (!m) continue;
       let skin = m[1].trim(); const lvl = m[2] ? Number(m[2]) : 1;
-      if (/alert$/i.test(skin)) continue;                 // the alert variants are a swap, not a deck
+      // "Alert" is a red-alert SWAP of the same deck, not a deck. It can appear
+      // anywhere in the scene name ("… Original Interior Alert Level1"), so an
+      // end-anchored test on the captured skin missed it — and the alert variant
+      // sorted first in the index, which is how a rebuild made deck 1 red.
+      if (/alert/i.test(skin) || /alert/i.test(e.name)) continue;
       skins[skin] ||= { exterior: { sceneId: "", art: "" }, decks: {} };
-      if (!skins[skin].decks[lvl]) skins[skin].decks[lvl] = { sceneId: e._id, art: "" };
+      // Keep every candidate: the pack ships a still and an animated scene for the
+      // same deck, and only the tiles say which is which. buildDeckScene picks.
+      const d = (skins[skin].decks[lvl] ||= { sceneId: e._id, art: "", alts: [] });
+      if (!d.alts.includes(e._id)) d.alts.push(e._id);
     }
     FLEET._gull = { id: "gull", name: getState().name, pack: GULL_PACK, artRoot: "", skins,
                     decks: Math.max(1, ...Object.values(skins).map((s) => Object.keys(s.decks).length)) };
