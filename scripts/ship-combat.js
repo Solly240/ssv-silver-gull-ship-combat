@@ -2000,11 +2000,16 @@
       await del("AmbientLight", scene.lights.map((d) => d.id));
       await del("Tile", scene.tiles.filter((t) => t.getFlag(MODULE_ID, "deckArt")).map((t) => t.id));
       await del("Region", scene.regions?.filter?.((r) => r.getFlag(MODULE_ID, "deckLink"))?.map((r) => r.id) || []);
-      // Remember which DECK each token was on before the levels go, or every
+      // Remember which DECK each token was on before the levels change, or every
       // token is left pointing at a level id that no longer exists.
       const wasOn = scene.tokens.map((t) => ({ id: t.id, deck: deckForLevel(scene, t.level) }));
-      await scene.deleteEmbeddedDocuments("Level", scene.levels.map((l) => l.id));
+      // CREATE the replacements first, then delete the originals. Foundry v14
+      // refuses to remove a scene's last Level ("must have at least one level"),
+      // so delete-then-create threw halfway — after the walls and lights had
+      // already gone. Rebuild has never worked on v14.
+      const oldLevels = scene.levels.map((l) => l.id);
       await scene.createEmbeddedDocuments("Level", levels);
+      if (oldLevels.length) await scene.deleteEmbeddedDocuments("Level", oldLevels);
       const moved = wasOn
         .map((t) => ({ _id: t.id, level: levelForDeck(scene, t.deck) }))
         .filter((t) => t.level);
