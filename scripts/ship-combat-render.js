@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.27.0";
+  S.VERSION = "0.27.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -527,6 +527,8 @@
    *   flat  — the Micro-Adjust secondary facing takes 3 off
    * Returns {half:boolean, flat:number, label:string}.
    */
+  // How far past maximum an overcharged gauge may run before it is nonsense.
+  S.OVERCHARGE_CAP = 2;
   S.MICRO_DR = 3;
   S.shieldDR = function (state, facing) {
     const none = { half: false, flat: 0, label: "" };
@@ -1612,7 +1614,13 @@
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
     for (const g of ["fuel", "power"]) {
       if (!(out[g].max > 0)) out[g].max = d[g].max;
-      out[g].cur = Math.max(0, Math.min(out[g].cur, out[g].max));
+      // Overcharge is a FEATURE: exotic and ancient resource items deliberately
+      // push a gauge past its maximum — "running hot" — and the console draws the
+      // bar in amber when they do. Clamping to max here quietly destroyed the
+      // buffer on the very next read, so the item was spent for nothing.
+      // A sane ceiling still applies, because a hand-edited setting should not
+      // be able to write an absurd number.
+      out[g].cur = Math.max(0, Math.min(out[g].cur, out[g].max * S.OVERCHARGE_CAP));
     }
     for (const k in out.tuning) if (!Number.isFinite(out.tuning[k]) || out.tuning[k] < 0) out.tuning[k] = d.tuning[k];
     return out;
@@ -3240,8 +3248,8 @@
           `<button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button>` +
           `<button class="con-x" title="Close (Esc)">✕</button></div>` +
         `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel", "⛽")}${gauge("POWER", st.power, "power", "⚡")}` +
-          `<div class="inv-convert"><button class="con-btn" data-convert="1">Convert ⛽1 → ${ratio}⚡</button>` +
-          `<button class="con-btn" data-convert="10">Convert ⛽10 → ${ratio * 10}⚡</button></div></div>` +
+          `<div class="inv-convert"><button class="con-btn" data-convert="1">Convert ⛽1 → ${Math.round(ratio)}⚡</button>` +
+          `<button class="con-btn" data-convert="10">Convert ⛽10 → ${Math.round(ratio * 10)}⚡</button></div></div>` +
         `<div class="inv-top">` +
           `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
           `<button class="inv-tab${tab === "you" ? " active" : ""}" data-tab="you">YOUR ITEMS</button></div>` +
@@ -4419,6 +4427,16 @@
       ok(S.normalizeShip(back).aimBonus === 6, "aimBonus survives a second normalize");
       // and idempotence, so a reload cannot mutate a stored fleet
       ok(JSON.stringify(S.normalizeShip(back)) === JSON.stringify(back), "normalizeShip is idempotent");
+    }
+
+    // --- overcharge survives a round trip ----------------------------------
+    {
+      const hot = S.normalize({ power: { cur: 640, max: 500 }, fuel: { cur: 120, max: 400 } });
+      ok(hot.power.cur === 640, `an overcharged gauge must survive normalize (got ${hot.power.cur})`);
+      ok(S.normalize(hot).power.cur === 640, "…and a second normalize");
+      ok(S.normalize({ power: { cur: 99999, max: 500 } }).power.cur === 1000,
+         "…but an absurd value is still capped");
+      ok(S.normalize({ power: { cur: -5, max: 500 } }).power.cur === 0, "…and never goes negative");
     }
 
     // --- deck geometry: nobody lands in the void beside the ship ------------
