@@ -264,25 +264,31 @@ are aboard, you are just looking out of the window.
 
 ---
 
-## 5b. Boarding and scene Levels
+## 5b. Deck scenes are the pack's own scenes
 
-Foundry v14 has native scene Levels, so a multi-deck ship is **one scene with N
-Levels** — `scene.view({level})` switches deck with no scene change and no texture
-reload. `multilevel-tokens` is not needed.
+**Import the whole scene. Do not rebuild it.**
 
-**The rule that will bite you:** a wall, tile or light with an EMPTY `levels` set is
-on **every** level (`client/documents/wall.mjs:164`), and the map packs ship exactly
-that. `buildDeckScene()` therefore writes `levels:[thatLevelId]` on every placeable
-it copies. Omit it and deck 1's walls block deck 2.
+The first version reconstructed a deck: one `Level` per deck on a single scene,
+the ship's interior PNG pulled out of the pack scene's **tiles** and set as the
+Level **background**, then the walls and lights copied across. That art is a tile
+at a specific size and position — the Razorbill's is 3640×5600 inside a 7000×7000
+scene — so promoting it to a full-bleed background **stretched it**, and every
+wall then sat slightly off the picture. The owner's word for it was "so off".
 
-Scenes are built into **"SSV — Boarded Hulls"**, owned OBSERVER by default (players
-cannot `scene.view()` a non-active scene below that). Enemy crew are **records until
-somebody boards** — `materialiseCrew()` creates the tokens lazily, hidden and
-hostile, flagged with their `crewId` so a death takes their station offline.
+These packs already ship finished maps: correct art placement, walls, lighting,
+grid, padding, sounds. So `deckScene(hull, skin, deck)` takes the compendium
+document, `toObject()`s it, strips the demo tokens, renames it, sets OBSERVER
+ownership and a `{deckScene, hullId, skin, deck}` flag, and creates it. Nothing is
+derived and nothing is scaled.
 
-`S.assignSeats()` holds the one-crew-per-station rule and is pure, so the selftest
-holds it to that. Extras are spare hands with no seat — which is what makes killing
-the *right* person matter.
+**One scene per deck**, which also gives deck separation for free — no `Level`
+documents, and none of the `levels: []` means-every-level trap that came with them.
+`whereIs[userId] = {shipId, deck, facing}` and `findDeckScene(name, skin, deck)`
+are how everything finds its way around.
+
+`S.decksForSkin()` still fills a pose skin's missing decks from a sibling, so every
+skin of every hull is boardable, and the imported scene records which skin it
+borrowed from.
 
 ## 5c. The canvas overlay
 
@@ -411,9 +417,11 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
 - **`normalizeShip` must carry `actorId`, `skin` and `art`.** Dropping `actorId`
   meant nothing could delete an enemy's actor, and every fight left orphans in the
   sidebar. `gmClearFleet()` sweeps by flag as a backstop and runs on `endCombat`.
-- **Foundry v14 has native multi-level scenes** (`Level` documents). A wall with an
-  empty `levels` set is on **every** level (`client/documents/wall.mjs:164`), so a
-  merged multi-deck ship must tag every wall, tile and light with its own level id.
+- **Deck scenes are imported whole, not rebuilt.** The pack art is a TILE at a set
+  size and position; using it as a scene background stretches it and everything
+  drifts off the walls. See §5b. (Foundry v14's `Level` documents are no longer
+  used here — one scene per deck is simpler and cannot hit the `levels: []`
+  means-every-level trap.)
 - **`scene.update({background})` is a silent no-op on v14** — it builds the change
   and discards it. Use `updateEmbeddedDocuments("Level", …)`.
 - **Every `fx` call sits inside a `gm*` handler**, which returns early on a player's
@@ -491,6 +499,14 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
 - **`anyCrew` is the wrong rule for the inventory.** It is used *between* fights,
   when `combat.crew` is empty — so every player-side inventory action was silently
   refused out of combat. That is what `player` is for.
+- **The turn bar is FLEET-AWARE, and compact on purpose.** It used to draw every
+  crew member as a full-width row with two `<select>`s — seven of those is half a
+  monitor — and it showed the Gull's crew whether or not it was the Gull's turn.
+  Now: an initiative strip of every ship across the top, the seats of the ONE ship
+  whose turn it is below, `.ct-body` capped at `32vh` with internal scroll, and all
+  the housekeeping behind `⋯`. Clicking a ship it is NOT the turn of shows its
+  **reactions** (`S.reactionsFor`) — the Captain's Command Point, held
+  Countermeasures, point defence, Slip — which is exactly when they matter.
 - **`enterCombat` must keep `combatState.ships`.** It built a fresh
   `S.defaultCombat()` and copied only the roster across, so pressing
   **⚔ ENTER SHIP COMBAT** silently deleted every enemy the GM had already spawned

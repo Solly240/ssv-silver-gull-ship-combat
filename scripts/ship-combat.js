@@ -2103,7 +2103,30 @@
     if (!node) { ui.notifications?.warn(`${hull.name} (${skin}) has no deck ${deck}.`); return null; }
     const pack = game.packs.get(hull.pack);
     if (!pack) { ui.notifications?.error(`Map pack ${hull.pack} is not installed.`); return null; }
-    const src = await pack.getDocument(node.sceneId);
+
+    // A pack usually ships the SAME deck several times: a still PNG, an animated
+    // .webm, and a red-alert variant. Take the still, plain one — the animation is
+    // a 3640x5600 video tile per player, and "alert" is a state, not a deck.
+    // Whichever scene wins, everything on it comes across untouched.
+    const artOf = (doc) => {
+      const t = [...(doc?.tiles ?? [])]
+        .map((x) => ({ src: x.texture?.src || x.img || "", area: (Number(x.width) || 0) * (Number(x.height) || 0) }))
+        .filter((x) => x.src && /interior|deck|level/i.test(x.src))
+        .sort((a, b) => b.area - a.area)[0];
+      return t ? t.src : "";
+    };
+    const rank = (doc) => {
+      const a = artOf(doc);
+      return (a ? 0 : 8) + (/alert/i.test(doc?.name || "") || /alert/i.test(a) ? 4 : 0)
+           + (/\.webm$/i.test(a) ? 2 : 0) - Math.min(1, doc?.lights?.size || 0);
+    };
+    const ids = node.alts?.length ? node.alts : [node.sceneId];
+    let src = null;
+    for (const id of ids) {
+      const doc = await pack.getDocument(id);
+      if (!doc) continue;
+      if (!src || rank(doc) < rank(src)) src = doc;
+    }
     if (!src) { ui.notifications?.error(`${hull.name}: deck ${deck} is missing from ${hull.pack}.`); return null; }
 
     ui.notifications?.info(`Importing ${name} from the map pack…`);

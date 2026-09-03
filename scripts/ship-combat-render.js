@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.29.0";
+  S.VERSION = "0.29.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -2704,8 +2704,17 @@
         </button>`;
       };
 
-      const strip = ships.length
-        ? ships.map(chip).join("")
+      // In INITIATIVE order — it is an initiative strip, and reading it in spawn
+      // order tells the GM nothing about who acts next. Anything not yet rolled
+      // sits at the end.
+      const initOf = (id) => {
+        const e = (combat.initiative || []).find((x) => x.shipId === id);
+        return e ? e.roll : -Infinity;
+      };
+      const ordered = ships.slice().sort((a, b) => (initOf(b.id) - initOf(a.id))
+        || String(a.name).localeCompare(String(b.name)));
+      const strip = ordered.length
+        ? ordered.map(chip).join("")
         : `<span class="ct-none">No contacts — press <b>F</b> for Fleet Command to spawn some.</span>`;
 
       // The seats of whoever's turn it is. Compact chips; click one to open it.
@@ -4789,6 +4798,22 @@
       }
       ok(S.enemySeatActions(ship, ship.crew.c3)[0].id === "e_fire:auto", "a gunner gets one button per online gun");
       ok(S.enemySeatActions(ship, null).length === 0, "enemySeatActions survives a null crew member");
+      // Reactions — what a ship can do when it is NOT her turn.
+      {
+        const horizon = S.normalizeShip({ id: "h", faction: "sovereign-horizon", abilities: ["slip", "ghost_contacts"],
+          crew: { c1: { id: "c1", name: "Cap", roleId: "captain", station: "captain" },
+                  c2: { id: "c2", name: "Eyes", roleId: "engineer", station: "science" },
+                  c3: { id: "c3", name: "Dead", roleId: "captain", station: "captain", dead: true } } });
+        const r = S.reactionsFor(horizon, Object.values(horizon.crew));
+        const ids = r.map((x) => x.id);
+        ok(ids.includes("command_point"), "a captain brings the Command Point");
+        ok(ids.includes("countermeasures"), "a science officer can hold Countermeasures");
+        ok(ids.includes("slip"), "a Horizon hull brings Slip");
+        ok(!ids.includes("ghost_contacts"), "…and an ability with no reaction is not invented one");
+        ok(r.every((x) => x.label && x.text && x.who), "every reaction row has a label, text and a source");
+        ok(r.filter((x) => x.id === "command_point").length === 1, "a dead captain does not react");
+        ok(S.reactionsFor(null, null).length === 0, "reactionsFor survives nulls");
+      }
       // A spawned enemy arrives with her shields UP — gmSpawnShip passes no shield
       // block, and reading that as "off" left every hull five AC light.
       ok(S.normalizeShip({ id: "fresh" }).shield.on === true, "a spawned enemy has her shields up");
