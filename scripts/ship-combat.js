@@ -3238,8 +3238,8 @@
         fillPoly(g, [...pts, ...inner], lit ? OVL.teal : OVL.violet, lit ? 0.26 : 0.16, lit ? 0.85 : 0.55, lit ? 3 : 2);
       } else if (known) {
         // hairline: you can see the arc exists and is not covered
-        if (typeof g.lineStyle === "function") { g.lineStyle(1, OVL.teal, 0.16); g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); }
-        else { g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); g.stroke({ width: 1, color: OVL.teal, alpha: 0.16 }); }
+        if (typeof g.lineStyle === "function") { g.lineStyle(2, OVL.teal, 0.30); g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); }
+        else { g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); g.stroke({ width: 2, color: OVL.teal, alpha: 0.30 }); }
       }
     }
   }
