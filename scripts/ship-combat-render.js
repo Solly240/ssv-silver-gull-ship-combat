@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.28.0";
+  S.VERSION = "0.28.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -1282,7 +1282,10 @@
       resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
       systems: {}, systemHp: {},
       shield: {
-        on: !!stored.shield?.on,
+        // ABSENT is not "off". gmSpawnShip passes no shield block, so `!!undefined`
+        // turned every enemy's shields off at birth — they had been arriving with
+        // their bow open, five AC light, since the fleet shipped.
+        on: stored.shield && "on" in stored.shield ? !!stored.shield.on : d.shield.on,
         facing: S.FACINGS.includes(stored.shield?.facing) ? stored.shield.facing : "fore",
         secondary: S.FACINGS.includes(stored.shield?.secondary) ? stored.shield.secondary : null
       },
@@ -4589,6 +4592,10 @@
       }
       ok(S.enemySeatActions(ship, ship.crew.c3)[0].id === "e_fire:auto", "a gunner gets one button per online gun");
       ok(S.enemySeatActions(ship, null).length === 0, "enemySeatActions survives a null crew member");
+      // A spawned enemy arrives with her shields UP — gmSpawnShip passes no shield
+      // block, and reading that as "off" left every hull five AC light.
+      ok(S.normalizeShip({ id: "fresh" }).shield.on === true, "a spawned enemy has her shields up");
+      ok(S.normalizeShip({ id: "d", shield: { on: false } }).shield.on === false, "…and an explicit down stays down");
       // A hint that names a number the handler does not apply is a lie the GM
       // reads on every hover. These three did.
       const hintOf = (id) => Object.values(S.ENEMY_SEAT_ACTIONS).flat().find((a) => a.id === id)?.hint || "";
