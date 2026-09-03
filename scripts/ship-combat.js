@@ -943,6 +943,7 @@
       return;
     }
 
+    try { fxTracer("gull", sh.id, { color: 0xf2b03d }); fx("jb2a.magic_missile", { fromShip: "gull", toShip: sh.id }); } catch (e) {}
     const rail = getCombat().gunBuff;
     const dmgRoll = await new Roll(`${gun.damage} + ${str}${rail ? ` + ${rail}` : ""}`).evaluate();
     let raw = Math.max(1, dmgRoll.total);
@@ -2029,6 +2030,7 @@
       await ChatMessage.create({ content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${unmeasured}`, speaker: gunSpeaker });
       return;
     }
+    try { fxTracer("gull", sh.id, { color: 0x38e1c4, width: 4 }); } catch (e) {}
     // Shield-breaker hits harder into a hull that is already open.
     const alreadyDown = S.hasStatus(sh, "shields_down") || !sh.shield.on;
     const bonusDie = (t.signature === "shieldbreak" && alreadyDown) ? " + 1d6" : "";
@@ -2488,6 +2490,15 @@
     }
 
     if (isGull) await setState(sh); else await saveCombat(next);
+
+    // The beat: a contained cool ring if the shields ate it, a hot expanding
+    // burst if it went through. Absorbed hits never shake the screen.
+    try {
+      fxImpact(shipId, facing, { absorbed: res.final === 0 || res.shielded });
+      if (isGull && res.final > 0) fxRedAlert(res.final / Math.max(1, sh.hull.max));
+      if (res.final > 0) fx("jb2a.explosion.02", { atShip: shipId, scale: 0.6 });
+      else fx("jb2a.shield.01.outro_fast.blue", { atShip: shipId, scale: 0.5 });
+    } catch (e) { /* the fight matters more than the sparkle */ }
 
     const name = isGull ? getState().name : sh.name;
     const work = res.steps.map((x) => `${x.label} → ${x.value}`).join(" · ");
@@ -3105,14 +3116,35 @@
     return [S.shipVariant(state), s.on ? 1 : 0, s.facing || "", s.secondary || "", state.systems?.shields || ""].join("|");
   }
   let _iconBusy = false, _iconAgain = false, _iconSig = null;
+  /**
+   * RETIRED — the shields are a PIXI overlay now (refreshOverlays), which works
+   * for every hull on the board instead of only the Gull.
+   *
+   * The old path composited ship + shield onto a canvas and uploaded a uniquely
+   * named .webp on every shield change, never deleting the previous one, so
+   * Data/ssv-ship-icon/ grew by a file per shield allocation ever made. It still
+   * sets the token's BASE art once (so the actor has a picture) and then stops.
+   */
   async function updateShipIcon(force) {
     if (!game.user.isGM) return;
-    const sig = shipIconSig(S.normalize(getState()));
-    if (!force && sig === _iconSig) return;              // nothing that changes the token image → skip the upload
+    // Only the hull VARIANT changes the base art now; shields are drawn live.
+    const sig = S.shipVariant(S.normalize(getState()));
+    if (!force && sig === _iconSig) return;
     if (_iconBusy) { _iconAgain = true; return; }        // coalesce rapid shield changes
     _iconBusy = true;
     try {
       const a = await ensureShipIconActor(); if (!a) return;
+      // Point at the packaged art directly instead of compositing and uploading.
+      const src = `modules/${MODULE_ID}/assets/ship/ship-${S.shipVariant(S.normalize(getState()))}.webp`;
+      await a.update({ img: src, "prototypeToken.texture.src": src, "prototypeToken.name": a.name });
+      for (const scene of game.scenes) {
+        const ups = scene.tokens.filter((t) => t.actorId === a.id).map((t) => ({ _id: t.id, "texture.src": src }));
+        if (ups.length) await scene.updateEmbeddedDocuments("Token", ups);
+      }
+      _iconSig = sig;
+      refreshOverlays();
+      return;
+      /* eslint-disable no-unreachable */
       const blob = await shipIconBlob(S.normalize(getState())); if (!blob) return;
       const FP = (foundry.applications?.apps?.FilePicker?.implementation) || FilePicker;
       try { await FP.createDirectory("data", SHIP_ICON_DIR); } catch (e) { /* exists */ }
@@ -3129,60 +3161,299 @@
     finally { _iconBusy = false; if (_iconAgain) { _iconAgain = false; updateShipIcon(); } }
   }
 
-  /* ---- Firing-arc cone drawn ON the ship token (only the gunners + the GM see it) ---- */
-  let _coneGfx = null;
-  function clearGunCone() { if (_coneGfx) { try { _coneGfx.parent?.removeChild(_coneGfx); _coneGfx.destroy(); } catch (e) {} _coneGfx = null; } }
-  // Only the GM and any user controlling a gunner should see the firing arc.
-  function canSeeGunCone(combat) {
-    if (game.user.isGM) return true;
-    return Object.values(combat.crew).some((c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.controllerUserId === game.user.id);
-  }
-  function shipTokenObject() {
-    const a = shipIconActor(); if (!a || typeof canvas === "undefined" || !canvas?.tokens) return null;
-    return canvas.tokens.placeables.find((t) => t.document?.actorId === a.id) || null;
-  }
-  // Move/rotate the cone to sit on the ship token — uses the token's live mesh transform so it follows animation.
-  function positionGunCone(tok) {
-    if (!_coneGfx) return;
-    tok = tok || shipTokenObject(); if (!tok) return;
-    const m = tok.mesh;
-    if (m && m.position && Number.isFinite(m.position.x)) { _coneGfx.position.set(m.position.x, m.position.y); _coneGfx.rotation = Number.isFinite(m.rotation) ? m.rotation : 0; }
-    else {
-      const grid = canvas.scene?.grid?.size || 100, w = (tok.document.width || 1) * grid, h = (tok.document.height || 1) * grid;
-      _coneGfx.position.set(tok.document.x + w / 2, tok.document.y + h / 2);
-      _coneGfx.rotation = (tok.document.rotation || 0) * Math.PI / 180;
+  /* ====================================================================== */
+  /*  The canvas overlay: shield arcs, firing cones, status badges, and FX   */
+  /*                                                                          */
+  /*  One PIXI container per ship, glued to its token. This replaces the old  */
+  /*  approach of compositing the shield onto a .webp and uploading it —      */
+  /*  which was one upload per shield change, never deleted the old file, and */
+  /*  could not have worked for a board full of enemy hulls.                  */
+  /*                                                                          */
+  /*  Everything here is native PIXI: no dependency, and it draws in the same */
+  /*  palette as the HUD. Sequencer/JB2A, where present, is garnish on top.   */
+  /* ====================================================================== */
+
+  const OVL = { teal: 0x38e1c4, amber: 0xf2b03d, red: 0xe0454d, green: 0x42d16a, violet: 0xb06bf0, ink: 0xcfeef0 };
+  const overlays = new Map();          // shipId -> PIXI.Container
+  let _pulseTicker = null;
+
+  const fxLayer = () => (typeof canvas === "undefined" ? null : (canvas.interface || canvas.controls || canvas.stage));
+  const pixiOk = () => typeof PIXI !== "undefined" && typeof canvas !== "undefined" && canvas?.ready;
+
+  /** Fill+stroke a polygon under PIXI v7 (beginFill/drawPolygon) and v8 (poly/fill/stroke). */
+  function fillPoly(g, pts, color, alpha, lineAlpha, width) {
+    if (typeof g.beginFill === "function") {
+      g.beginFill(color, alpha); g.lineStyle(width ?? 2, color, lineAlpha ?? 0.5); g.drawPolygon(pts); g.endFill();
+    } else {
+      g.poly(pts).fill({ color, alpha }).stroke({ width: width ?? 2, color, alpha: lineAlpha ?? 0.5 });
     }
   }
-  function drawGunCone() {
-    clearGunCone();
-    if (typeof canvas === "undefined" || !canvas?.ready || typeof PIXI === "undefined") return;
-    const combat = getCombat(); if (!combat.active || !canSeeGunCone(combat)) return;
-    // One cone per distinct gun any gunner has selected — two gunners on different guns → two nested cones.
-    const gunIds = [...new Set(Object.values(combat.crew)
-      .filter((c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.gun)
-      .map((c) => c.gun))];
+
+  /** Every ship that currently has a token on this scene. */
+  function shipsOnCanvas() {
+    const out = [];
+    if (typeof canvas === "undefined" || !canvas?.tokens) return out;
+    const gullTok = shipTokenObject();
+    if (gullTok) out.push({ id: "gull", tok: gullTok, state: S.normalize(getState()) });
+    const combat = getCombat();
+    for (const sh of Object.values(combat.ships || {})) {
+      if (!sh.tokenId) continue;
+      const tok = canvas.tokens.placeables.find((t) => t.id === sh.tokenId);
+      if (tok) out.push({ id: sh.id, tok, state: sh });
+    }
+    return out;
+  }
+
+  /**
+   * Shield arcs, drawn from the token's own footprint so a long corvette gets a
+   * long shield and a fat capital a fat one — no art, and it fits all 56 hulls.
+   *
+   * The UNSHIELDED facings are drawn as hairlines on purpose: that is what makes
+   * the shielded arc read as a choice, and what makes flanking legible on the map.
+   */
+  function drawShieldArcs(g, state, w, h, viewer) {
+    const known = viewer.known ? viewer.known.shields : true;
+    const sh = state.shield || {};
+    const works = S.systemWorks(state, "shields") && !S.statusMods(state).noShield;
+    const rx = w * 0.62, ry = h * 0.62;
+    const STEPS = 26;
+    // fore is up (-y); starboard right; aft down; port left — the pilot's convention.
+    const arcs = { fore: [-Math.PI / 4, Math.PI / 4], starboard: [Math.PI / 4, 3 * Math.PI / 4],
+                   aft: [3 * Math.PI / 4, 5 * Math.PI / 4], port: [5 * Math.PI / 4, 7 * Math.PI / 4] };
+    for (const [face, [a0, a1]] of Object.entries(arcs)) {
+      const lit = known && works && sh.on && sh.facing === face;
+      const micro = known && works && sh.secondary === face;
+      const pts = [];
+      for (let i = 0; i <= STEPS; i++) {
+        const t = a0 + (a1 - a0) * (i / STEPS);
+        // rotate so 0 = up
+        pts.push(rx * Math.sin(t), -ry * Math.cos(t));
+      }
+      if (lit || micro) {
+        const inner = [];
+        for (let i = STEPS; i >= 0; i--) {
+          const t = a0 + (a1 - a0) * (i / STEPS);
+          inner.push(rx * 0.84 * Math.sin(t), -ry * 0.84 * Math.cos(t));
+        }
+        fillPoly(g, [...pts, ...inner], lit ? OVL.teal : OVL.violet, lit ? 0.26 : 0.16, lit ? 0.85 : 0.55, lit ? 3 : 2);
+      } else if (known) {
+        // hairline: you can see the arc exists and is not covered
+        if (typeof g.lineStyle === "function") { g.lineStyle(1, OVL.teal, 0.16); g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); }
+        else { g.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]); g.stroke({ width: 1, color: OVL.teal, alpha: 0.16 }); }
+      }
+    }
+  }
+
+  /** The forward firing cone for whichever guns this ship has selected. */
+  function drawCones(g, shipId, grid) {
+    const combat = getCombat();
+    if (!combat.active) return;
+    const crew = shipId === "gull" ? Object.values(combat.crew) : Object.values(combat.ships[shipId]?.crew || {});
+    const gunIds = [...new Set(crew.filter((c) => c.gun).map((c) => c.gun))];
     if (!gunIds.length) return;
-    const tok = shipTokenObject(); if (!tok) return;
-    const grid = canvas.scene?.grid?.size || 100;
-    // Geometry is LOCAL (apex at origin, forward = up); positionGunCone() then places+rotates it onto the token.
     const half = Math.PI / 4, fwd = -Math.PI / 2, a0 = fwd - half, a1 = fwd + half, STEPS = 22;
-    const arcPts = (r, from, to) => { const out = []; for (let i = 0; i <= STEPS; i++) { const t = from + (to - from) * (i / STEPS); out.push(r * Math.cos(t), r * Math.sin(t)); } return out; };
-    const g = new PIXI.Graphics();
-    // Fill+stroke a polygon under both PIXI v7 (beginFill/drawPolygon) and v8 (poly/fill/stroke).
-    const fillPoly = (pts, color, alpha, la) => {
-      if (typeof g.beginFill === "function") { g.beginFill(color, alpha); g.lineStyle(2, color, la); g.drawPolygon(pts); g.endFill(); }
-      else { g.poly(pts).fill({ color, alpha }).stroke({ width: 2, color, alpha: la }); }
-    };
-    for (const id of gunIds.sort((x, y) => (S.gun(y)?.longMax || 0) - (S.gun(x)?.longMax || 0))) {   // longest first
+    const arcPts = (r, from, to) => { const o = []; for (let i = 0; i <= STEPS; i++) { const t = from + (to - from) * (i / STEPS); o.push(r * Math.cos(t), r * Math.sin(t)); } return o; };
+    for (const id of gunIds.sort((x, y) => (S.gun(y)?.longMax || 0) - (S.gun(x)?.longMax || 0))) {
       const gun = S.gun(id); if (!gun) continue;
       const rG = Math.max(1, gun.shortMax) * grid, rR = Math.max(gun.shortMax + 0.5, gun.longMax) * grid;
-      fillPoly([...arcPts(rR, a0, a1), ...arcPts(rG, a1, a0)], 0xe0454d, 0.12, 0.45);   // red (long) band
-      fillPoly([0, 0, ...arcPts(rG, a0, a1)], 0x42d16a, 0.16, 0.6);                      // green (close) band
+      fillPoly(g, [...arcPts(rR, a0, a1), ...arcPts(rG, a1, a0)], OVL.red, 0.10, 0.35);
+      fillPoly(g, [0, 0, ...arcPts(rG, a0, a1)], OVL.green, 0.14, 0.5);
     }
-    _coneGfx = g;
-    (canvas.interface || canvas.controls || canvas.stage)?.addChild(g);
-    positionGunCone(tok);
   }
+
+  /** Only the GM and this ship's own gunners should see its firing arcs. */
+  function canSeeCones(shipId) {
+    if (game.user.isGM) return true;
+    if (shipId !== "gull") return false;
+    return Object.values(getCombat().crew).some(
+      (c) => (c.station === "gunner_port" || c.station === "gunner_starboard") && c.controllerUserId === game.user.id);
+  }
+
+  const shipIdForToken = (tokenId) => {
+    if (shipTokenObject()?.id === tokenId) return "gull";
+    const hit = Object.values(getCombat().ships || {}).find((sh) => sh.tokenId === tokenId);
+    return hit ? hit.id : null;
+  };
+
+  function clearOverlays() {
+    for (const c of overlays.values()) { try { c.parent?.removeChild(c); c.destroy({ children: true }); } catch (e) {} }
+    overlays.clear();
+  }
+
+  function refreshOverlays() {
+    if (!pixiOk()) return;
+    clearOverlays();
+    const layer = fxLayer(); if (!layer) return;
+    const grid = canvas.scene?.grid?.size || 100;
+    for (const { id, tok, state } of shipsOnCanvas()) {
+      // Everything drawn here goes through the reveal boundary first, so an
+      // enemy's shield facing is not quietly readable off the map.
+      const viewer = id === "gull" ? { known: { shields: true } }
+                                   : S.shipView(getCombat().ships[id], { isGM: game.user.isGM });
+      const c = new PIXI.Container();
+      const w = (tok.document.width || 1) * grid, h = (tok.document.height || 1) * grid;
+      const arcs = new PIXI.Graphics();
+      drawShieldArcs(arcs, state, w, h, viewer);
+      c.addChild(arcs);
+      if (canSeeCones(id)) { const cone = new PIXI.Graphics(); drawCones(cone, id, grid); c.addChild(cone); }
+      c.__arcs = arcs;
+      overlays.set(id, c);
+      layer.addChild(c);
+      positionOverlay(id, tok);
+    }
+    startPulse();
+  }
+
+  function positionOverlay(shipId, tok) {
+    const c = overlays.get(shipId); if (!c) return;
+    tok = tok || (shipId === "gull" ? shipTokenObject() : canvas.tokens?.placeables.find((t) => t.id === getCombat().ships[shipId]?.tokenId));
+    if (!tok) return;
+    const m = tok.mesh;
+    if (m && m.position && Number.isFinite(m.position.x)) { c.position.set(m.position.x, m.position.y); c.rotation = Number.isFinite(m.rotation) ? m.rotation : 0; }
+    else {
+      const grid = canvas.scene?.grid?.size || 100;
+      const w = (tok.document.width || 1) * grid, h = (tok.document.height || 1) * grid;
+      c.position.set(tok.document.x + w / 2, tok.document.y + h / 2);
+      c.rotation = (tok.document.rotation || 0) * Math.PI / 180;
+    }
+  }
+  function positionAllOverlays() { for (const id of overlays.keys()) positionOverlay(id); }
+
+  /** One shared ticker breathes every shield arc — not one per ship. */
+  function startPulse() {
+    if (_pulseTicker || !overlays.size || typeof canvas?.app?.ticker === "undefined") return;
+    let t = 0;
+    _pulseTicker = () => {
+      t += 0.024;
+      const a = 0.82 + Math.sin(t) * 0.18;
+      for (const c of overlays.values()) if (c.__arcs) c.__arcs.alpha = a;
+    };
+    canvas.app.ticker.add(_pulseTicker);
+  }
+  function stopPulse() { if (_pulseTicker && canvas?.app?.ticker) { canvas.app.ticker.remove(_pulseTicker); _pulseTicker = null; } }
+
+  /* ---- transient effects ------------------------------------------------- */
+
+  const shipCenter = (shipId) => {
+    const p = shipPoint(shipId);
+    return p ? { x: p.x, y: p.y } : null;
+  };
+
+  /** A tracer from one hull to another. ~260ms, then it fades. */
+  function fxTracer(fromId, toId, { color = OVL.amber, width = 3 } = {}) {
+    if (!pixiOk()) return;
+    const a = shipCenter(fromId), b = shipCenter(toId);
+    if (!a || !b) return;
+    const layer = fxLayer(); if (!layer) return;
+    const g = new PIXI.Graphics();
+    if (typeof g.lineStyle === "function") { g.lineStyle(width, color, 0.95); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); }
+    else { g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width, color, alpha: 0.95 }); }
+    layer.addChild(g);
+    const t0 = performance.now();
+    const tick = () => {
+      const k = (performance.now() - t0) / 260;
+      if (k >= 1) { try { g.parent?.removeChild(g); g.destroy(); } catch (e) {} canvas.app.ticker.remove(tick); return; }
+      g.alpha = 1 - k;
+    };
+    canvas.app.ticker.add(tick);
+  }
+
+  /**
+   * The hit itself. Absorbed and penetrating must be tellable apart WITHOUT
+   * reading: absorbed is a cool, contained ring on the struck arc; penetrating is
+   * a hot expanding burst. Absorbed never shakes the screen — that one rule is
+   * what keeps a long firefight tolerable.
+   */
+  function fxImpact(shipId, facing, { absorbed = false } = {}) {
+    if (!pixiOk()) return;
+    const c = shipCenter(shipId); if (!c) return;
+    const layer = fxLayer(); if (!layer) return;
+    const tok = shipId === "gull" ? shipTokenObject() : canvas.tokens?.placeables.find((t) => t.id === getCombat().ships[shipId]?.tokenId);
+    const grid = canvas.scene?.grid?.size || 100;
+    const w = ((tok?.document.width) || 1) * grid, h = ((tok?.document.height) || 1) * grid;
+    const rot = ((tok?.document.rotation) || 0) * Math.PI / 180;
+    // put the burst on the struck edge, in the token's own frame
+    const off = { fore: [0, -h * 0.5], aft: [0, h * 0.5], port: [-w * 0.5, 0], starboard: [w * 0.5, 0] }[facing] || [0, 0];
+    const px = c.x + off[0] * Math.cos(rot) - off[1] * Math.sin(rot);
+    const py = c.y + off[0] * Math.sin(rot) + off[1] * Math.cos(rot);
+    const g = new PIXI.Graphics();
+    layer.addChild(g);
+    const t0 = performance.now(), dur = absorbed ? 420 : 620;
+    const color = absorbed ? OVL.teal : OVL.red;
+    const rMax = absorbed ? Math.max(w, h) * 0.42 : Math.max(w, h) * 0.30;
+    const tick = () => {
+      const k = (performance.now() - t0) / dur;
+      if (k >= 1) { try { g.parent?.removeChild(g); g.destroy(); } catch (e) {} canvas.app.ticker.remove(tick); return; }
+      g.clear();
+      const r = absorbed ? rMax * (0.75 + k * 0.25) : rMax * (0.2 + k * 1.5);
+      const alpha = (1 - k) * (absorbed ? 0.8 : 0.95);
+      if (typeof g.lineStyle === "function") { g.lineStyle(absorbed ? 4 : 3, color, alpha); g.drawCircle(px, py, r); }
+      else { g.circle(px, py, r).stroke({ width: absorbed ? 4 : 3, color, alpha }); }
+    };
+    canvas.app.ticker.add(tick);
+  }
+
+  /**
+   * "We are being hit." Four tiers off the FRACTION of max hull, so it reads the
+   * same on a 150-hull corvette and a 1200-hull capital. Rate-limited hard, and
+   * the GM is capped at the gentlest tier — they are watching, not being shot at.
+   */
+  let _lastAlert = 0;
+  function fxRedAlert(fraction) {
+    if (typeof document === "undefined") return;
+    const now = performance.now();
+    if (now - _lastAlert < 1200) return;
+    _lastAlert = now;
+    let tier = fraction >= 0.25 ? 3 : fraction >= 0.12 ? 2 : fraction > 0 ? 1 : 0;
+    if (!tier) return;
+    if (game.user.isGM) tier = 1;
+    let el = document.getElementById("ssv-alert");
+    if (!el) { el = document.createElement("div"); el.id = "ssv-alert"; document.body.appendChild(el); }
+    el.className = `ssv-alert t${tier}`;
+    el.style.display = "block";
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.display = "none"; }, tier === 3 ? 900 : tier === 2 ? 700 : 500);
+    if (tier >= 2 && canvas?.stage) shakeCanvas(tier === 3 ? 9 : 5);
+  }
+
+  /** Shake the stage pivot, corrected for zoom, and always restore the base. */
+  let _shaking = false;
+  function shakeCanvas(px) {
+    if (_shaking || !canvas?.stage) return;
+    _shaking = true;
+    const base = { x: canvas.stage.pivot.x, y: canvas.stage.pivot.y };
+    const scale = canvas.stage.scale?.x || 1;
+    const amp = px / scale;
+    const t0 = performance.now(), dur = 340;
+    const tick = () => {
+      const k = (performance.now() - t0) / dur;
+      if (k >= 1) { canvas.stage.pivot.set(base.x, base.y); canvas.app.ticker.remove(tick); _shaking = false; return; }
+      const decay = (1 - k) * amp;
+      canvas.stage.pivot.set(base.x + (Math.random() - 0.5) * decay * 2, base.y + (Math.random() - 0.5) * decay * 2);
+    };
+    canvas.app.ticker.add(tick);
+  }
+
+  /** Sequencer/JB2A garnish. A module update should break sparkles, not combat. */
+  function fx(effectPath, { atShip, fromShip, toShip, scale = 1 } = {}) {
+    try {
+      if (!game.modules.get("sequencer")?.active || typeof Sequence === "undefined") return;
+      const seq = new Sequence();
+      const a = fromShip ? shipCenter(fromShip) : null, b = (toShip || atShip) ? shipCenter(toShip || atShip) : null;
+      if (!b) return;
+      const e = seq.effect().file(effectPath).scale(scale);
+      if (a) e.atLocation(a).stretchTo(b); else e.atLocation(b);
+      seq.play();
+    } catch (e) { /* garnish only */ }
+  }
+
+  /* The old single-ship cone lived here. It is now one of several things the
+     per-ship overlay above draws, so every hull on the board gets its arcs, its
+     cone and its shield facings — not just the Gull. These three names are kept
+     because the hooks and refreshUI call them. */
+  const drawGunCone = () => refreshOverlays();
+  const positionGunCone = () => positionAllOverlays();
+  const clearGunCone = () => clearOverlays();
 
   Hooks.once("ready", async () => {
     if (game.user.isGM) {
@@ -3224,14 +3495,28 @@
 
     // Firing-arc cone on the map: (re)build on canvas ready / token add-remove; follow the ship every frame.
     Hooks.on("canvasReady", () => { try { drawGunCone(); } catch (e) {} });
-    Hooks.on("createToken", (doc) => { if (doc.actorId === shipIconActor()?.id) { try { drawGunCone(); } catch (e) {} } });
-    Hooks.on("deleteToken", () => { try { drawGunCone(); } catch (e) {} });
+    // Is this token one of ours? Cached per render pass — refreshToken fires per
+    // token per animation frame, so this must not walk the ship list each time.
+    let _shipTokIds = new Set(), _shipTokStamp = 0;
+    const shipTokenIds = () => {
+      const now = performance.now();
+      if (now - _shipTokStamp < 500) return _shipTokIds;
+      const ids = new Set();
+      const g = shipTokenObject(); if (g) ids.add(g.id);
+      for (const sh of Object.values(getCombat().ships || {})) if (sh.tokenId) ids.add(sh.tokenId);
+      _shipTokIds = ids; _shipTokStamp = now;
+      return ids;
+    };
+    const isShipToken = (doc) => doc && (shipTokenIds().has(doc.id) || doc.actorId === shipIconActor()?.id);
+    Hooks.on("createToken", (doc) => { if (isShipToken(doc)) { _shipTokStamp = 0; try { refreshOverlays(); } catch (e) {} } });
+    Hooks.on("deleteToken", (doc) => { _shipTokStamp = 0; try { refreshOverlays(); } catch (e) {} });
     Hooks.on("updateToken", (doc, change) => {
-      if (doc.actorId !== shipIconActor()?.id) return;
-      try { if ("width" in change || "height" in change) drawGunCone(); else positionGunCone(); } catch (e) {}
+      if (!isShipToken(doc)) return;
+      try { if ("width" in change || "height" in change) refreshOverlays(); else positionAllOverlays(); } catch (e) {}
     });
-    // refreshToken fires each animation frame — keep the cone glued to the ship while it moves/turns.
-    Hooks.on("refreshToken", (tok) => { if (_coneGfx && tok?.document?.actorId === shipIconActor()?.id) { try { positionGunCone(tok); } catch (e) {} } });
+    // refreshToken fires each animation frame — keep the overlays glued on while ships move and turn.
+    Hooks.on("refreshToken", (tok) => { if (overlays.size && isShipToken(tok?.document)) { try { positionOverlay(shipIdForToken(tok.document.id), tok); } catch (e) {} } });
+    Hooks.on("canvasTearDown", () => { stopPulse(); clearOverlays(); });
     try { drawGunCone(); } catch (e) {}
     // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
     window.addEventListener("keydown", (ev) => {

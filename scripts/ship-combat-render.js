@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.24.3";
+  S.VERSION = "0.25.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -2992,6 +2992,18 @@
 .sgcon .dk-btn:hover{border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.28);}
 .sgcon .dk-btn.warn{border-color:#6b3238;}
 .sgcon .dk-btn.warn:hover{border-color:#e0454d;color:#e0454d;}
+
+/* --- "we are being hit" --------------------------------------------------
+   Four tiers keyed to the FRACTION of max hull, so a scratch on a capital and
+   a scratch on a corvette read the same. Tier 1 is a whisper on purpose: a long
+   firefight is mostly tier 1, and it has to stay tolerable. */
+#ssv-alert{position:fixed;inset:0;z-index:200;pointer-events:none;display:none;}
+#ssv-alert.t1{box-shadow:inset 0 0 90px rgba(224,69,77,.20);animation:ssv-alert-in .5s ease both;}
+#ssv-alert.t2{box-shadow:inset 0 0 150px rgba(224,69,77,.38);animation:ssv-alert-in .7s ease both;}
+#ssv-alert.t3{box-shadow:inset 0 0 220px rgba(224,69,77,.60);animation:ssv-alert-hard .9s ease both;}
+@keyframes ssv-alert-in{0%{opacity:0;}18%{opacity:1;}100%{opacity:0;}}
+@keyframes ssv-alert-hard{0%{opacity:0;}10%{opacity:1;}45%{opacity:.55;}70%{opacity:1;}100%{opacity:0;}}
+@media (prefers-reduced-motion:reduce){#ssv-alert{animation:none!important;}}
 `;
 
   /**
