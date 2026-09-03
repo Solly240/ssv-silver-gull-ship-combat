@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.22.2";
+  S.VERSION = "0.22.3";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -248,7 +248,7 @@
                         blurb: "Attacks against you have disadvantage until you move or fire." },
     rerouted:         { label: "Power Rerouted", kind: "good", scope: "round",  ac: 2,
                         blurb: "+2 ship AC this round — the Engineer put the reactor into the shields." },
-    ramming:          { label: "Ramming",        kind: "warn", scope: "round",
+    ramming_committed:{ label: "Ramming",        kind: "warn", scope: "round",
                         blurb: "Committed to a ram — you cannot change maneuver this round." },
 
     // --- Shields & systems -------------------------------------------------
@@ -3361,6 +3361,15 @@
        "a crew member's Rally, Command and Reroute buffs survive normalize");
     ok(S.normalizeCombat({ spool: 99 }).spool === 3, "the spool cannot exceed three folds");
     ok(!!S.STATUSES.rerouted && S.STATUSES.rerouted.ac === 2, "Reroute Power has a status to hang +2 AC on");
+    // Every status id the appendix names must exist under exactly that key —
+    // applyStatus silently refuses an unknown one, and a typo is invisible.
+    for (const id of ["evasive", "aggressive", "hidden", "ramming_committed", "shields_down",
+                      "engines_disabled", "weapon_offline", "frozen", "grappled", "on_fire",
+                      "painted", "boarded", "cloaked", "station_shock", "adrift", "rerouted"]) {
+      ok(!!S.STATUSES[id], `status "${id}" must exist under that exact key`);
+    }
+    ok(S.applyStatus({ statuses: [] }, "ramming_committed", { round: 1 }) !== null,
+       "applyStatus accepts ramming_committed — the id the Ram handler uses");
 
     // --- scanning ----------------------------------------------------------
     ok(S.scanResult(-6).tier === "silhouette", "a failed scan still returns the silhouette tier");
