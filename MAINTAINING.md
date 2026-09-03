@@ -124,11 +124,81 @@ see. Renderers are handed its result and never the record, so they cannot leak.
 - A **rift** hull withholds even its class until scanned — "Corvette" on something
   that ignores shields and AC would quietly reassure the crew.
 
+**Chat is part of the boundary.** `S.shipView` protected every *renderer*, and for a
+long time chat walked straight past it: every shot published the target's exact AC,
+every damage line published `hull cur/max` and the full reduction pipeline, and every
+enemy-turn line named the crew. A gunner learned by firing what the rules say the
+Science officer must scan for.
+
+So there are three helpers, and new chat must use them:
+
+| helper | what it does |
+|---|---|
+| `sayRedacted(publicHtml, gmHtml, speaker)` | posts the public line, then whispers the real numbers to the GM only when they differ |
+| `S.hullWord(cur, max)` / `S.hitWord(dmg, max)` | the qualitative readout a player gets instead — *"a heavy hit … she is opening up"* |
+| `crewLabel(sh, crew)` | *"Her port mount"* until the manifest is scanned, the real name after |
+
+`crewLabel` must **never** branch on `game.user.isGM`. Chat content is identical for
+everyone who receives the message; a GM-only branch there put the real name into a
+message every player then read. That bug shipped, and `check_shipcombat.js` now runs
+every enemy seat action and greps the resulting public chat for crew names.
+
 **Secrecy is UI-level by the owner's choice.** Foundry replicates every world
 setting to every client, so a determined player with the console open can read
 `combatState`. Keeping the boundary to one function is what makes it cheap to
 upgrade later: hold the truth in a `scope:"client"` GM-side setting and publish
 only the revealed projection (see sundowner's `MAINTAINING.md` §3).
+
+---
+
+## 5a. Socket authorisation — the table is the contract
+
+Foundry sockets are broadcast-to-all and **every client runs the dispatch**, so a
+message is a *request*, not a command. Each type declares a rule in `SOCKET_RULES`:
+
+| key | meaning |
+|---|---|
+| `gm` | the handler writes world state → only the **active** GM runs it (two GM seats can no longer double-apply) |
+| `fromGM` | only a GM may **send** it — UI broadcasts: pickers, notifications, visual effects |
+| `crew` | the field naming the crew member acted for; the sender must control them |
+| `seat` | the station the sender must be sitting at |
+| `self` | the field that must equal the sender's own id |
+| `anyCrew` | the sender must control at least one crew member in the fight |
+
+**A type absent from the table is dropped.** Adding a socket message and forgetting
+its rule therefore fails loudly instead of shipping a hole, and `check_shipcombat.js`
+cross-checks the table against both the `switch` and every `emit({type:…})`.
+
+This exists because the handlers used to check only that *they* were the GM, never
+that the sender was entitled. Any player could emit `ram`, `cloak`, `patch`, `spool`
+or `applyScan` — the last with a hand-crafted `result` that revealed a hull nobody
+had scanned. `applyScan` now **recomputes** the result from the roll, and the dead
+`applyDamage` case (no emitter, arbitrary damage to any ship) is gone.
+
+---
+
+## 5b1. Driving an enemy ship
+
+The GM's requirement was speed: pick a chair, press a button, move on.
+
+- **`S.enemySeatActions(ship, crew)`** (pure) returns the buttons for one seat.
+  Gunners get **one button per online gun**, not a picker plus a fire button.
+- **`S.enemyStandingOrders(ship, {distance})`** (pure) is what `▶ Run` executes —
+  the same action ids the buttons use, so hand-play and standing orders cannot
+  drift apart. It is **arc-aware**: opening the range turns the stern to you, so it
+  will not order a fore mount to fire over its own tail; it says so instead.
+- **`gmCrewAct(shipId, crewId, actionId)`** is the single executor. It returns
+  `false` when it refuses (out of arc, out of range, no token) so `gmRunShip` can
+  report *"orders not carried out"* rather than going quiet.
+- **`gmEnemyFire`** is the mirror of `gmResolveAgainstShip`: facing measured off the
+  two tokens, the enemy's own gun arc checked, then damage through `gmApplyDamage`
+  so shields, armour, resistances, the impact beat and the red alert all behave
+  exactly as they do for the players.
+
+`check_shipcombat.js` runs **every action × every seat × seven hull states × every
+doctrine** (about 1,000 invocations) and fails on any `ReferenceError`. That gate
+exists because `node --check` cannot see a bad identifier in a branch nothing
+executes, and a blunt search-and-replace put one into three functions.
 
 ---
 
@@ -177,6 +247,7 @@ grep -nE '\b(game|ui|Hooks|canvas)\.' scripts/ship-combat-render.js   # empty
 node scripts/ship-combat-render.js --selftest
 node ../tools/fuzz_render.js
 node ../tools/check_shipcombat.js
+node ../tools/check_hulls.js
 python3 ../tools/build_fleet.py --check
 ```
 
@@ -194,6 +265,19 @@ Three of these exist because of bugs that actually shipped:
 - **The canvas pass** in `check_shipcombat.js` fires the hooks against a PIXI stub and
   fails on any error the module reports. It catches a name a refactor orphaned —
   which has happened twice.
+- **`check_hulls.js`** renders **all 53 hulls** through **every** view — GM and player,
+  at each of six reveal tiers, for every skin and four crew counts (~32,000 fleet
+  cards) — and asserts no throw, no `undefined`/`NaN`/`[object Object]`, balanced
+  markup, no unallowlisted key in a player view, and a resolvable deck plan for every
+  skin. It found 19 unboardable skins and the Platanus spawning derelict.
+- **The stale-write sweep** looks for the shape that has bitten this module five
+  times: read the setting → `await` something → write the **stale** object, silently
+  discarding whatever landed in the gap.
+- **The socket cross-check** asserts every `case` has a `SOCKET_RULES` entry, every
+  rule has a case, and every `emit({type:…})` is covered.
+- **The enemy-action smoke run** invokes every seat action against seven hull states
+  and fails on a `ReferenceError`. It also greps the resulting public chat for
+  unscanned crew names.
 
 `tools/deploy.sh <version> "<notes>"` runs all of it, then commits, pushes, zips
 and cuts the release. Nothing ships that has not passed.
@@ -261,6 +345,33 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
   merged multi-deck ship must tag every wall, tile and light with its own level id.
 - **`scene.update({background})` is a silent no-op on v14** — it builds the change
   and discards it. Use `updateEmbeddedDocuments("Level", …)`.
+- **Every `fx` call sits inside a `gm*` handler**, which returns early on a player's
+  client — so the tracers, impacts, red alert and screen shake were only ever drawn
+  for the GM, and the people being shot at saw a silent map. Visuals go through
+  `playFx()`, which runs locally and broadcasts so every client draws its own copy.
+- **A missing `systems` map means UNKNOWN, not BROKEN.** A player's view of an enemy
+  only gains `systems` at the SYSTEMS tier, so `S.systemWorks(view,"shields")` was
+  false at VITALS tier and drew every arc of a freshly-scanned enemy as unshielded —
+  contradicting the readout they had just paid an action for. `S.systemKnown()` is
+  the distinction; `S.shieldDR` uses it.
+- **Pose skins ship no interior.** "Landed", "TuckedUp", "Breached Stage 2",
+  "Original Deployed" and 16 others carry an exterior only, and a few colour skins
+  are missing an upper deck — so `buildDeckScene` refused and the party physically
+  could not board that hull. `S.decksForSkin()` borrows the missing decks from the
+  richest sibling skin ("Original" winning ties). Every skin of every hull is boardable.
+- **A stored `hull.max` of 0 is ABSENT, not "one hit point".** Clamping it up to 1 is
+  how the Platanus — the only capital, whose class band was `[0, 0]` — reached the
+  board at 0/1 and went derelict on the first shot. A malformed max is repaired from
+  the class band; a **`cur` of 0 with a valid max is a derelict and must stay one**,
+  or every wreck refloats on reload.
+- **`frozen` had no expiry clock.** Its scope is `"next-hit"`, which `applyStatus`
+  gave no `expiresRound`, so the Cryo-Beam doubled every hit for the rest of the
+  fight. `S.resolveDamage` now returns a `consumed` list and `gmApplyDamage` clears
+  it in the same write.
+- **Whiff protection must not be permanent.** A grazing miss dropped `shield.on` to
+  false *and* applied a one-round status; nothing ever set `shield.on` back, so one
+  lucky miss disarmed an enemy for the whole fight. The status is now facing-scoped
+  and `shield.on` is left alone.
 
 ---
 

@@ -795,13 +795,16 @@
 
   function consumeSlot(crew, which, power) {
     if (game.user.isGM) return gmConsume(crew.id, which, null, 0);
+    // Snapshot BEFORE emitting. `tryConsume` either flips action/bonus or, when
+    // that slot is already spent, decrements a granted extra — so "did it land?"
+    // is "did any of those three change?", not "is action now true".
+    const was = { action: !!crew.action, bonus: !!crew.bonus, granted: Number(crew.granted) || 0 };
     emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power });
-    // Wait for the GM's write to come back, so callers that await this really do
-    // have the slot spent before they roll.
     return awaitCombat((c) => {
       const me = c.crew?.[crew.id];
       if (!me) return true;                       // crew gone — nothing left to wait on
-      return which === "bonus" ? !!me.bonus : (!!me.action && !(me.granted > 0 && !crew.action));
+      return !!me.action !== was.action || !!me.bonus !== was.bonus
+          || (Number(me.granted) || 0) !== was.granted;
     });
   }
   // The acting crew still has a Main action (or a granted extra) to spend.
@@ -2912,12 +2915,17 @@
     // the bar shows what was TAKEN and not only the new total. Purely local and
     // transient — it is a 700 ms visual, not state, so it never goes near the
     // reveal boundary or the world setting.
+    const live = new Set();
     for (const v of out) {
       if (!v || !v.hull) continue;
+      live.add(v.id);
       const was = _lastHull.get(v.id);
       if (was != null && was > v.hull.cur) v._ghost = was - v.hull.cur;
       _lastHull.set(v.id, v.hull.cur);
     }
+    // Forget ships that have left the board, so a long session does not carry a
+    // ghost value into a NEW ship that happens to reuse the id.
+    for (const id of [..._lastHull.keys()]) if (!live.has(id)) _lastHull.delete(id);
     return out;
   }
 
@@ -3469,19 +3477,25 @@
           speaker: { alias: esc(sh.name) }, rolls: [dmg] });
         const gull = shipPoint("gull"), me = shipPoint(shipId);
         await gmApplyDamage("gull", dmg.total, (gull && me) ? S.facingFrom(gull, me) : "fore", { type: "kinetic" });
-        // She takes it too — half, on her own bow.
+        // She takes it too — half, on her own bow. Re-read first: the ram may have
+        // been the blow that finished her, and a wreck does not take a second hit.
+        if (getCombat().ships[shipId]?.outcome) return true;
         return gmApplyDamage(shipId, Math.floor(dmg.total / 2), "fore", { type: "kinetic" });
       }
       case "e_repair": {
         const hurt = Object.entries(sh.systemHp || {}).filter(([, hp]) => hp.cur < hp.max).sort((a, b) => a[1].cur - b[1].cur)[0];
         if (!hurt) { await spend(); return say(`<b>${esc(who)}</b> finds nothing broken.`); }
+        // Report the value the WRITE produced, not the one the snapshot predicted:
+        // another station may have repaired or broken the same system meanwhile.
+        let landed = null;
         await spend((t) => {
           const hp = t.systemHp[hurt[0]]; hp.cur = Math.min(hp.max, hp.cur + 2);
           t.systems[hurt[0]] = S.systemState(hp);
           if (hurt[0] === "shields" && hp.cur > 0) S.clearStatus(t, "shields_down");
+          landed = hp.cur;
         });
         const lbl = S.SYSTEMS.find((x) => x.id === hurt[0])?.label || hurt[0];
-        return say(`<b>${esc(who)}</b> patches the <b>${esc(lbl)}</b> — back to ${Math.min(S.SYSTEM_HP_MAX, hurt[1].cur + 2)}/${S.SYSTEM_HP_MAX}.`);
+        return say(`<b>${esc(who)}</b> patches the <b>${esc(lbl)}</b> — back to ${landed ?? "?"}/${S.SYSTEM_HP_MAX}.`);
       }
       case "e_reroute":
         await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
@@ -3514,9 +3528,11 @@
         await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: who }));
         return say(`<b>${esc(who)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
       case "e_nogun":
-        return ui.notifications?.warn(`${sh.name} has no gun online.`);
+        ui.notifications?.warn(`${sh.name} has no gun online.`);
+        return false;
       default:
-        return ui.notifications?.warn(`Unknown enemy action "${actionId}".`);
+        ui.notifications?.warn(`Unknown enemy action "${actionId}".`);
+        return false;
     }
   }
 
