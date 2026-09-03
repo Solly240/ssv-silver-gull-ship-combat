@@ -713,9 +713,13 @@
   const strMod = () => Number(game.user.character?.system?.abilities?.str?.mod) || 0;
   const isGunner = (c) => c && (c.station === "gunner_port" || c.station === "gunner_starboard");
   // Consume one of the acting crew's action slots + the given power (GM acts free).
+  // Returns a promise so callers that write combat state straight afterwards can
+  // await it. Without that, the caller's own getCombat() read races the consume's
+  // write and the second save silently puts the spent action back.
   function consumeSlot(crew, which, power) {
-    if (game.user.isGM) gmConsume(crew.id, which, null, 0);
-    else emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power });
+    if (game.user.isGM) return gmConsume(crew.id, which, null, 0);
+    emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power });
+    return Promise.resolve();
   }
   // The acting crew still has a Main action (or a granted extra) to spend.
   const hasMain = (crew) => !crew.action || (crew.granted > 0);
@@ -818,8 +822,8 @@
     const str = strMod();
     const res = await gunToHitDialog(crew, gun, str);
     if (!res) return;
-    consumeSlot(crew, "action", atkPw);
-    if (res.quickAim) consumeSlot(crew, "bonus", S.ACTION_POWER.quickaim);
+    await consumeSlot(crew, "action", atkPw);
+    if (res.quickAim) await consumeSlot(crew, "bonus", S.ACTION_POWER.quickaim);
     const bd = `${gun.label} +${gun.toHit} · STR ${signMod(str)}${res.quickAim ? ` · Quick Aim +${S.QUICK_AIM_BONUS}` : ""}${res.bonus ? ` · +${res.bonus}` : ""}`;
     await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} — <b>${esc(gun.label)}</b> Fire<br>To-hit <b>${res.total}</b> (d20 ${res.die}) <span style="opacity:.6">(${bd})</span>`, speaker: gunSpeaker, rolls: res.roll ? [res.roll] : undefined });
     // With a target laid, the shot resolves itself: AC comes from the target's own
@@ -946,7 +950,7 @@
     const str = strMod();
     const res = await gunToHitDialog(crew, gun, str, { noAim: true });   // Called Shot: no Quick Aim
     if (!res) return;
-    consumeSlot(crew, "action", calledPw);
+    await consumeSlot(crew, "action", calledPw);
     let outcome, apply = "";
     if (res.die === 20) { outcome = `<b style="color:#42d16a">CRITICAL — 2 damage</b> to <b>${esc(targetLabel)}</b>`; apply = `<br><i>Apply 2 to the enemy system (enemy ships coming soon).</i>`; }
     else if (res.die === 1) { outcome = `<b style="color:#e0454d">MISFIRE — 1 damage to your own Weapons / Turrets</b>`; }
@@ -960,7 +964,7 @@
     if (!hasMain(crew)) return ui.notifications?.warn("No Main action left this turn.");
     const launchPw = S.ACTION_POWER.launch;
     if (!game.user.isGM && S.normalize(getState()).power.cur < launchPw) return ui.notifications?.warn(`Not enough power — Boarding Fire needs ${launchPw} (convert fuel first).`);
-    consumeSlot(crew, "action", launchPw);
+    await consumeSlot(crew, "action", launchPw);
     const gun = S.gun(crew.gun);
     await ChatMessage.create({ content: `<b>${esc(stationName(crew.station))}</b> · ${esc(crew.name)} launches a boarder from the <b>${esc(gun?.label || "gun")}</b> at the enemy hull! 🚀<br><i>Boarding resolves later — GM adjudicates for now.</i>`, speaker: gunSpeaker });
   }
@@ -1418,7 +1422,7 @@
     if (!target) return;
     const pw = S.ACTION_POWER[kind === "rally" ? "rally" : "cmd_adv"];
     if (!spendCheck(pw)) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     if (game.user.isGM) await gmBuffCrew(target, kind, crew.name);
     else emit({ type: "buffCrew", toGM: true, crewId: target, kind, byName: crew.name, userId: game.user.id });
   }
@@ -1452,7 +1456,7 @@
       targetId = await chooseDlg("Reroute Power", "To whom?", opts);
       if (!targetId) return;
     }
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     if (game.user.isGM) await gmReroute(rail, targetId, crew.name);
     else emit({ type: "reroute", toGM: true, rail, crewId: targetId, byName: crew.name, userId: game.user.id });
   }
@@ -1488,7 +1492,7 @@
       ...bad.map((st) => ({ value: `st:${st.id}`, label: `Clear ${S.STATUSES[st.id].label}` }))];
     const pick = await chooseDlg("Patch Job", "What are you patching?", opts);
     if (!pick) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     if (game.user.isGM) await gmPatch(pick, crew.name);
     else emit({ type: "patch", toGM: true, pick, byName: crew.name, userId: game.user.id });
   }
@@ -1517,7 +1521,7 @@
     if (!spendCheck(pw)) return;
     const q = await promptText("Quick Ping", "One factual question about a contact — the GM answers truthfully");
     if (!q) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     await ChatMessage.create({
       content: `<b>Science / Sensors</b> · ${esc(crew.name)} — <b>Quick Ping</b><br>` +
                `<i>&ldquo;${esc(q)}&rdquo;</i><br><span style="opacity:.7">No roll. The GM answers truthfully.</span>`,
@@ -1539,7 +1543,7 @@
     const target = near.length === 1 ? near[0].id
       : await chooseDlg("Ram", "Which hull?", near.map((s) => ({ value: s.id, label: `${s.name} — ${shipDistance("gull", s.id)} sq` })));
     if (!target) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     if (game.user.isGM) await gmRam(target, crew.name);
     else emit({ type: "ram", toGM: true, shipId: target, byName: crew.name, userId: game.user.id });
   }
@@ -1568,7 +1572,7 @@
     if (!spendCheck(pw)) return;
     const res = await stationRollValue(crew, "cha", false);
     if (!res) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
     if (game.user.isGM) await gmSpool(res, crew.name);
     else emit({ type: "spool", toGM: true, total: res.total, die: res.die, byName: crew.name, userId: game.user.id });
   }
@@ -1619,7 +1623,7 @@
     const mod = abilityMod("int");
     const res = await stationRollValue(crew, "int", painted);
     if (!res) return;
-    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
 
     const result = S.scanResult(res.total - S.SCAN_DC);
     const facing = (() => { const a = shipPoint("gull"), b = shipPoint(ship.id); return a && b ? S.facingFrom(b, a) : null; })();
