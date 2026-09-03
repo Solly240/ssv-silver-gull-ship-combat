@@ -1943,8 +1943,21 @@
     // string at all, so `artRoot + art` was "" — and rebuilding her deck plan
     // (a button in the DECKS panel) would have wiped the floor out of the one
     // hand-made asset in the world.
-    const artOf = (doc) => doc?.levels?.contents?.[0]?.background?.src
-                        || doc?.background?.src || doc?._source?.background?.src || "";
+    // The deck art is a TILE — a transparent PNG of the ship laid over a nebula
+    // BACKGROUND. Reading `background.src` gets you the star field, which is how
+    // a rebuild turned the Gull's decks into deep space. Prefer the interior
+    // tile, then the biggest tile, and only then the background.
+    const artOf = (doc) => {
+      const tiles = [...(doc?.tiles ?? [])].map((t) => ({
+        src: t.texture?.src || t.img || "", area: (Number(t.width) || 0) * (Number(t.height) || 0) }))
+        .filter((t) => t.src);
+      const interior = tiles.filter((t) => /interior/i.test(t.src)).sort((a, b) => b.area - a.area)[0];
+      if (interior) return interior.src;
+      const biggest = tiles.sort((a, b) => b.area - a.area)[0];
+      // A tile has to actually be the floor, not a thruster decal in the corner.
+      if (biggest && biggest.area > (Number(doc.width) || 0) * (Number(doc.height) || 0) * 0.1) return biggest.src;
+      return doc?.levels?.contents?.[0]?.background?.src || doc?.background?.src || "";
+    };
     const sources = [];
     const missing = [];
     for (const k of deckKeys) {
