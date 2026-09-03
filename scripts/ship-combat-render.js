@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.24.0";
+  S.VERSION = "0.24.1";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -3027,8 +3027,12 @@
 
     if (!stId || !crew) {
       rightEl.innerHTML = `<div class="con-head"><span class="con-title">STATION</span>${picker}${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
-        `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it." : "You're not manning a station yet. Join combat and pick a station to see its controls here."}</div>`;
+        // The DECKS switch belongs here too: walking around the ship is a normal
+        // thing to do, and it should not require being in a fight to reach it.
+        `<div style="padding:0 0 10px">${spaceDecksToggle(false)}</div>` +
+        `<div class="con-empty">${kctx.isGM ? "No station selected — pick a manned station to drive it, or switch to DECKS to walk the ship." : "You're not manning a station yet. Join combat and pick a station to see its controls here — or switch to DECKS to walk the ship."}</div>`;
       rightEl.querySelector(".con-x").onclick = () => kctx.close();
+      rightEl.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => kctx.setView(b.dataset.view); });
       const inv0 = rightEl.querySelector("[data-inv]"); if (inv0) inv0.onclick = () => kctx.toggleInv();
       const gm0 = rightEl.querySelector("[data-gm]"); if (gm0) gm0.onclick = () => kctx.toggleGM();
       const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
