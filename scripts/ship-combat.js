@@ -1557,14 +1557,14 @@
       content: `<b>Captain</b> · ${esc(byName)} — <b>RAM</b> on <b>${esc(sh.name)}</b>. The Gull goes in nose-first.`,
       speaker: { alias: "SSV Silver Gull" }, rolls: [roll] });
     // Ignores their shield facing entirely — that is the whole point of a ram.
-    const res = await gmApplyDamage(shipId, roll.total, facing, { ignoreShields: true, type: "kinetic" });
+    await gmApplyDamage(shipId, roll.total, facing, { ignoreShields: true, type: "kinetic" });
+    // The recoil and the commitment go in ONE write. Applying the status in a
+    // separate pass raced gmApplyDamage's own read and was silently discarded.
     const back = Math.floor(roll.total / 4);
-    S.applyStatus2Gull("ramming_committed");
-    await gmApplyDamage("gull", back, "fore", { ignoreShields: true, type: "kinetic" });
-    await ChatMessage.create({ content: `The Gull takes <b>${back}</b> back from the impact.`, speaker: { alias: "SSV Silver Gull" } });
+    await gmApplyDamage("gull", back, "fore", { ignoreShields: true, type: "kinetic",
+      alsoStatus: { id: "ramming_committed", src: byName } });
+    await ChatMessage.create({ content: `The Gull takes <b>${back}</b> back from the impact, and is <b>committed</b> — no changing course this round.`, speaker: { alias: "SSV Silver Gull" } });
   }
-  // Small helper so the ram can mark the Gull without a round-trip.
-  S.applyStatus2Gull = (id) => { try { const st = getState(); S.applyStatus(st, id, { round: getCombat().round }); setState(st); } catch (e) {} };
 
   /** Captain: spool the hyperfold drive. Three successes and the fight is over. */
   async function runFlee(crew, isBonus) {
@@ -1782,6 +1782,9 @@
 
     const res = S.resolveDamage(sh, raw, facing, opts);
     sh.hull.cur = Math.max(0, sh.hull.cur - res.final);
+    // Callers that need a status set at the same moment ride this write rather
+    // than issuing their own, which would race this function's read.
+    if (opts.alsoStatus) S.applyStatus(sh, opts.alsoStatus.id, { round: next.round, src: opts.alsoStatus.src || "" });
 
     let outcome = "";
     if (sh.hull.cur <= 0 && !isGull) {
