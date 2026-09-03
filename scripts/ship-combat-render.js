@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.22.3";
+  S.VERSION = "0.23.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -164,15 +164,55 @@
       bonus: [{ id: "ping", name: "Quick Ping", type: "ping", text: "No roll. Ask the GM one factual question about a contact and get a truthful answer. This is the ability that found the Apostles three self-destruct modules." }]
     },
     cloaking: {
-      main: [N("engage", "Engage Cloak", "Enemy attacks at disadvantage until you fire or take damage."), N("burst", "Cloak Burst", "Undetectable for 1 round."), N("phase", "Phase Shift", "Auto-dodge one attack."), N("decoy", "Decoy Drop", "Drop a decoy to misdirect.")],
-      bonus: [N("stealth", "Stealth Debuff", "Impose a stealth-based debuff on the enemy.")]
+      main: [
+        { id: "engage", name: "Engage Cloak", type: "cloak", cloak: "engage",
+          text: "The Gull goes dark. Attacks against her have disadvantage until she fires. Taking damage no longer breaks it — that is the station's perk." },
+        { id: "burst", name: "Cloak Burst", type: "cloak", cloak: "burst",
+          text: "One round of true invisibility: nothing can target the Gull at all. Ends at the start of your next turn." },
+        { id: "phase", name: "Phase Shift", type: "cloak", cloak: "phase",
+          text: "Bank a phase charge. The next attack that would hit the Gull simply does not — resolved after the damage roll, so you watch it be undone." },
+        { id: "decoy", name: "Decoy Drop", type: "cloak", cloak: "decoy",
+          text: "Drop a decoy. The next enemy shot at the Gull hits it instead of her." }
+      ],
+      bonus: [{ id: "stealth", name: "Stealth Debuff", type: "cloak", cloak: "stealth",
+        text: "Ghost their sensors — one contact's next scan of you fails outright." }]
     },
-    turret_flak: { main: [N("attack", "Flak Spread", "Hit up to 3 targets; anti-swarm point-defense."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
-    turret_autocannon: { main: [N("attack", "Armor-Piercing Shot", "Ignores armor AC; Called Shots ignore the −5."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
-    turret_plasma: { main: [N("attack", "Plasma Shot", "Auto-inflicts Shields Down; +1d6 vs already-Shields-Down."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
-    turret_cryo: { main: [N("attack", "Cryo-Beam", "Inflicts Frozen/Brittle; frozen take double from kinetic."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
-    turret_ion: { main: [N("attack", "Ion Shot", "Inflicts Engines Disabled or Shields Down; advantage vs disabled."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] },
-    turret_gravity: { main: [N("attack", "Gravity Well", "Grapple/Crush up to 2–3 targets; crushed take double from Rams."), N("adjust", "Adjust Aim", "Line up a better shot.")], bonus: [] }
+    turret_flak: {
+      main: [{ id: "flakspread", name: "Flak Spread", type: "turret", turret: "turret_flak",
+        text: "Up to three targets in the arc, each taking the roll. Also gives a free shot at anything trying to board." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    },
+    turret_autocannon: {
+      main: [{ id: "apshot", name: "Armor-Piercing Shot", type: "turret", turret: "turret_autocannon",
+        text: "Ignores armour entirely, and a Called Shot from this mount costs no accuracy." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    },
+    turret_plasma: {
+      main: [{ id: "plasmashot", name: "Plasma Shot", type: "turret", turret: "turret_plasma",
+        text: "Auto-inflicts Shields Down; +1d6 against a hull whose shields are already gone." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    },
+    turret_cryo: {
+      main: [{ id: "cryobeam", name: "Cryo-Beam", type: "turret", turret: "turret_cryo",
+        text: "Inflicts Frozen — the next kinetic hit on them has advantage and deals double." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    },
+    turret_ion: {
+      main: [{ id: "ionshot", name: "Ion Shot", type: "turret", turret: "turret_ion",
+        text: "Inflicts Engines Disabled or Shields Down, your choice; advantage against anything already disabled." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    },
+    turret_gravity: {
+      main: [{ id: "gravwell", name: "Gravity Well", type: "turret", turret: "turret_gravity",
+        text: "Grapples up to three contacts — no movement, and attacks against them have advantage." }],
+      bonus: [{ id: "adjust", name: "Adjust Aim", type: "adjust",
+        text: "Walk the mount onto the target: +2 to hit with this turret this round." }]
+    }
   };
   S.stationActions = (id) => S.STATION_ACTIONS[id] || { main: [], bonus: [] };
   // Pilot maneuver → Movement Points (base 5/3/2 + the +1 perk) + a ship-AC modifier. Chosen as the Main action.
@@ -204,7 +244,55 @@
     { id: "flak",       label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 2, longMax: 4,  longNote: "−5 & half dmg" },
     { id: "autocannon", label: "Heavy Autocannon",  toHit: 3, damage: "4d6", shortMax: 4, longMax: 10, longNote: "no penalty" }
   ];
-  S.gun = (id) => S.GUNS.find((g) => g.id === id) || null;
+  S.gun = (id) => S.GUNS.find((g) => g.id === id) || (S.TURRETS || []).map((t) => t.gun).find((g) => g.id === id) || null;
+  /* ---------------------------------------------------------------------- */
+  /*  The six rebuildable turrets                                            */
+  /*                                                                          */
+  /*  These are the blueprints sheared off in the crash. Each is a station    */
+  /*  (10-15) AND a mount with its own gun, its own HP pool, and a signature  */
+  /*  that does something the wing guns cannot. A turret is only usable once  */
+  /*  it has been BUILT — the module reads that from shipState.turrets, which */
+  /*  the journal module's "Rebuild Turrets" quest drives.                    */
+  /* ---------------------------------------------------------------------- */
+
+  S.TURRET_HP_MAX = 18;
+  S.TURRETS = [
+    { id: "turret_flak", station: "turret_flak", name: "Light Flak Turret", num: 1,
+      gun: { id: "t_flak", label: "Light Flak Turret", toHit: 5, damage: "2d6", shortMax: 3, longMax: 6, longNote: "−5 & half dmg" },
+      signature: "spread", blurb: "Anti-swarm point defence. Hits up to three contacts, and shoots at boarders for free." },
+    { id: "turret_autocannon", station: "turret_autocannon", name: "Heavy Autocannon", num: 2,
+      gun: { id: "t_auto", label: "Heavy Autocannon", toHit: 3, damage: "4d6", shortMax: 5, longMax: 12, longNote: "no penalty" },
+      signature: "pierce", blurb: "Armour-piercing. Ignores armour, and its Called Shots cost no accuracy." },
+    { id: "turret_plasma", station: "turret_plasma", name: "Plasma Casing Cannon", num: 3,
+      gun: { id: "t_plasma", label: "Plasma Casing Cannon", toHit: 4, damage: "3d8", shortMax: 3, longMax: 8, longNote: "−5 & half dmg" },
+      signature: "shieldbreak", blurb: "Shield-breaker. Auto-inflicts Shields Down, and hits harder once they are." },
+    { id: "turret_cryo", station: "turret_cryo", name: "Liquid Nitrogen Cryo-Beam", num: 4,
+      gun: { id: "t_cryo", label: "Cryo-Beam", toHit: 4, damage: "2d8", shortMax: 2, longMax: 5, longNote: "−5 & half dmg" },
+      signature: "freeze", blurb: "Brittle-shatter. Freezes the target: the next kinetic hit has advantage and doubles." },
+    { id: "turret_ion", station: "turret_ion", name: "Ion Charge Cannon", num: 5,
+      gun: { id: "t_ion", label: "Ion Charge Cannon", toHit: 4, damage: "2d10", shortMax: 4, longMax: 9, longNote: "−5 & half dmg" },
+      signature: "emp", blurb: "EMP disruptor. Disables engines or drops shields, your choice." },
+    { id: "turret_gravity", station: "turret_gravity", name: "Gravity Well Projector", num: 6,
+      gun: { id: "t_grav", label: "Gravity Well Projector", toHit: 3, damage: "2d6", shortMax: 2, longMax: 6, longNote: "−5 & half dmg" },
+      signature: "grapple", blurb: "Pull and crush. Grapples up to three contacts and makes them easy to hit." }
+  ];
+  S.turret = (id) => S.TURRETS.find((t) => t.id === id || t.station === id) || null;
+  /** Has this turret been rebuilt? */
+  S.turretBuilt = (state, id) => !!state?.turrets?.[id]?.built;
+  S.turretHp = (state, id) => state?.turrets?.[id]?.hp ?? { cur: 0, max: S.TURRET_HP_MAX };
+  /** A turret can fire if it is built, has HP, and the ship's Weapons are up. */
+  S.turretOnline = function (state, id) {
+    if (!S.turretBuilt(state, id)) return false;
+    if ((S.turretHp(state, id).cur ?? 0) <= 0) return false;
+    return S.systemWorks(state, "weapons");
+  };
+  /** Every turret gun currently available to fire, for the gunner's picker. */
+  S.availableGuns = function (state) {
+    const out = S.GUNS.slice();
+    for (const t of S.TURRETS) if (S.turretOnline(state, t.id)) out.push({ ...t.gun, turret: t.id });
+    return out;
+  };
+
   S.QUICK_AIM_BONUS = 2;   // Quick Aim: spend the Bonus action for +2 to hit
   // Power a station action draws from the reactor (players only; the GM never spends). Keyed by action id; default 0.
   // Movement is fuel (above), not power; repair/boarding/pilot-maneuvers are free; everything that "runs on power" pays here.
@@ -578,8 +666,8 @@
         target: String(c.target || ""),   // gunner: which enemy ship this gun is laid on (persists across turns)
         // What the Captain and Engineer have handed this seat for the round.
         buff: (c.buff && typeof c.buff === "object")
-          ? { flat: Math.max(0, Number(c.buff.flat) || 0), adv: !!c.buff.adv, die: String(c.buff.die || "") }
-          : { flat: 0, adv: false, die: "" },
+          ? { flat: Math.max(0, Number(c.buff.flat) || 0), adv: !!c.buff.adv, die: String(c.buff.die || ""), turretAim: !!c.buff.turretAim }
+          : { flat: 0, adv: false, die: "", turretAim: false },
         prof: (c.prof && typeof c.prof === "object") ? { ...c.prof } : {}   // {rollActionId: true} — persists
       };
     }
@@ -975,6 +1063,10 @@
       fuel:  { cur: 500, max: 500 },   // baseline tank; GM can raise it (upgrades) via Tune
       power: { cur: 500, max: 500 },
       tuning: { fuelPerItem: 25, powerPerItem: 25, convertFuel: 10, convertPower: 50 },
+      // The six rebuildable turrets. `built` is driven by the journal module's
+      // "Rebuild Turrets" quest; each has its own HP pool, and at 0 an Emergency
+      // Overdrive keeps it at 1 until the Engineer gets to it.
+      turrets: {},
       // The Gull carries statuses exactly like every enemy does — S.statusMods,
       // S.expireStatuses and S.resolveDamage all read this. Leaving it out of the
       // ship's own state meant the player ship could not catch fire, be boarded,
@@ -1011,6 +1103,17 @@
         convertFuel:  Number(stored.tuning?.convertFuel  ?? d.tuning.convertFuel),
         convertPower: Number(stored.tuning?.convertPower ?? d.tuning.convertPower)
       },
+      turrets: (() => {
+        const out = {};
+        for (const t of S.TURRETS) {
+          const st = stored.turrets?.[t.id] || {};
+          const M = S.TURRET_HP_MAX;
+          out[t.id] = { built: !!st.built,
+            hp: { cur: Math.max(0, Math.min(Number(st.hp?.cur ?? (st.built ? M : 0)), M)), max: M },
+            mode: st.mode === "detached" ? "detached" : "attached" };
+        }
+        return out;
+      })(),
       statuses: S.normalizeStatuses(stored.statuses),
       armour: Math.max(0, Number(stored.armour) || 0),
       resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
@@ -2721,11 +2824,23 @@
         : `<div class="con-hint">Click a shield, then a side of the ship to allocate it. Free, no action cost, announced in chat.</div>`) +
       `<div class="con-sec"><div class="con-h">CREW</div><div class="con-btns">` +
         `<button class="con-btn" data-act="prof">Proficiency…</button></div>` +
-        `<div class="con-hint">Tick which rolls each crew member is proficient in — adds their character's proficiency bonus to that roll.</div></div>`;
+        `<div class="con-hint">Tick which rolls each crew member is proficient in — adds their character's proficiency bonus to that roll.</div></div>` +
+      // The six blueprints sheared off in the crash. Building one brings its
+      // station online, adds its gun to the gunners' list, and — because the map
+      // pack ships one PNG per mount — puts it on the ship's own art.
+      `<div class="con-sec"><div class="con-h">TURRETS</div><div class="con-btns">` +
+        S.TURRETS.map((t) => {
+          const b = S.turretBuilt(st, t.id), hp = S.turretHp(st, t.id);
+          const state = !b ? "not built" : hp.cur <= 0 ? "wrecked" : hp.cur < hp.max ? `${hp.cur}/${hp.max}` : "online";
+          return `<button class="con-btn${b && hp.cur > 0 ? " armed" : ""}" data-turret="${t.id}" title="${esc(t.blurb)}">` +
+                 `${t.num}. ${esc(t.name)} <small>· ${state}</small></button>`;
+        }).join("") +
+      `</div><div class="con-hint">Click to build or scrap a turret. A built mount joins the gunners' gun list and unlocks its own station.</div></div>`;
     rightEl.querySelector(".con-x").onclick = () => kctx.close();
     rightEl.querySelector('[data-act="stations"]').onclick = () => kctx.toggleGM();
     rightEl.querySelectorAll("[data-arm]").forEach((b) => { b.onclick = () => kctx.armShield(b.dataset.arm); });
     rightEl.querySelector('[data-act="prof"]').onclick = () => kctx.openProficiency();
+    rightEl.querySelectorAll("[data-turret]").forEach((b) => { b.onclick = () => kctx.toggleTurret && kctx.toggleTurret(b.dataset.turret); });
   }
 
   S.renderConsole = function (root, kctx) {
@@ -3352,6 +3467,36 @@
     const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
     ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
        "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
+
+    // --- turrets ------------------------------------------------------------
+    ok(S.TURRETS.length === 6, "six rebuildable turrets");
+    for (const t of S.TURRETS) {
+      ok(!!S.station(t.station), `${t.id} maps to a real station`);
+      ok(t.gun.shortMax < t.gun.longMax, `${t.id}'s gun has a sane range band`);
+      ok(!!S.gun(t.gun.id), `S.gun resolves ${t.id}'s gun`);
+      const acts = S.stationActions(t.station);
+      ok(acts.main.length === 1 && acts.main[0].type === "turret", `${t.station} has one real turret action`);
+      ok(acts.bonus.length === 1 && acts.bonus[0].type === "adjust", `${t.station} has Adjust Aim`);
+    }
+    const fresh = S.normalize({});
+    ok(Object.keys(fresh.turrets).length === 6, "a fresh ship tracks all six turrets");
+    ok(Object.values(fresh.turrets).every((t) => !t.built && t.hp.cur === 0), "…and none is built yet — they were sheared off in the crash");
+    ok(S.turretOnline(fresh, "turret_flak") === false, "an unbuilt turret cannot fire");
+    const built = S.normalize({ turrets: { turret_flak: { built: true, hp: { cur: 18, max: 18 } } } });
+    ok(S.turretOnline(built, "turret_flak") === true, "a built, undamaged turret can fire");
+    ok(S.availableGuns(built).length === 3, "…and joins the gunner's list alongside the two wing guns");
+    ok(S.availableGuns(fresh).length === 2, "with none built, only the two wing guns are offered");
+    const wrecked = S.normalize({ turrets: { turret_flak: { built: true, hp: { cur: 0, max: 18 } } } });
+    ok(S.turretOnline(wrecked, "turret_flak") === false, "a turret at 0 HP cannot fire");
+    const weaponsGone = S.normalize({ turrets: { turret_flak: { built: true, hp: { cur: 18, max: 18 } } },
+      systemHp: { weapons: { cur: 0, max: 5 } } });
+    ok(S.turretOnline(weaponsGone, "turret_flak") === false, "no turret fires while Weapons are down");
+
+    // --- cloaking -----------------------------------------------------------
+    const cloakActs = S.stationActions("cloaking");
+    ok(cloakActs.main.length === 4 && cloakActs.main.every((a) => a.type === "cloak"), "four real cloak actions");
+    ok(cloakActs.bonus.length === 1 && cloakActs.bonus[0].type === "cloak", "…and a real bonus");
+    ok(cloakActs.main.map((a) => a.cloak).join(",") === "engage,burst,phase,decoy", "each names its own effect");
 
     // --- crew buffs and the spool survive normalize ------------------------
     const buffed = S.normalizeCombat({ spool: 2, gunBuff: "1d6",

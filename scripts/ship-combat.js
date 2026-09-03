@@ -121,7 +121,27 @@
       // GM Actions panel (GM-only, direct control + chat, no action economy)
       gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
       armShield: (slot) => { armed = (armed === slot ? null : slot); renderConsole(); },
-      openProficiency: () => gmProficiencyDialog(),
+
+      // Build or scrap a turret. Also flips its station on, so the seat appears
+      // in the picker the moment the mount exists.
+      toggleTurret: async (id) => {
+        if (!game.user.isGM) return;
+        const st = S.normalize(getState());
+        const t = st.turrets[id]; if (!t) return;
+        t.built = !t.built;
+        t.hp = { cur: t.built ? S.TURRET_HP_MAX : 0, max: S.TURRET_HP_MAX };
+        await setState(st);
+        const c = getCombat();
+        c.rolesEnabled[id] = t.built;
+        await saveCombat(c);
+        const meta = S.turret(id);
+        await ChatMessage.create({
+          content: t.built
+            ? `<b>${esc(meta.name)}</b> is rebuilt and online. <i>${esc(meta.blurb)}</i>`
+            : `<b>${esc(meta.name)}</b> has been scrapped.`,
+          speaker: { alias: "SSV Silver Gull" } });
+        refreshUI();
+      },      openProficiency: () => gmProficiencyDialog(),
       // Inventory
       invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
       invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
@@ -651,6 +671,9 @@
     if (a.type === "ping") { await runPing(crew, isBonus); return; }
     if (a.type === "ram") { await runRam(crew, isBonus); return; }
     if (a.type === "flee") { await runFlee(crew, isBonus); return; }
+    if (a.type === "cloak") { await runCloak(crew, isBonus, a.cloak); return; }
+    if (a.type === "turret") { await runTurret(crew, isBonus, a.turret); return; }
+    if (a.type === "adjust") { await runAdjustAim(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -1051,6 +1074,9 @@
       case "patch":          gmPatch(msg.pick, msg.byName); break;
       case "ram":            gmRam(msg.shipId, msg.byName); break;
       case "spool":          gmSpool({ total: msg.total, die: msg.die }, msg.byName); break;
+      case "cloak":          gmCloak(msg.which, msg.byName); break;
+      case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
+      case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
       case "applyDamage":    gmApplyDamage(msg.shipId, msg.raw, msg.facing, msg.opts || {}); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
       case "gunHitCheck":    gmGunHitCheck(msg); break;
@@ -1406,6 +1432,147 @@
   /* ====================================================================== */
   /*  Fleet Command (key F)                                                 */
   /* ====================================================================== */
+
+  /* ---- Cloaking station -------------------------------------------------- */
+
+  const CLOAK_STATUS = { engage: "cloaked", burst: "cloaked", phase: null, decoy: null, stealth: null };
+
+  async function runCloak(crew, isBonus, which) {
+    if (!S.systemWorks(getState(), "cloak"))
+      return ui.notifications?.warn("The cloaking generator is offline — repair it first.");
+    const pw = S.ACTION_POWER[which] || 0;
+    if (!spendCheck(pw)) return;
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmCloak(which, crew.name);
+    else emit({ type: "cloak", toGM: true, which, byName: crew.name, userId: game.user.id });
+  }
+  async function gmCloak(which, byName) {
+    if (!game.user.isGM) return;
+    const ship = S.normalize(getState());
+    const round = getCombat().round || 1;
+    let msg = "";
+    if (which === "engage") { S.applyStatus(ship, "cloaked", { round, src: byName }); msg = "The Gull goes dark. Attacks against her have disadvantage until she fires."; }
+    else if (which === "burst") { S.applyStatus(ship, "cloaked", { round, src: byName, data: { burst: true } }); msg = "<b>Cloak burst</b> — for one round nothing can target her at all."; }
+    else if (which === "phase") { ship.phaseCharges = Math.min(3, (ship.phaseCharges || 0) + 1); msg = `Phase charge banked (<b>${ship.phaseCharges}</b>). The next attack that would hit simply does not.`; }
+    else if (which === "decoy") { ship.decoys = Math.min(3, (ship.decoys || 0) + 1); msg = `Decoy away (<b>${ship.decoys}</b> running). The next shot at the Gull hits it instead.`; }
+    else if (which === "stealth") { msg = "Their sensors are ghosted — the next scan of the Gull fails outright."; ship.scanBlock = true; }
+    await setState(ship);
+    await ChatMessage.create({ content: `<b>Cloaking Officer</b> · ${esc(byName)} — ${msg}`, speaker: { alias: "SSV Silver Gull" } });
+    refreshUI();
+  }
+
+  /* ---- Turret stations --------------------------------------------------- */
+
+  /**
+   * A turret shot. Same resolution path as the wing guns — target, range,
+   * facing, AC, damage — plus the mount's own signature on a hit.
+   */
+  async function runTurret(crew, isBonus, turretId) {
+    const t = S.turret(turretId); if (!t) return;
+    const ship = S.normalize(getState());
+    if (!S.turretBuilt(ship, t.id)) return ui.notifications?.warn(`The ${t.name} has not been rebuilt yet.`);
+    if (!S.turretOnline(ship, t.id)) return ui.notifications?.warn(`The ${t.name} is offline.`);
+    const pw = S.ACTION_POWER.attack;
+    if (!spendCheck(pw)) return;
+
+    const hostiles = Object.values(getCombat().ships).filter((s) => s.id !== "gull" && s.disposition !== "ally" && !s.outcome);
+    if (!hostiles.length) return ui.notifications?.warn("Nothing to shoot at.");
+    const target = hostiles.length === 1 ? hostiles[0].id
+      : await chooseDlg(t.name, "Which contact?", hostiles.map((s) => ({ value: s.id, label: `${s.name} — ${shipDistance("gull", s.id) ?? "?"} sq` })));
+    if (!target) return;
+
+    const str = strMod();
+    const res = await gunToHitDialog(crew, t.gun, str, { noAim: true });
+    if (!res) return;
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmTurretShot(crew.id, t.id, target, res, str);
+    else emit({ type: "turretShot", toGM: true, crewId: crew.id, turretId: t.id, shipId: target, total: res.total, die: res.die, str, byName: crew.name, userId: game.user.id });
+  }
+
+  async function gmTurretShot(crewId, turretId, shipId, res, str) {
+    if (!game.user.isGM) return;
+    const t = S.turret(turretId); if (!t) return;
+    const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh) return;
+    const crew = combat.crew[crewId] || { name: "Gunner" };
+    const from = shipPoint("gull"), me = shipPoint(shipId);
+    const facing = from && me ? S.facingFrom(me, from) : "fore";
+    const dist = shipDistance("gull", shipId);
+    const range = S.rangePenalty(t.gun, dist ?? 0);
+    if (dist != null && !range.ok) {
+      await ChatMessage.create({ content: `<b>${esc(t.name)}</b> — <b>${esc(sh.name)}</b> is out of range (${dist} sq, max ${t.gun.longMax}).`, speaker: gunSpeaker });
+      return;
+    }
+    const adjust = crew.buff?.turretAim ? 2 : 0;
+    const ac = S.shipAC(sh, Object.values(sh.crew || {}));
+    const total = res.total + range.toHit + adjust;
+    const crit = res.die === 20;
+    const hit = total >= ac[facing] || crit;
+    const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${range.toHit ? ` · long ${range.toHit}` : ""}${adjust ? ` · Adjust Aim +${adjust}` : ""}`;
+    if (!hit) {
+      await ChatMessage.create({ content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.`, speaker: gunSpeaker });
+      return;
+    }
+    // Shield-breaker hits harder into a hull that is already open.
+    const alreadyDown = S.hasStatus(sh, "shields_down") || !sh.shield.on;
+    const bonusDie = (t.signature === "shieldbreak" && alreadyDown) ? " + 1d6" : "";
+    const dmgRoll = await new Roll(`${t.gun.damage} + ${str}${bonusDie}`).evaluate();
+    let raw = Math.max(1, dmgRoll.total);
+    if (range.halve) raw = Math.floor(raw / 2);
+    await ChatMessage.create({
+      content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>`,
+      speaker: gunSpeaker, rolls: [dmgRoll] });
+    await gmApplyDamage(shipId, raw, facing, { crit, type: t.signature === "emp" ? "energy" : "kinetic",
+      ignoreArmour: t.signature === "pierce" });
+    await gmTurretSignature(t, shipId, crew.name);
+    refreshUI();
+  }
+
+  /** What each mount does beyond damage. This is why you rebuilt it. */
+  async function gmTurretSignature(t, shipId, byName) {
+    const next = getCombat(); const sh = next.ships[shipId]; if (!sh) return;
+    const round = next.round || 1;
+    let note = "";
+    switch (t.signature) {
+      case "shieldbreak":
+        sh.shield.on = false;
+        S.applyStatus(sh, "shields_down", { round, rounds: 1, src: t.name });
+        note = "Their shields blow out — <b>Shields Down</b>."; break;
+      case "freeze":
+        S.applyStatus(sh, "frozen", { round, src: t.name });
+        note = "Hull frosted — <b>Frozen</b>. The next kinetic hit has advantage and doubles."; break;
+      case "emp": {
+        const pick = await chooseDlg(t.name, "Which system does the charge take out?",
+          [{ value: "engines_disabled", label: "Engines — no movement or maneuver" },
+           { value: "shields_down", label: "Shields — the facing drops" }]);
+        if (pick) { S.applyStatus(sh, pick, { round, rounds: 1, src: t.name });
+          note = pick === "engines_disabled" ? "Their drive dies — <b>Engines Down</b>." : "Their shields drop — <b>Shields Down</b>."; }
+        break; }
+      case "grapple":
+        S.applyStatus(sh, "grappled", { round, rounds: 1, src: t.name });
+        note = "Caught in the well — <b>Grappled</b>. No movement, and attacks against them have advantage."; break;
+      case "spread": note = "Flak spread — the GM may apply the same roll to two more contacts in the arc."; break;
+      case "pierce": note = "Armour-piercing — their plating did nothing."; break;
+    }
+    await saveCombat(next);
+    if (note) await ChatMessage.create({ content: `<b>${esc(t.name)}</b> — ${note}`, speaker: gunSpeaker });
+  }
+
+  /** Adjust Aim: +2 with this mount this round. */
+  async function runAdjustAim(crew, isBonus) {
+    const pw = S.ACTION_POWER.adjust;
+    if (!spendCheck(pw)) return;
+    await consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+    if (game.user.isGM) await gmAdjustAim(crew.id, crew.name);
+    else emit({ type: "adjustAim", toGM: true, crewId: crew.id, byName: crew.name, userId: game.user.id });
+  }
+  async function gmAdjustAim(crewId, byName) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const c = next.crew[crewId]; if (!c) return;
+    c.buff = c.buff || {}; c.buff.turretAim = true;
+    await saveCombat(next);
+    await ChatMessage.create({ content: `<b>${esc(byName)}</b> walks the mount onto the target — <b>+2</b> to hit this round.`, speaker: gunSpeaker });
+    refreshUI();
+  }
 
   /* ---- the station actions that used to be chat lines -------------------- */
 
