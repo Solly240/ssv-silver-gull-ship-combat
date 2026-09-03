@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.25.3";
+  S.VERSION = "0.26.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -67,6 +67,12 @@
   };
   // A system "works" only at full HP; damaged/destroyed = doesn't work.
   S.systemWorks = (state, id) => state?.systems?.[id] === "working";
+  /** Does this record even carry a condition for that system? A player's view of
+   *  an enemy only gains `systems` at the SYSTEMS scan tier, so before that the
+   *  answer to "do her shields work?" is UNKNOWN, not "no". Treating unknown as
+   *  broken drew every arc on a freshly-scanned enemy as unshielded — directly
+   *  contradicting the VITALS readout the crew had just paid an action for. */
+  S.systemKnown = (state, id) => !!(state && state.systems && id in state.systems);
 
   S.STATE_META = {
     working:   { label: "ONLINE",       c: "#38e1c4" },
@@ -465,7 +471,9 @@
       if (def.incomingAdv) out.incomingAdv += def.incomingAdv;
       if (def.scanAdv) out.scanAdv += def.scanAdv;
       if (def.incomingMult) out.incomingMult *= def.incomingMult;
-      if (def.noShield) out.noShield = true;
+      // A facing-scoped Shields Down is not a ship-wide one — S.shieldDR reads the
+      // facing off the status itself.
+      if (def.noShield && !(s.id === "shields_down" && s.data && s.data.facing)) out.noShield = true;
       if (def.noMove) out.noMove = true;
       if (def.dot) out.dots.push({ id: s.id, formula: def.dot });
     }
@@ -493,10 +501,12 @@
     let manMod = 0, manLabel = "";
     const crew = S.crewList(crewOrCombat);
     const mods = S.statusMods(state);
-    if (crew.length && !mods.noMove) {
+    if (crew.length) {
       const pilot = crew.find((c) => c && c.station === "pilot" && c.maneuver);
       const m = pilot && S.MANEUVERS[pilot.maneuver];
-      if (m) { manMod = m.ac; manLabel = m.label; }
+      // Pinned ships lose the BENEFIT of a posture, never its cost: grappling a
+      // ship that had committed to Aggressive used to raise its AC by 4.
+      if (m && (!mods.noMove || m.ac < 0)) { manMod = m.ac; manLabel = m.label; }
     }
     const ac = base + manMod + mods.ac;
     const out = { base, maneuver: manMod, maneuverLabel: manLabel, status: mods.ac, dr: {} };
@@ -514,8 +524,14 @@
   S.shieldDR = function (state, facing) {
     const none = { half: false, flat: 0, label: "" };
     if (!state) return none;
-    if (!S.systemWorks(state, "shields")) return none;
-    if (S.statusMods(state).noShield) return none;
+    // Unknown shields are assumed to work — see S.systemKnown.
+    if (S.systemKnown(state, "shields") && !S.systemWorks(state, "shields")) return none;
+    const mods = S.statusMods(state);
+    if (mods.noShield) return none;
+    // A grazing miss drops ONE facing for a round. Ship-wide Shields Down has no
+    // facing on it and is handled above; a facing-scoped drop only kills its own arc.
+    const down = S.getStatus(state, "shields_down");
+    if (down && down.data && down.data.facing === facing) return none;
     const sh = state.shield || {};
     const half = !!(sh.on && sh.facing === facing);
     const flat = sh.secondary === facing ? S.MICRO_DR : 0;
@@ -589,8 +605,14 @@
     const armour = ignoreArmour ? 0 : Math.max(0, Number(ship?.armour) || 0);
     if (armour) { dmg = Math.max(0, dmg - armour); steps.push({ label: `armour −${armour}`, value: dmg }); }
 
+    // Statuses whose whole scope is "the next hit" are spent by this hit. The
+    // function stays pure — it reports what to clear, and gmApplyDamage clears it
+    // in the same write. Before this, `frozen` had no expiry clock at all and
+    // doubled every hit for the rest of the fight.
+    const consumed = S.normalizeStatuses(ship?.statuses)
+      .filter((st) => S.STATUSES[st.id]?.scope === "next-hit").map((st) => st.id);
     return { final: Math.max(0, dmg), facing, absorbed: Math.max(0, Math.round(Number(raw) || 0) - Math.max(0, dmg)),
-             shielded: shield.half || shield.flat > 0, steps };
+             shielded: shield.half || shield.flat > 0, steps, consumed };
   };
 
   /* ---------------------------------------------------------------------- */
@@ -610,7 +632,12 @@
   S.rangePenalty = function (gun, distance) {
     const band = S.rangeBand(gun, distance);
     if (band === "close") return { band, toHit: 0, halve: false, ok: true };
-    if (band === "long") return { band, toHit: S.LONG_TO_HIT, halve: true, ok: true };
+    if (band === "long") {
+      // The Heavy Autocannon is authored `longNote: "no penalty"`, and the gunner's
+      // own panel says so — but the maths charged it −5 and halved its damage anyway.
+      const free = /no penalty/i.test(String(gun?.longNote || ""));
+      return { band, toHit: free ? 0 : S.LONG_TO_HIT, halve: !free, ok: true };
+    }
     return { band, toHit: 0, halve: false, ok: false };
   };
 
@@ -797,8 +824,11 @@
       blurb: "Slower, tougher, hits from more arcs." },
     { id: "cruiser",   name: "Cruiser",    maxSide: 90, token: [3, 3], scale: 1.0,  hull: [110, 110], ac: 11, crew: [16, 30], mp: 3, sections: 4,
       blurb: "Four sections, each with its own guns and its own hull. Kill it a quarter at a time." },
-    { id: "capital",   name: "Capital",    maxSide: Infinity, token: [4, 4], scale: 1.0, hull: [0, 0], ac: 10, crew: [30, 60], mp: 2, isLevel: true,
-      blurb: "Not an enemy — a level. No hull bar; fight its batteries, board it, blow its reactor." }
+    // A capital is fought as a level — you board her and kill the reactor — but she
+    // still needs a real hull number: a (0, 0) band spawned the Platanus DERELICT
+    // before the first shot, with a 0/1 bar on her card.
+    { id: "capital",   name: "Capital",    maxSide: Infinity, token: [4, 4], scale: 1.0, hull: [900, 1400], ac: 10, crew: [30, 60], mp: 2, isLevel: true,
+      blurb: "A level, not a duel. Fight her batteries, board her, blow the reactor — chewing 1200 hull off is not the plan." }
   ];
   S.shipClass = (id) => S.SHIP_CLASSES.find((c) => c.id === id) || null;
   /** Pick a class from the hull's real footprint [w,h] in grid squares. */
@@ -816,6 +846,48 @@
     if (aspect >= 1.5) return { width: tw, height: Math.max(th, Math.round(tw * Math.min(aspect, 2.2))), scale: cls.scale, cls: cls.id };
     if (aspect <= 1 / 1.5) return { width: Math.max(tw, Math.round(th * Math.min(1 / aspect, 2.2))), height: th, scale: cls.scale, cls: cls.id };
     return { width: tw, height: th, scale: cls.scale, cls: cls.id };
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  Deck plans, and the skins that do not have one                          */
+  /*                                                                          */
+  /*  Map packs ship POSE skins — "Landed", "TuckedUp", "Breached Stage 2",    */
+  /*  "Original Deployed" — that carry an exterior and no interior at all, and */
+  /*  a handful of colour skins that are simply missing an upper deck. Picking */
+  /*  one of those at spawn used to mean the party physically could not board  */
+  /*  that ship: buildDeckScene found no decks and gave up with a warning.     */
+  /*                                                                          */
+  /*  A ship's interior does not change because it is painted differently, so  */
+  /*  the missing decks are borrowed from whichever skin actually has them     */
+  /*  ("Original" winning ties). Every skin of every hull is boardable.        */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * The deck plan for one skin, with gaps filled from a donor skin.
+   * Returns `{ decks, borrowed, donor, complete }` — `decks` keyed by deck
+   * number exactly like the raw skin record, so callers substitute it directly.
+   */
+  S.decksForSkin = function (hull, skin) {
+    const skins = (hull && hull.skins) || {};
+    const want = Math.max(1, Number(hull && hull.decks) || 1);
+    const own = (skins[skin] && skins[skin].decks) || {};
+
+    let donor = null, donorName = "", best = -1;
+    for (const [name, sk] of Object.entries(skins)) {
+      const n = Object.keys((sk && sk.decks) || {}).length;
+      // Strictly better, or equally good and canonically named.
+      if (n > best || (n === best && name === "Original")) { best = n; donor = sk; donorName = name; }
+    }
+
+    const decks = {};
+    let borrowed = 0;
+    for (let d = 1; d <= want; d++) {
+      const k = String(d);
+      if (own[k]) decks[k] = own[k];
+      else if (donor && donor.decks && donor.decks[k]) { decks[k] = { ...donor.decks[k], borrowedFrom: donorName }; borrowed++; }
+    }
+    const keys = Object.keys(decks);
+    return { decks, borrowed, donor: borrowed ? donorName : "", complete: keys.length >= want, count: keys.length };
   };
 
   S.DOCTRINES = {
@@ -883,6 +955,115 @@
     return out;
   };
 
+  /* ---------------------------------------------------------------------- */
+  /*  Driving an enemy seat                                                   */
+  /*                                                                          */
+  /*  The GM's requirement is speed: pick a chair, press a button, move on.    */
+  /*  So the action list per seat is short, every entry does one legible thing */
+  /*  to numbers the model already holds, and gunners get one button per gun   */
+  /*  rather than a gun picker plus a fire button.                            */
+  /*                                                                          */
+  /*  Pure on purpose — the selftest holds every seat to producing at least    */
+  /*  one action, so a hull can never present an empty chair.                  */
+  /* ---------------------------------------------------------------------- */
+
+  S.ENEMY_SEAT_ACTIONS = {
+    captain: [
+      { id: "e_rally", label: "Rally", hint: "Shake off one status and steady the crew." },
+      { id: "e_focus", label: "Focus fire", hint: "Every gunner aboard gets +2 to hit until this ship's next turn." },
+      { id: "e_ram", label: "Ram", hint: "Commit to a collision. Both hulls take it." }
+    ],
+    pilot: [
+      { id: "e_close", label: "Close", hint: "Burn toward the Gull — one range band." },
+      { id: "e_open", label: "Open range", hint: "Fall back a band and present a fresh arc." },
+      { id: "e_about", label: "Come about", hint: "Rotate 90° to bring the shielded facing round." },
+      { id: "e_evade", label: "Evade", hint: "+3 AC until this ship's next turn." }
+    ],
+    engineer: [
+      { id: "e_repair", label: "Repair", hint: "Bring the worst-hurt system back by 2." },
+      { id: "e_reroute", label: "Reroute", hint: "The next shot from this ship carries +1d6." }
+    ],
+    shields_officer: [
+      { id: "e_shield", label: "Shields to the threat", hint: "Move the shield to the arc the Gull is actually on." },
+      { id: "e_jam", label: "Jam", hint: "The Gull's next gunnery roll has disadvantage." }
+    ],
+    science: [
+      { id: "e_lock", label: "Sensor lock", hint: "+2 to this ship's next attack roll." },
+      { id: "e_cm", label: "Countermeasures", hint: "The Gull's next scan of this hull has disadvantage." }
+    ],
+    "": [
+      { id: "e_brace", label: "Brace", hint: "A spare hand shores up a bulkhead — the next hit is reduced by 2." }
+    ]
+  };
+
+  /**
+   * The buttons for one enemy seat, given the ship's actual guns and condition.
+   * Gunners get one button per gun that is still online; a dead crew member and
+   * an unmanned chair both return nothing.
+   */
+  S.enemySeatActions = function (ship, crew) {
+    if (!ship || !crew || crew.dead) return [];
+    const st = crew.station || "";
+    if (st === "gunner_port" || st === "gunner_starboard") {
+      const guns = (ship.guns || []).filter((g) => g && g.id && S.gunOnline(ship, g.id));
+      if (!guns.length) return [{ id: "e_nogun", label: "No gun online", hint: "Every mount this ship has is down.", disabled: true }];
+      return guns.map((g) => ({
+        id: `e_fire:${g.id}`, label: `Fire — ${g.label || g.id}`,
+        hint: `${g.damage || "?"} damage, +${g.toHit ?? 0} to hit, ${g.shortMax ?? 0}–${g.longMax ?? 0} squares, ${g.arc || "fore"} arc.`
+      }));
+    }
+    const list = S.ENEMY_SEAT_ACTIONS[st] || S.ENEMY_SEAT_ACTIONS[""];
+    return list.map((a) => ({ ...a }));
+  };
+
+  /**
+   * What this ship would do on its own, from its doctrine and the range it is at.
+   * Returned as an ordered list of the same action ids the seats use, so `▶ Run`
+   * and hand-driving go down exactly one code path.
+   */
+  S.enemyStandingOrders = function (ship, { distance = 4 } = {}) {
+    if (!ship) return [];
+    const doc = String(ship.doctrine || "brawler");
+    const seatOf = (station) => S.liveCrew(ship).find((c) => c.station === station) || null;
+    const out = [];
+    const want = { brawler: 2, sniper: 8, ambusher: 3, boarder: 1, turtle: 4, escort: 3, predator: 2 }[doc] ?? 3;
+    const d = Number.isFinite(Number(distance)) ? Number(distance) : 4;
+
+    const pilot = seatOf("pilot");
+    if (pilot) {
+      if (d > want + 1) out.push({ crewId: pilot.id, action: "e_close", why: `${doc} — wants ${want} squares, is at ${d}` });
+      else if (d < want - 1) out.push({ crewId: pilot.id, action: "e_open", why: `${doc} — wants ${want} squares, is at ${d}` });
+      else out.push({ crewId: pilot.id, action: "e_about", why: `${doc} — in position, presenting a fresh arc` });
+    }
+    const shields = seatOf("shields_officer");
+    if (shields) out.push({ crewId: shields.id, action: "e_shield", why: "cover the arc the Gull is on" });
+
+    // An engineer with something broken fixes it; otherwise they overcharge a gun.
+    const eng = seatOf("engineer");
+    if (eng) {
+      const hurt = Object.entries(ship.systemHp || {}).some(([, hp]) => hp && hp.cur < hp.max);
+      out.push({ crewId: eng.id, action: hurt ? "e_repair" : "e_reroute", why: hurt ? "something aboard is broken" : "nothing to fix — overcharge a mount" });
+    }
+    const sci = seatOf("science");
+    if (sci) out.push({ crewId: sci.id, action: "e_lock", why: "lay a lock before the guns speak" });
+
+    // The pilot's order lands before the guns do, so judge range from where the
+    // ship will BE, not where it is.
+    const moved = out.find((o) => o.action === "e_close") ? d - 1
+                : out.find((o) => o.action === "e_open") ? d + 1 : d;
+    const usable = (ship.guns || []).filter((x) => x && x.id && S.gunOnline(ship, x.id)
+      && moved <= (Number(x.longMax) || 0));
+    let n = 0;
+    for (const st of ["gunner_port", "gunner_starboard"]) {
+      const g = seatOf(st); if (!g) continue;
+      // Give each gunner a different mount where the hull has one, so a frigate
+      // with four guns does not fire the same one twice.
+      const gun = usable[n] || usable[0];
+      if (gun) { out.push({ crewId: g.id, action: `e_fire:${gun.id}`, why: `${gun.label || gun.id} reaches ${moved} squares` }); n++; }
+    }
+    return out;
+  };
+
   S.DISPOSITIONS = ["hostile", "neutral", "ally"];
 
   S.defaultShip = function (over = {}) {
@@ -905,6 +1086,9 @@
       statuses: [],
       crew: {},
       boardingParty: 0,
+      // Focus Fire / Sensor Lock / Reroute all lay a to-hit bonus on this ship's
+      // next shot. It lives on the ship, not the seat, because any gunner spends it.
+      aimBonus: 0,
       morale: { cur: 4, max: 4 },      // Resolve. cur === null means it never breaks.
       revealed: { ac: false, shields: false, systems: false, crew: false, deckmap: 0 },
       // The documents and art this record is bound to. actorId in particular is
@@ -930,7 +1114,10 @@
       cls: S.shipClass(stored.cls) ? stored.cls : d.cls,
       doctrine: S.DOCTRINES[stored.doctrine] ? stored.doctrine : d.doctrine,
       disposition: S.DISPOSITIONS.includes(stored.disposition) ? stored.disposition : d.disposition,
-      hull: { max: Math.max(1, num(stored.hull?.max, d.hull.max)), cur: num(stored.hull?.cur, d.hull.cur) },
+      // A stored max of 0 is ABSENT, not "a ship with one hit point" — clamping it
+      // up to 1 is what let the Platanus onto the board at 0/1.
+      hull: { max: num(stored.hull?.max, 0) > 0 ? num(stored.hull.max, d.hull.max) : 0,
+              cur: num(stored.hull?.cur, d.hull.cur) },
       ac: { base: Math.max(1, num(stored.ac?.base, d.ac.base)) },
       armour: Math.max(0, num(stored.armour, 0)),
       resist: (stored.resist && typeof stored.resist === "object") ? { ...stored.resist } : {},
@@ -945,6 +1132,7 @@
       statuses: S.normalizeStatuses(stored.statuses),
       crew: {},
       boardingParty: Math.max(0, num(stored.boardingParty, 0)),
+      aimBonus: Math.max(0, Math.min(20, num(stored.aimBonus, 0))),
       morale: stored.morale && stored.morale.cur === null
         ? { cur: null, max: null }
         : { max: Math.max(1, num(stored.morale?.max, d.morale.max)), cur: num(stored.morale?.cur, d.morale.max) },
@@ -969,10 +1157,18 @@
       out.systemHp[id] = { cur, max: M };
       out.systems[id] = S.systemState(out.systemHp[id]);
     }
-    // A zero or negative max would divide by zero in every hull bar that reads it.
-    if (!(out.hull.max > 0)) out.hull.max = d.hull.max;
-    if (!Number.isFinite(out.hull.cur)) out.hull.cur = out.hull.max;
-    if (!(out.hull.max > 0)) out.hull.max = d.hull.max;
+    // A zero or negative MAX is a malformed record — it would divide by zero in
+    // every hull bar, and it is how the Platanus shipped, spawning already at 0
+    // and therefore derelict on the first shot. Repair the maximum from the
+    // class band and refloat her.
+    //
+    // A zero CUR with a valid max is not malformed: that is a derelict, and it
+    // must stay one. Resetting it here would refloat every wreck on reload.
+    if (!(out.hull.max > 0)) {
+      const band = S.shipClass(out.cls)?.hull;
+      out.hull.max = (band && band[1] > 0) ? Math.round((band[0] + band[1]) / 2) : d.hull.max;
+      out.hull.cur = out.hull.max;
+    }
     if (!Number.isFinite(out.hull.cur)) out.hull.cur = out.hull.max;
     out.hull.cur = Math.max(0, Math.min(out.hull.cur, out.hull.max));
     if (out.morale.cur !== null) out.morale.cur = Math.max(0, Math.min(out.morale.cur, out.morale.max));
@@ -1125,6 +1321,41 @@
     return view;
   };
 
+  /**
+   * A qualitative read on how a hull is holding up, for the chat line the
+   * PLAYERS see when they have not earned the numbers.
+   *
+   * The rule the whole module follows: redaction keeps the SHAPE of what is
+   * missing. "She is opening up" tells the crew the fight is going their way
+   * without handing them a hull total they never scanned for.
+   */
+  S.HULL_WORDS = [
+    { at: 0.00, word: "coming apart" },
+    { at: 0.15, word: "burning through" },
+    { at: 0.35, word: "opening up" },
+    { at: 0.60, word: "marked" },
+    { at: 0.85, word: "barely scratched" }
+  ];
+  S.hullWord = function (cur, max) {
+    const m = Number(max) > 0 ? Number(max) : 1;
+    const f = Math.max(0, Math.min(1, (Number(cur) || 0) / m));
+    let word = S.HULL_WORDS[0].word;
+    for (const b of S.HULL_WORDS) if (f >= b.at) word = b.word;
+    return word;
+  };
+  /** How hard a hit felt, as a fraction of the target's maximum hull. */
+  S.HIT_WORDS = [
+    { at: 0, word: "a graze" }, { at: 0.04, word: "a solid hit" },
+    { at: 0.10, word: "a heavy hit" }, { at: 0.20, word: "a devastating hit" }
+  ];
+  S.hitWord = function (dmg, max) {
+    const m = Number(max) > 0 ? Number(max) : 1;
+    const f = Math.max(0, (Number(dmg) || 0) / m);
+    let word = S.HIT_WORDS[0].word;
+    for (const b of S.HIT_WORDS) if (f >= b.at) word = b.word;
+    return word;
+  };
+
   /* ---------------------------------------------------------------------- */
   /*  Default state (seeded into the world setting on first GM load)        */
   /* ---------------------------------------------------------------------- */
@@ -1166,6 +1397,10 @@
       adriftCrew: [],       // user ids in open space — see endCombat
       phaseCharges: 0,      // banked Phase Shifts (Cloaking Officer)
       decoys: 0,            // decoys running (Cloaking Officer)
+      // Ghost Their Sensors: the next enemy sensor lock on the Gull fizzles.
+      // It used to be written by gmCloak and thrown away by this normalizer, so
+      // the action did nothing at all.
+      scanBlock: false,
       actorId: ""   // GM-selected ship (dnd5e vehicle) actor; falls back to a name lookup
     };
   };
@@ -1213,6 +1448,7 @@
       adriftCrew: Array.isArray(stored.adriftCrew) ? stored.adriftCrew.map(String) : [],
       phaseCharges: Math.max(0, Math.min(3, Number(stored.phaseCharges) || 0)),
       decoys: Math.max(0, Math.min(3, Number(stored.decoys) || 0)),
+      scanBlock: !!stored.scanBlock,
       actorId: String(stored.actorId ?? d.actorId)
     };
     // Per-system HP drives the status string. Use stored HP if present, else migrate from the old string.
@@ -1395,6 +1631,9 @@
 .sgfleet .fl-arc.sh{border-color:#38e1c4;color:#04121c;background:#2ec2aa;}
 .sgfleet .fl-arc.sh b{color:#04121c;}
 .sgfleet .fl-arc.mi{border-color:#b06bf0;color:#e6d5ff;}
+.sgfleet .fl-arc.unk{border-style:dashed;border-color:#46606e;color:#46606e;
+  background:repeating-linear-gradient(135deg,rgba(26,58,72,.55) 0 4px,rgba(13,37,49,.55) 4px 8px);}
+.sgfleet .fl-arc.unk b{color:#5d7c8a;}
 
 .sgfleet .fl-pips{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px;}
 .sgfleet .fl-pip{width:9px;height:9px;border-radius:2px;background:#38e1c4;opacity:.9;}
@@ -1690,7 +1929,7 @@
 .sgcon .inv-convert .con-btn{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;font-size:12px;padding:6px 10px;
   border-radius:10px;background:linear-gradient(180deg,rgba(14,34,48,.65),rgba(8,20,30,.65));}
 /* Add-item browser (searchable, world + compendiums) */
-.sgib-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.72);display:flex;align-items:center;justify-content:center;
+.sgib-overlay{position:fixed;inset:0;z-index:95;background:rgba(2,6,12,.72);display:flex;align-items:center;justify-content:center;
   font-family:'Courier New',monospace;color:#cfeef0;}
 .sgib{width:min(780px,94vw);max-height:84vh;display:flex;flex-direction:column;border:1px solid #1d6a86;border-radius:16px;overflow:hidden;
   background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.72);}
@@ -1806,7 +2045,7 @@
 .sgsc .con-circle.pos-starboard{top:56%;left:59%;}
 @media (max-width:820px){.sgcon{flex-direction:column;}.sgcon .con-right{flex-basis:auto;border-left:none;border-top:1px solid #12455a;}}
 /* ===== Repair puzzle overlay ===== */
-.srp-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;
+.srp-overlay{position:fixed;inset:0;z-index:95;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;
   font-family:'Courier New',monospace;color:#cfeef0;}
 .srp{width:min(560px,94vw);border:1px solid #1d6a86;border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.75);}
 .srp-head{padding:13px 16px 8px;}
@@ -1845,7 +2084,7 @@
 .srp-gauge .fill{position:absolute;left:0;right:0;bottom:0;background:#38e1c4;transition:height .1s,background .1s;}
 .srp-gauge .band{position:absolute;left:0;right:0;background:rgba(66,209,106,.22);border-top:1px solid #42d16a;border-bottom:1px solid #42d16a;}
 /* ── Nav Support mini-game ── */
-.sng-overlay{position:fixed;inset:0;z-index:120;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#cfeef0;}
+.sng-overlay{position:fixed;inset:0;z-index:95;background:rgba(2,6,12,.8);display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#cfeef0;}
 .sng{width:min(600px,95vw);border:1px solid #1d6a86;border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#0c2334,#081521);box-shadow:0 26px 74px rgba(0,0,0,.75);}
 .sng-head{display:flex;align-items:baseline;justify-content:space-between;padding:13px 16px 10px;}
 .sng-title{font-weight:700;letter-spacing:2px;color:#38e1c4;text-shadow:0 0 10px rgba(56,225,196,.4);}
@@ -2110,7 +2349,11 @@
     // Targets come through cctx already redacted, and each carries the range and
     // facing worked out from the two tokens — so the gunner can see, before
     // spending an action, whether the shot is even in range and which arc it hits.
-    const targets = (cctx?.targets || []).filter((t) => !t.outcome);
+    // Keyed by gun id — this gunner's own mount, not whichever gun happened to be
+    // first in the crew map. (Tolerates the old flat-array shape.)
+    const tset = cctx?.targets;
+    const mine = Array.isArray(tset) ? tset : (tset?.[c.gun] || tset?.any || []);
+    const targets = mine.filter((t) => !t.outcome);
     const cur = targets.find((t) => t.id === c.target);
     const tgtBtn = targets.length
       ? `<button class="pm-btn ${cur ? "pm-tgt" : ""}" data-target title="Pick which contact this gun is laid on">` +
@@ -2739,6 +2982,11 @@
 
   // Sort items into navigable sections (by dnd5e type + a little name matching).
   const invCollapsedSecs = new Set();   // collapsed inventory section labels (per-client, this session)
+  // The search text, kept across re-renders. refreshUI is bound to the onChange of
+  // BOTH world settings, so anything anyone does mid-combat re-rendered the console
+  // and wiped whatever the quartermaster was halfway through typing.
+  let invSearchText = "";
+  let invSearchHadFocus = false;
   const INV_SECTIONS = ["Weapons", "Ammunition", "Explosives", "Medical", "Food", "Gobby's Bar",
     "Tools", "Gear & Supplies", "Apparel", "Materials", "Containers", "Valuables", "Other"];
   // Memoised: the result depends only on type+name, but the regex chain below used to be
@@ -2845,7 +3093,7 @@
         `<div class="inv-top">` +
           `<div class="inv-tabs"><button class="inv-tab${tab === "ship" ? " active" : ""}" data-tab="ship">SHIP CARGO</button>` +
           `<button class="inv-tab${tab === "you" ? " active" : ""}" data-tab="you">YOUR ITEMS</button></div>` +
-          `<div class="inv-search"><span>🔎</span><input type="text" placeholder="Search inventory…" data-search="1"></div>${gmBtns}</div>` +
+          `<div class="inv-search"><span>🔎</span><input type="text" placeholder="Search inventory…" data-search="1" value="${esc(invSearchText)}"></div>${gmBtns}</div>` +
         `<div class="inv-list${tab === "ship" ? " drop-ok" : ""}" data-tab="${tab}">${gridInner}</div>` +
       `</div>`;
 
@@ -2870,8 +3118,9 @@
     // Search: filter tiles in-place (no re-render → keeps input focus); hide empty sections.
     const search = rightEl.querySelector("[data-search]");
     const grid = rightEl.querySelector(".inv-list");
-    if (search && grid) search.oninput = () => {
-      const q = search.value.trim().toLowerCase();
+    const applyFilter = () => {
+      if (!grid) return;
+      const q = invSearchText.trim().toLowerCase();
       grid.querySelectorAll(".inv-tile").forEach((tl) => {
         tl.style.display = (!q || (tl.dataset.name || "").toLowerCase().includes(q)) ? "" : "none";
       });
@@ -2880,6 +3129,19 @@
         sec.style.display = anyVisible ? "" : "none";
       });
     };
+    if (search && grid) {
+      search.oninput = () => { invSearchText = search.value; applyFilter(); };
+      // Re-apply after a re-render, and put the caret back where it was: the
+      // console re-renders on every world write, which used to drop both.
+      if (invSearchText) {
+        applyFilter();
+        if (invSearchHadFocus) {
+          try { search.focus(); search.setSelectionRange(invSearchText.length, invSearchText.length); } catch (e) {}
+        }
+      }
+      search.onfocus = () => { invSearchHadFocus = true; };
+      search.onblur = () => { invSearchHadFocus = false; };
+    }
 
     // Tiles: hover popup + per-tile actions.
     const byId = Object.fromEntries(list.map((it) => [it.id, it]));
@@ -3237,7 +3499,13 @@
   }
 
   function arcRow(v) {
-    if (!v.known?.ac) return "";
+    // Redaction keeps the SHAPE of the missing data: four hatched cells, so the
+    // reader sees that there ARE four facings and that none of them is known —
+    // and so the card does not change height the moment it is scanned.
+    if (!v.known?.ac) {
+      return `<div class="fl-arcs">${["Fore", "Starboard", "Aft", "Port"].map((f) =>
+        `<div class="fl-arc unk" title="${f} — not scanned"><b>?</b>—</div>`).join("")}</div>`;
+    }
     const ac = S.shipAC(v, S.crewList(v.crew || {}));
     const cell = (f, lbl) => {
       const d = v.known.shields ? ac.dr[f] : { half: false, flat: 0 };
@@ -3320,9 +3588,19 @@
     }
     const body = rows.map((c) => {
       const st = c.station ? (S.station(c.station)?.name || c.station) : "unassigned";
-      return `<div class="fl-crewrow${c.dead ? " dead" : ""}" data-crew="${esc(c.id)}" title="${c.dead ? "Killed — this station is offline" : "Drive this seat"}">
-        <div><div class="fl-cname">${esc(c.name)}</div><div class="fl-crole">${esc(c.roleId || "crew")}</div></div>
-        <div class="fl-cst">${esc(st)}</div></div>`;
+      const open = fctx.isGM && !v.own && c.id === fctx.crewId && !c.dead;
+      const spent = c.action ? ` <span class="fl-spent" title="Has already acted this round">●</span>` : "";
+      // The action strip only exists for the GM driving an enemy seat. A player
+      // never receives this markup at all — it is a data branch, not a CSS one.
+      const strip = open
+        ? `<div class="fl-acts">${S.enemySeatActions(v, c).map((a) =>
+            `<button class="fl-actbtn" data-crewact="${esc(a.id)}" data-crewfor="${esc(c.id)}"
+               title="${esc(a.hint || "")}"${a.disabled ? " disabled" : ""}>${esc(a.label)}</button>`).join("")}</div>`
+        : "";
+      return `<div class="fl-crewwrap">
+        <div class="fl-crewrow${c.dead ? " dead" : ""}${open ? " open" : ""}" data-crew="${esc(c.id)}" title="${c.dead ? "Killed — this station is offline" : "Drive this seat"}">
+          <div><div class="fl-cname">${esc(c.name)}${spent}</div><div class="fl-crole">${esc(c.roleId || "crew")}</div></div>
+          <div class="fl-cst">${esc(st)}</div></div>${strip}</div>`;
     }).join("");
     return head + hint + body;
   }
@@ -3382,6 +3660,12 @@
     root.querySelectorAll("[data-crew]").forEach((el) => {
       el.onclick = () => sel && fctx.driveCrew && fctx.driveCrew(sel.id, el.dataset.crew);
     });
+    root.querySelectorAll("[data-crewact]").forEach((el) => {
+      el.onclick = (ev) => {
+        ev.stopPropagation();   // do not also collapse the row we are acting from
+        if (sel && fctx.crewAct) fctx.crewAct(sel.id, el.dataset.crewfor, el.dataset.crewact);
+      };
+    });
   };
 
 
@@ -3395,8 +3679,21 @@
   /*  missing — that is what makes a second scan feel worth an action.        */
   /* ---------------------------------------------------------------------- */
 
+  S.FLEET_CSS += `
+.sgfleet .fl-crewwrap{display:block}
+.sgfleet .fl-crewrow.open{background:rgba(56,225,196,.10);border-color:#38e1c4}
+.sgfleet .fl-spent{color:#f2b03d;font-size:10px;vertical-align:middle}
+.sgfleet .fl-acts{display:flex;flex-wrap:wrap;gap:4px;padding:6px 8px 8px 8px;margin:-2px 0 6px 0;
+  background:rgba(8,20,28,.6);border-left:2px solid #38e1c4;border-radius:0 0 4px 4px}
+.sgfleet .fl-actbtn{font:600 11px/1.1 'Courier New',monospace;letter-spacing:.04em;color:#cfeef0;
+  background:rgba(20,44,56,.9);border:1px solid #2b5d6e;border-radius:3px;padding:5px 8px;cursor:pointer;
+  text-transform:uppercase;white-space:nowrap}
+.sgfleet .fl-actbtn:hover:not(:disabled){background:#38e1c4;color:#04222c;border-color:#38e1c4}
+.sgfleet .fl-actbtn:disabled{opacity:.4;cursor:default}
+`;
+
   S.SCAN_CSS = `
-.sgscan{position:fixed;inset:0;z-index:126;display:flex;align-items:center;justify-content:center;
+.sgscan{position:fixed;inset:0;z-index:96;display:flex;align-items:center;justify-content:center;
   background:rgba(2,6,12,.82);font-family:'Courier New',monospace;color:#cfeef0;}
 .sgscan .sn{position:relative;width:min(760px,94vw);max-height:92vh;overflow:auto;padding:0 0 18px;
   background:linear-gradient(180deg,rgba(10,28,40,.97),rgba(4,12,20,.97));
@@ -3629,7 +3926,19 @@
        "flak bands: close 1-2, long 3-4, out beyond");
     ok(S.rangeBand(auto, 4) === "close" && S.rangeBand(auto, 10) === "long" && S.rangeBand(auto, 11) === "out",
        "autocannon bands: close 1-4, long 5-10, out beyond");
-    ok(S.rangePenalty(auto, 8).toHit === S.LONG_TO_HIT && S.rangePenalty(auto, 8).halve === true, "long range costs accuracy and bite");
+    ok(S.rangePenalty(flak, 3).toHit === S.LONG_TO_HIT && S.rangePenalty(flak, 3).halve === true,
+       "long range costs accuracy and bite");
+    // …unless the gun is authored otherwise. The Heavy Autocannon's own panel has
+    // always said "no penalty" at long range; the maths used to charge it anyway.
+    ok(/no penalty/i.test(auto.longNote), "the autocannon is authored as penalty-free at long range");
+    ok(S.rangePenalty(auto, 8).toHit === 0 && S.rangePenalty(auto, 8).halve === false,
+       "…and rangePenalty honours the gun's own longNote");
+    for (const g of S.GUNS) {
+      const p = S.rangePenalty(g, g.longMax);
+      const free = /no penalty/i.test(String(g.longNote || ""));
+      ok(p.ok && p.toHit === (free ? 0 : S.LONG_TO_HIT) && p.halve === !free,
+         `${g.id}: the long-range maths must match its own longNote ("${g.longNote}")`);
+    }
     ok(S.rangePenalty(auto, 99).ok === false, "out of range cannot be fired");
     for (const g of S.GUNS) for (let d = 0; d <= 12; d++) {
       ok(["close", "long", "out"].includes(S.rangeBand(g, d)), `${g.id} at ${d} produced no band`);
@@ -3740,7 +4049,7 @@
       d.fuel = { cur: 111, max: 400 }; d.power = { cur: 222, max: 400 };
       d.tuning = { fuelPerItem: 30, powerPerItem: 31, convertFuel: 8, convertPower: 44 };
       d.actorId = "ACTOR123"; d.armour = 5; d.resist = { energy: "half" }; d.outcome = "disabled";
-      d.adriftCrew = ["u7"]; d.phaseCharges = 2; d.decoys = 1;
+      d.adriftCrew = ["u7"]; d.phaseCharges = 2; d.decoys = 1; d.scanBlock = true;
       d.statuses = [{ id: "on_fire", src: "test", expiresRound: 9, data: {} }];
       for (const k of Object.keys(d.systemHp)) d.systemHp[k] = { cur: 3, max: 5 };
       for (const k of Object.keys(d.systems)) d.systems[k] = "damaged";
@@ -3915,6 +4224,91 @@
     ok(fc.ships.e1.hull.cur === 50, "ships survive normalizeCombat");
     ok(fc.initiative[0].roll === 17, "initiative survives");
     ok(S.normalizeCombat({}).ships && Object.keys(S.normalizeCombat({}).ships).length === 0, "a fresh combat has no ships");
+
+    // --- normalizeShip must not silently drop a field ----------------------
+    // The failure mode this catches: someone adds a field to defaultShip (or
+    // writes one from the wiring half) and forgets the normalizer, so the value
+    // survives in memory and vanishes on the next save. It has happened three
+    // times in this module — to `statuses`, to `actorId`, and to `aimBonus`.
+    {
+      const d = S.defaultShip({ id: "probe" });
+      const mutated = { ...d, name: "Probe", faction: "rift", cls: "frigate", doctrine: "sniper",
+        disposition: "neutral", hull: { cur: 7, max: 99 }, ac: { base: 17 }, armour: 3,
+        resist: { energy: "half" }, shield: { on: true, facing: "aft", secondary: "port" },
+        guns: [{ id: "g", label: "G", toHit: 4, damage: "2d6", shortMax: 1, longMax: 6, arc: "fore" }],
+        abilities: ["unmeasurable"], boardingParty: 4, aimBonus: 6,
+        morale: { cur: 2, max: 5 }, actorId: "A", tokenId: "T", sceneId: "S", combatantId: "C",
+        skin: "Original", art: "a.png", sizeSq: [11, 22], outcome: "derelict",
+        revealed: { ac: true, shields: true, systems: true, crew: true, deckmap: 2 },
+        statuses: [{ id: "on_fire", src: "x", expiresRound: 9, data: {} }],
+        systemHp: { reactor: { cur: 2, max: 5 } },
+        crew: { c1: { id: "c1", name: "Gunner", roleId: "gunner", station: "gunner_port", block: "Guard", tier: 2, deck: 2 } } };
+      const back = S.normalizeShip(mutated);
+      // Order-insensitive, and the normalizer is allowed to ADD defaults —
+      // what it may never do is drop a value or change one.
+      const kept = (want, got, path) => {
+        if (want === null || typeof want !== "object") {
+          if (want !== got) { fails.push(`normalizeShip changed ${path}: ${JSON.stringify(want)} -> ${JSON.stringify(got)}`); return; }
+          return;
+        }
+        if (got === null || typeof got !== "object") { fails.push(`normalizeShip dropped ${path}`); return; }
+        for (const k of Object.keys(want)) kept(want[k], got[k], `${path}.${k}`);
+      };
+      for (const k of Object.keys(d)) {
+        if (k === "systems") continue;                       // derived from systemHp
+        kept(mutated[k], back[k], k);
+      }
+      ok(S.normalizeShip(back).aimBonus === 6, "aimBonus survives a second normalize");
+      // and idempotence, so a reload cannot mutate a stored fleet
+      ok(JSON.stringify(S.normalizeShip(back)) === JSON.stringify(back), "normalizeShip is idempotent");
+    }
+
+    // --- deck plans: every skin of every hull must be boardable -------------
+    {
+      const hull = { decks: 2, skins: {
+        Original: { exterior: { sceneId: "e1", art: "e1.png" }, decks: { 1: { sceneId: "d1", art: "d1.png" }, 2: { sceneId: "d2", art: "d2.png" } } },
+        Landed:   { exterior: { sceneId: "e2", art: "e2.png" } },                       // pose skin, no interior
+        Half:     { exterior: { sceneId: "e3", art: "e3.png" }, decks: { 1: { sceneId: "d3", art: "d3.png" } } } } };
+      ok(S.decksForSkin(hull, "Original").borrowed === 0, "a complete skin borrows nothing");
+      const landed = S.decksForSkin(hull, "Landed");
+      ok(landed.complete && landed.borrowed === 2 && landed.donor === "Original", "a pose skin borrows a whole deck plan");
+      const half = S.decksForSkin(hull, "Half");
+      ok(half.complete && half.borrowed === 1 && half.decks["1"].sceneId === "d3", "a half skin keeps its own deck 1 and borrows deck 2");
+      ok(S.decksForSkin(hull, "nope").complete, "an unknown skin still resolves a deck plan");
+      ok(S.decksForSkin(null, "x").count === 0, "decksForSkin survives a null hull");
+    }
+
+    // --- driving an enemy seat ---------------------------------------------
+    {
+      const ship = S.normalizeShip({ id: "e", name: "Probe", doctrine: "brawler",
+        guns: [{ id: "auto", label: "Autocannon", toHit: 4, damage: "2d6", shortMax: 2, longMax: 8, arc: "fore" }],
+        systemHp: { reactor: { cur: 5, max: 5 }, weapons: { cur: 5, max: 5 } },
+        crew: {
+          c1: { id: "c1", name: "Cap", roleId: "captain", station: "captain" },
+          c2: { id: "c2", name: "Helm", roleId: "pilot", station: "pilot" },
+          c3: { id: "c3", name: "Gun", roleId: "gunner", station: "gunner_port" },
+          c4: { id: "c4", name: "Eng", roleId: "engineer", station: "engineer" },
+          c5: { id: "c5", name: "Dead", roleId: "gunner", station: "gunner_starboard", dead: true },
+          c6: { id: "c6", name: "Spare", roleId: "marine", station: "" } } });
+      for (const c of Object.values(ship.crew)) {
+        const acts = S.enemySeatActions(ship, c);
+        if (c.dead) ok(acts.length === 0, "a dead crew member offers no actions");
+        else ok(acts.length > 0, `seat "${c.station || "unassigned"}" offers at least one action`);
+        for (const a of acts) ok(!!a.id && !!a.label, `every action on "${c.station}" has an id and a label`);
+      }
+      ok(S.enemySeatActions(ship, ship.crew.c3)[0].id === "e_fire:auto", "a gunner gets one button per online gun");
+      ok(S.enemySeatActions(ship, null).length === 0, "enemySeatActions survives a null crew member");
+
+      const far = S.enemyStandingOrders(ship, { distance: 12 });
+      ok(far.some((o) => o.action === "e_close"), "a brawler at 12 squares closes");
+      ok(!far.some((o) => o.action === "e_fire:auto"), "and does not fire an 8-square gun at 12 squares");
+      const near = S.enemyStandingOrders(ship, { distance: 2 });
+      ok(near.some((o) => o.action === "e_fire:auto"), "a brawler in the pocket fires");
+      ok(near.every((o) => ship.crew[o.crewId] && !ship.crew[o.crewId].dead), "standing orders never give an order to a corpse");
+      ok(S.enemyStandingOrders(null).length === 0, "enemyStandingOrders survives a null ship");
+      const sniper = S.enemyStandingOrders({ ...ship, doctrine: "sniper" }, { distance: 2 });
+      ok(sniper.some((o) => o.action === "e_open"), "a sniper in the pocket backs off");
+    }
 
     // --- combat normalize --------------------------------------------------
     const c = S.normalizeCombat({ active: true, turn: 4, crew: { x: { name: "Test", station: "pilot", mp: 3 } } });

@@ -290,9 +290,11 @@
     const fl = item.flags?.[MODULE_ID] || {};
     const kind = fl.resKind; const add = Number(fl.resAmount) || 0;
     if (kind !== "fuel" && kind !== "power") return notifyUser(byUserId || game.user.id, "That item isn't a fuel or power source.");
-    const st = getState();
     const have = item.system?.quantity ?? 1;
     if (have - 1 > 0) await item.update({ "system.quantity": have - 1 }); else await item.delete();
+    // Read the gauge AFTER the item write: that await yields, and a snapshot taken
+    // before it silently discarded any fuel or power another station spent meanwhile.
+    const st = getState();
     // Overcharge items (exotic/ancient) push the gauge PAST its max — a "running hot" buffer; others cap at max.
     const over = !!fl.overcharge;
     st[kind].cur = over ? (st[kind].cur + add) : Math.min(st[kind].max, st[kind].cur + add);
@@ -392,9 +394,13 @@
       ? await d.prompt({ window: { title: "Fuel & power maximums" }, content, ok: { label: "Save", callback: (e, b) => read(b.form) } }).catch(() => null)
       : await new Promise((res) => new Dialog({ title: "Fuel & power maximums", content, buttons: { ok: { label: "Save", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
     if (!r) return;
-    st.fuel.max = Math.max(1, r.fmax); st.power.max = Math.max(1, r.pmax);
-    st.fuel.cur = Math.min(st.fuel.cur, st.fuel.max); st.power.cur = Math.min(st.power.cur, st.power.max);
-    await setState(st);
+    // Re-read: `st` was captured before the dialog opened, and a dialog can sit
+    // there for minutes while the crew burn fuel. Writing the snapshot back
+    // refunded every drop they spent.
+    const now = getState();
+    now.fuel.max = Math.max(1, r.fmax); now.power.max = Math.max(1, r.pmax);
+    now.fuel.cur = Math.min(now.fuel.cur, now.fuel.max); now.power.cur = Math.min(now.power.cur, now.power.max);
+    await setState(now);
   }
   async function gmSetActorDialog() {
     if (!game.user.isGM) return;
@@ -488,8 +494,12 @@
       return notifyUser(byUserId, `Not enough fuel — that move needs ${fuelCost} (convert or refuel first).`);
     const moved = await moveShipToken(kind, byUserId);   // abort (don't spend) if there's no ship token
     if (!moved) return;
-    if (c.mp > 0) c.mp -= 1; else c.bonus = true;         // spend from the Main pool, then the +1 bonus
-    await saveCombat(next);
+    // Re-read: moveShipToken awaits a document update that other clients' writes
+    // can land behind. Spending from the snapshot taken before it discarded them —
+    // and, when two moves overlapped, gave the pilot the movement for free.
+    { const fresh = getCombat(); const fc = fresh.crew[crewId]; if (!fc) return;
+      if (fc.mp > 0) fc.mp -= 1; else fc.bonus = true;    // Main pool first, then the +1 bonus
+      await saveCombat(fresh); }
     if (fuelCost > 0) { const s2 = getState(); s2.fuel.cur = Math.max(0, s2.fuel.cur - fuelCost); await setState(s2); }
   }
   // Move/rotate the ship-icon actor's token on the active scene. Returns false if it can't.
@@ -765,10 +775,34 @@
   // Returns a promise so callers that write combat state straight afterwards can
   // await it. Without that, the caller's own getCombat() read races the consume's
   // write and the second save silently puts the spent action back.
+  /**
+   * Wait until the replicated combat state satisfies `pred`, or give up.
+   *
+   * A player cannot write world state — they ask the GM and the change comes
+   * back over Foundry's own replication. Returning a resolved promise made every
+   * `await consumeSlot(...)` a no-op on a player's client, so the effect fired
+   * before the action was spent and a fast double-click spent it once.
+   */
+  function awaitCombat(pred, ms = 2500) {
+    if (pred(getCombat())) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; clearInterval(iv); clearTimeout(to); resolve(v); };
+      const iv = setInterval(() => { if (pred(getCombat())) finish(true); }, 60);
+      const to = setTimeout(() => finish(false), ms);
+    });
+  }
+
   function consumeSlot(crew, which, power) {
     if (game.user.isGM) return gmConsume(crew.id, which, null, 0);
     emit({ type: "consume", toGM: true, crewId: crew.id, which, userId: game.user.id, power });
-    return Promise.resolve();
+    // Wait for the GM's write to come back, so callers that await this really do
+    // have the slot spent before they roll.
+    return awaitCombat((c) => {
+      const me = c.crew?.[crew.id];
+      if (!me) return true;                       // crew gone — nothing left to wait on
+      return which === "bonus" ? !!me.bonus : (!!me.action && !(me.granted > 0 && !crew.action));
+    });
   }
   // The acting crew still has a Main action (or a granted extra) to spend.
   const hasMain = (crew) => !crew.action || (crew.granted > 0);
@@ -926,24 +960,36 @@
     const total = res.total + range.toHit;
     const hit = total >= ac[facing];
     const crit = res.die === 20;
-    const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${range.toHit ? ` · long range ${range.toHit}` : ""}`;
+    // The facing is geometry the crew can see on the map; the AC number is not.
+    // Publishing it meant a gunner learned by firing what the rules say the
+    // Science officer must scan for.
+    const acKnown = !!sh.revealed?.ac;
+    const rangeBit = range.toHit ? ` · long range ${range.toHit}` : "";
+    const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${rangeBit}`;
+    const bitsPublic = acKnown ? bits : `the ${S.FACING_LABEL[facing]}${rangeBit}`;
 
     if (!hit && !crit) {
       // Whiff protection: a miss still strips a shield pip off the arc it struck.
       const next = getCombat(); const t = next.ships[sh.id];
       let note = "";
       if (t && t.shield.on && t.shield.facing === facing) {
-        t.shield.on = false;
-        S.applyStatus(t, "shields_down", { round: next.round, rounds: 1, src: "grazing hit" });
+        // Facing-scoped, and `shield.on` is left alone: setting it false was a
+        // PERMANENT kill that nothing ever undid, so one lucky miss disarmed an
+        // enemy's shields for the rest of the fight.
+        S.applyStatus(t, "shields_down", { round: next.round, rounds: 1, src: "grazing hit", data: { facing } });
         await saveCombat(next);
         note = `<br><span style="color:#f2b03d">The round still walks across their ${esc(S.FACING_LABEL[facing])} shield — that facing drops for a round.</span>`;
       }
-      await ChatMessage.create({ content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${note}${unmeasured}`, speaker: gunSpeaker });
+      await sayRedacted(
+        `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bitsPublic} — <b>miss</b>.${note}${unmeasured}`,
+        acKnown ? "" : `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.`,
+        gunSpeaker);
       refreshUI();
       return;
     }
 
-    try { fxTracer("gull", sh.id, { color: 0xf2b03d }); fx("jb2a.magic_missile", { fromShip: "gull", toShip: sh.id }); } catch (e) {}
+    playFx({ kind: "tracer", fromId: "gull", toId: sh.id, color: 0xf2b03d });
+    playFx({ kind: "seq", path: "jb2a.magic_missile", fromShip: "gull", toShip: sh.id });
     const rail = getCombat().gunBuff;
     const dmgRoll = await new Roll(`${gun.damage} + ${str}${rail ? ` + ${rail}` : ""}`).evaluate();
     let raw = Math.max(1, dmgRoll.total);
@@ -952,10 +998,13 @@
     }
     if (range.halve) raw = Math.floor(raw / 2);
     await ChatMessage.create({
-      content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — ` +
+      content: `<b>${esc(crew.name)}</b> — <b>${esc(gun.label)}</b> vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bitsPublic} — ` +
                `<b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${range.halve ? " <span style='opacity:.7'>(halved at long range)</span>" : ""}${unmeasured}`,
       speaker: gunSpeaker, rolls: [dmgRoll]
     });
+    if (!acKnown) await ChatMessage.create({
+      content: `<span style="opacity:.7">GM · </span><b>${esc(sh.name)}</b> — AC <b>${ac[facing]}</b> on the ${esc(S.FACING_LABEL[facing])}; the shot read <b>${total}</b>.`,
+      speaker: gunSpeaker, whisper: gmIds() });
     await gmApplyDamage(sh.id, raw, facing, { crit, type: "kinetic" });
     // A crit lets the gunner knock a system out for free — the statuses and
     // per-system HP already in the model are the crit table.
@@ -967,7 +1016,15 @@
         t.systemHp[sysId] = { cur: 0, max: S.SYSTEM_HP_MAX };
         t.systems[sysId] = "destroyed";
         await saveCombat(next);
-        await ChatMessage.create({ content: `<b style="color:#f2b03d">Critical</b> — <b>${esc(sh.name)}</b>'s <b>${esc(S.SYSTEMS.find((x) => x.id === sysId)?.label || sysId)}</b> is knocked out.`, speaker: gunSpeaker });
+        const sysLabel = esc(S.SYSTEMS.find((x) => x.id === sysId)?.label || sysId);
+        // Naming the system is itself a systems-tier scan result. Unscanned, the
+        // crew see that something aboard broke — which is the fun part anyway.
+        await sayRedacted(
+          t.revealed?.systems
+            ? `<b style="color:#f2b03d">Critical</b> — <b>${esc(sh.name)}</b>'s <b>${sysLabel}</b> is knocked out.`
+            : `<b style="color:#f2b03d">Critical</b> — something aboard <b>${esc(sh.name)}</b> blows out. She sheds atmosphere and slews off her heading.`,
+          t.revealed?.systems ? "" : `<b>${esc(sh.name)}</b>'s <b>${sysLabel}</b> is the system that went.`,
+          gunSpeaker);
       }
     }
     refreshUI();
@@ -1077,6 +1134,89 @@
     if (userId === game.user.id) ui.notifications?.warn(text);
     else emit({ type: "notify", toUser: userId, text });
   }
+  /* ---------------------------------------------------------------------- */
+  /*  Socket authorisation                                                    */
+  /*                                                                          */
+  /*  Foundry sockets are broadcast-to-all and every client runs the dispatch, */
+  /*  so a message is a request, not a command. Each type declares:            */
+  /*                                                                          */
+  /*    gm        the handler writes world state -> only the ACTIVE GM runs it */
+  /*    fromGM    only a GM may SEND it (UI broadcasts: pickers, notifications) */
+  /*    crew      the field naming the crew member acted for; the sender must   */
+  /*              control them                                                 */
+  /*    seat      the station the sender must be sitting at                     */
+  /*    self      the field that must equal the sender's own user id            */
+  /*    anyCrew   the sender must control at least one crew member in the fight */
+  /*                                                                          */
+  /*  A type absent from this table is dropped. Adding a socket message and     */
+  /*  forgetting its rule therefore fails loudly instead of shipping a hole.    */
+  /* ---------------------------------------------------------------------- */
+  const SOCKET_RULES = {
+    pickPrompt:     { fromGM: true },
+    vfx:            { fromGM: true },
+    notify:         { fromGM: true },
+    swapConfirm:    { fromGM: true },
+    viewDeck:       { fromGM: true, needsToUser: true },
+    gunDoDamage:    { fromGM: true, needsToUser: true },
+
+    pickStation:    { gm: true, crew: "crewId" },
+    spend:          { gm: true, crew: "crewId" },
+    consume:        { gm: true, crew: "crewId" },
+    allocateShield: { gm: true, crew: "crewId" },
+    grantAction:    { gm: true, crew: "captainCrewId" },
+    pilotManeuver:  { gm: true, crew: "crewId" },
+    pilotMove:      { gm: true, crew: "crewId" },
+    selectGun:      { gm: true, crew: "crewId" },
+    selectTarget:   { gm: true, crew: "crewId" },
+    breach:         { gm: true, crew: "crewId" },
+    turretShot:     { gm: true, crew: "crewId" },
+    adjustAim:      { gm: true, crew: "crewId" },
+    gunHitCheck:    { gm: true, seat: ["gunner_port", "gunner_starboard"] },
+    weaponsMishap:  { gm: true, seat: ["gunner_port", "gunner_starboard"] },
+
+    applyScan:      { gm: true, seat: "science" },
+    navSupport:     { gm: true, seat: "science" },
+    buffCrew:       { gm: true, seat: "captain" },
+    ram:            { gm: true, seat: "captain" },
+    spool:          { gm: true, seat: "captain" },
+    reroute:        { gm: true, seat: "engineer" },
+    patch:          { gm: true, seat: "engineer" },
+    repairSystem:   { gm: true, seat: "engineer" },
+    cloak:          { gm: true, seat: "cloaking" },
+
+    switchRequest:  { gm: true, self: "userId" },
+    goDeck:         { gm: true, self: "userId" },
+    swapResult:     { gm: true, anyCrew: true },
+    moveItem:       { gm: true, anyCrew: true },
+    useResource:    { gm: true, anyCrew: true },
+    convert:        { gm: true, anyCrew: true }
+  };
+
+  /** May this sender ask for this? A GM may always act for anyone. */
+  function socketAuthorised(msg, rule) {
+    const sender = msg.userId;
+    const senderIsGM = !sender || !!game.users.get(sender)?.isGM;
+    if (rule.fromGM) {
+      if (!senderIsGM) return false;
+      if (rule.needsToUser && !msg.toUser) return false;   // an unaddressed broadcast every client would run
+      return true;
+    }
+    if (senderIsGM) return true;
+    const combat = getCombat();
+    const mine = Object.values(combat.crew || {}).filter((c) => c.controllerUserId === sender);
+    if (rule.crew) {
+      const c = combat.crew?.[msg[rule.crew]];
+      return !!c && c.controllerUserId === sender;
+    }
+    if (rule.seat) {
+      const want = Array.isArray(rule.seat) ? rule.seat : [rule.seat];
+      return mine.some((c) => want.includes(c.station));
+    }
+    if (rule.self) return msg[rule.self] === sender;
+    if (rule.anyCrew) return mine.length > 0;
+    return true;
+  }
+
   function onSocket(msg, senderId) {
     if (!msg || typeof msg !== "object") return;
     // socket.io hands us the SERVER's view of who sent this, and it cannot be
@@ -1089,8 +1229,23 @@
     if (senderId) msg.userId = senderId;
     if (msg.toUser && msg.toUser !== game.user.id) return;
     if (msg.toGM && !isActiveGM()) return;
+
+    // Every message is authorised against the table before it reaches a handler.
+    // Before this existed, a player could emit `ram`, `cloak`, `patch`, `spool`
+    // or `applyScan` with no station and no seat and the GM's client would run
+    // them — the handlers only checked that THEY were the GM, not that the
+    // sender was entitled. `gm: true` additionally pins execution to the ACTIVE
+    // GM, so a second GM seat can no longer double-apply a write.
+    const rule = SOCKET_RULES[msg.type];
+    if (!rule) return console.warn(`${MODULE_ID} | dropped an unknown socket message "${msg.type}"`, msg);
+    if (rule.gm && !isActiveGM()) return;
+    if (!socketAuthorised(msg, rule)) {
+      return console.warn(`${MODULE_ID} | dropped an unauthorised "${msg.type}" from ${msg.userId}`, msg);
+    }
+
     switch (msg.type) {
       case "pickPrompt":     if (!game.user.isGM) promptPickAll(); break;
+      case "vfx":            if (!game.user.isGM) runFx(msg.spec); break;
       case "pickStation":    gmSetStation(msg.crewId, msg.station, msg.userId); break;
       case "spend":          gmSpend(msg.crewId, msg.which, msg.userId); break;
       case "switchRequest":  gmSwitch(msg.userId, msg.crewId, msg.target); break;
@@ -1103,7 +1258,9 @@
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
       case "selectGun":      gmSelectGun(msg.crewId, msg.gun, msg.userId); break;
       case "selectTarget":   gmSelectTarget(msg.crewId, msg.shipId, msg.userId); break;
-      case "applyScan":      gmApplyScan(msg.shipId, msg.result, msg.gunnerName, { total: msg.total, die: msg.die }, msg.painted); break;
+      // The result is RECOMPUTED from the roll, never taken from the payload: a
+      // crafted `result` would otherwise reveal a hull the party never scanned.
+      case "applyScan":      gmApplyScan(msg.shipId, S.scanResult(Number(msg.total) - S.SCAN_DC), msg.gunnerName, { total: msg.total, die: msg.die }, msg.painted); break;
       case "buffCrew":       gmBuffCrew(msg.crewId, msg.kind, msg.byName); break;
       case "reroute":        gmReroute(msg.rail, msg.crewId, msg.byName); break;
       case "patch":          gmPatch(msg.pick, msg.byName); break;
@@ -1115,7 +1272,6 @@
       case "viewDeck":       viewDeck(msg.sceneId, msg.levelId); break;
       case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
       case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
-      case "applyDamage":    gmApplyDamage(msg.shipId, msg.raw, msg.facing, msg.opts || {}); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
       case "gunHitCheck":    gmGunHitCheck(msg); break;
       case "gunDoDamage":    runGunDamageRoll(msg.gunnerName, S.gun(msg.gunId) || { label: "Gun", damage: "2d6" }); break;
@@ -1382,12 +1538,16 @@
     calledShot: (crewId) => runCalledShot(crewId),
     boardingFire: (crewId) => runBoardingFire(crewId),
     pickTarget: (crewId) => pickTargetDialog(crewId),
-    // One list per distinct gun in use, so each gunner's panel shows the range
-    // band for THEIR gun rather than a generic distance.
+    // One list PER GUN, keyed by gun id, so each gunner's panel shows the range
+    // band for THEIR mount. It used to collect every gun in use and then build a
+    // single list from guns[0] — so a flak gunner read the autocannon's bands and
+    // was told a 7-square contact was in range when their gun stops at 4.
     get targets() {
       const combat = getCombat();
       const guns = [...new Set(Object.values(combat.crew).filter((c) => c.gun).map((c) => c.gun))];
-      return targetList(S.gun(guns[0]) || null);
+      const out = { any: targetList(null) };
+      for (const id of guns) out[id] = targetList(S.gun(id) || null);
+      return out;
     },
     pickStation: (crewId) => pickStationFor(crewId),
     switchStation: async (crewId) => {
@@ -1529,8 +1689,15 @@
     if (existing && !rebuild) return existing;
 
     const sk = hull.skins?.[skin]; if (!sk) return null;
-    const deckKeys = Object.keys(sk.decks || {}).sort((a, b) => Number(a) - Number(b));
+    // Pose skins ("Landed", "TuckedUp", "Breached Stage 2") ship no interior at
+    // all, and a few colour skins are missing an upper deck. Borrow those from a
+    // skin that has them rather than refusing to build — a ship's inside does not
+    // change because its outside is painted differently.
+    const plan = S.decksForSkin(hull, skin);
+    const deckMap = plan.decks;
+    const deckKeys = Object.keys(deckMap).sort((a, b) => Number(a) - Number(b));
     if (!deckKeys.length) { ui.notifications?.warn(`${hull.name} (${skin}) has no interior decks in the pack.`); return null; }
+    if (plan.borrowed) ui.notifications?.info(`${hull.name} (${skin}) ships ${plan.count - plan.borrowed} of ${plan.count} decks — borrowing the rest from "${plan.donor}".`);
 
     const pack = game.packs.get(hull.pack);
     if (!pack) { ui.notifications?.error(`Map pack ${hull.pack} is not installed.`); return null; }
@@ -1538,8 +1705,8 @@
     ui.notifications?.info(`Building ${hull.name} — ${skin}: ${deckKeys.length} deck${deckKeys.length === 1 ? "" : "s"}…`);
     const sources = [];
     for (const k of deckKeys) {
-      const doc = await pack.getDocument(sk.decks[k].sceneId);
-      if (doc) sources.push({ deck: Number(k), doc, art: hull.artRoot + sk.decks[k].art });
+      const doc = await pack.getDocument(deckMap[k].sceneId);
+      if (doc) sources.push({ deck: Number(k), doc, art: hull.artRoot + deckMap[k].art });
     }
     if (!sources.length) return null;
 
@@ -1670,8 +1837,10 @@
     const hull = isGull ? await gullHull() : hullFor(me.shipId).hull;
     const name = isGull ? getState().name : hullFor(me.shipId).name;
     const skin = isGull ? "Original" : (getCombat().ships[me.shipId]?.skin || "");
-    const sk = hull?.skins?.[skin] || Object.values(hull?.skins || {})[0];
-    const deckKeys = Object.keys(sk?.decks || {}).sort((a, b) => Number(a) - Number(b));
+    const skName = hull?.skins?.[skin] ? skin : Object.keys(hull?.skins || {})[0] || "";
+    // Same fallback buildDeckScene uses, so the strip never offers a deck the
+    // scene does not have — or hides one it does.
+    const deckKeys = Object.keys(S.decksForSkin(hull, skName).decks).sort((a, b) => Number(a) - Number(b));
 
     // How many enemy crew are on each deck — only if the players have earned it.
     const sh = isGull ? null : getCombat().ships[me.shipId];
@@ -1702,9 +1871,18 @@
     else emit({ type: "goDeck", toGM: true, shipId: me.shipId, deck, userId: game.user.id });
   }
 
-  async function gmGoToDeck(userId, shipId, deck) {
+  async function gmGoToDeck(userId, shipId, deck, { trusted = false } = {}) {
     if (!game.user.isGM) return;
     const isGull = shipId === "gull";
+    // A player may walk the decks of their OWN ship, or of a hull they have
+    // actually breached — not of any hull whose id they can type. Without this,
+    // `goDeck` was a free teleport into an unscanned enemy's engine room.
+    if (!trusted && !isGull && !game.users.get(userId)?.isGM) {
+      const at = (getCombat().whereIs || {})[userId];
+      if (!at || at.shipId !== shipId) {
+        return notifyUser(userId, "You are not aboard that ship. Breach her first.");
+      }
+    }
     const hull = isGull ? await gullHull() : hullFor(shipId).hull;
     if (!hull) return notifyUser(userId, "No deck plan for that hull.");
     const skin = isGull ? "Original" : (getCombat().ships[shipId]?.skin || Object.keys(hull.skins)[0]);
@@ -2025,12 +2203,18 @@
     const total = res.total + range.toHit + adjust;
     const crit = res.die === 20;
     const hit = total >= ac[facing] || crit;
-    const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${range.toHit ? ` · long ${range.toHit}` : ""}${adjust ? ` · Adjust Aim +${adjust}` : ""}`;
+    const acKnown = !!sh.revealed?.ac;
+    const tail = `${range.toHit ? ` · long ${range.toHit}` : ""}${adjust ? ` · Adjust Aim +${adjust}` : ""}`;
+    const bits = `AC ${ac[facing]} on the ${S.FACING_LABEL[facing]}${tail}`;
+    const bitsPublic = acKnown ? bits : `the ${S.FACING_LABEL[facing]}${tail}`;
     if (!hit) {
-      await ChatMessage.create({ content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b>miss</b>.${unmeasured}`, speaker: gunSpeaker });
+      await sayRedacted(
+        `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bitsPublic} — <b>miss</b>.${unmeasured}`,
+        acKnown ? "" : `<b>${esc(sh.name)}</b> — AC <b>${ac[facing]}</b> on the ${esc(S.FACING_LABEL[facing])}; the shot read <b>${total}</b>.`,
+        gunSpeaker);
       return;
     }
-    try { fxTracer("gull", sh.id, { color: 0x38e1c4, width: 4 }); } catch (e) {}
+    playFx({ kind: "tracer", fromId: "gull", toId: sh.id, color: 0x38e1c4, width: 4 });
     // Shield-breaker hits harder into a hull that is already open.
     const alreadyDown = S.hasStatus(sh, "shields_down") || !sh.shield.on;
     const bonusDie = (t.signature === "shieldbreak" && alreadyDown) ? " + 1d6" : "";
@@ -2038,8 +2222,11 @@
     let raw = Math.max(1, dmgRoll.total);
     if (range.halve) raw = Math.floor(raw / 2);
     await ChatMessage.create({
-      content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bits} — <b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${unmeasured}`,
+      content: `<b>${esc(t.name)}</b> · ${esc(crew.name)} vs <b>${esc(sh.name)}</b>: <b>${total}</b> vs ${bitsPublic} — <b style="color:#42d16a">${crit ? "CRITICAL" : "hit"}</b>${unmeasured}`,
       speaker: gunSpeaker, rolls: [dmgRoll] });
+    if (!acKnown) await ChatMessage.create({
+      content: `<span style="opacity:.7">GM · </span><b>${esc(sh.name)}</b> — AC <b>${ac[facing]}</b> on the ${esc(S.FACING_LABEL[facing])}; the shot read <b>${total}</b>.`,
+      speaker: gunSpeaker, whisper: gmIds() });
     await gmApplyDamage(shipId, raw, facing, { crit, type: t.signature === "emp" ? "energy" : "kinetic",
       ignoreArmour: t.signature === "pierce" });
     await gmTurretSignature(t, shipId, crew.name);
@@ -2324,13 +2511,21 @@
     const facing = (() => { const a = shipPoint("gull"), b = shipPoint(ship.id); return a && b ? S.facingFrom(b, a) : null; })();
 
     if (game.user.isGM) await gmApplyScan(chosen, result, crew.name, res, painted);
-    else emit({ type: "applyScan", toGM: true, shipId: chosen, result, gunnerName: crew.name, total: res.total, die: res.die, painted, userId: game.user.id });
+    else {
+      emit({ type: "applyScan", toGM: true, shipId: chosen, result, gunnerName: crew.name, total: res.total, die: res.die, painted, userId: game.user.id });
+      // Wait for the reveal to actually come back rather than guessing at 250 ms.
+      // On a slow round-trip the old fixed delay rendered the readout from the
+      // PRE-scan record, so ASTRA announced "VITALS" over a hatched panel.
+      await awaitCombat((c) => {
+        const r = c.ships?.[chosen]?.revealed; if (!r) return true;   // ship gone — stop waiting
+        return Object.entries(result.reveal).every(([k, want]) =>
+          !want || (k === "deckmap" ? (r.deckmap || 0) >= want : !!r[k]));
+      });
+    }
 
-    // Show the readout to whoever ran it, straight away.
-    setTimeout(() => {
-      const after = getCombat().ships[chosen];
-      if (after) S.openScan(S.shipView(after, { isGM: game.user.isGM }), result, { facing });
-    }, 250);
+    // Show the readout to whoever ran it.
+    const after = getCombat().ships[chosen];
+    if (after) S.openScan(S.shipView(after, { isGM: game.user.isGM }), result, { facing });
   }
 
   async function gmApplyScan(shipId, result, byName, roll, painted) {
@@ -2468,6 +2663,24 @@
    * "this ship is small enough to capture", so that is the default and a kill is
    * the deliberate exception (reactor already gone, a crit, or a declared Kill Shot).
    */
+  const gmIds = () => ChatMessage.getWhisperRecipients("GM").map((u) => u.id);
+
+  /**
+   * Post a public line and, when it differs, whisper the real numbers to the GM.
+   *
+   * Chat was the module's largest leak: every shot published the enemy's exact
+   * AC and every damage line published their hull total, so the crew learned by
+   * shooting what the rules say they must scan for. Anything the party has
+   * actually revealed still shows publicly — secrecy is a consequence of not
+   * having scanned, not a permanent blindfold.
+   */
+  async function sayRedacted(publicHtml, gmHtml, speaker) {
+    await ChatMessage.create({ content: publicHtml, speaker });
+    if (gmHtml && gmHtml !== publicHtml) {
+      await ChatMessage.create({ content: `<span style="opacity:.7">GM · </span>${gmHtml}`, speaker, whisper: gmIds() });
+    }
+  }
+
   async function gmApplyDamage(shipId, raw, facing, opts = {}) {
     if (!game.user.isGM) return null;
     const next = getCombat();
@@ -2477,6 +2690,8 @@
 
     const res = S.resolveDamage(sh, raw, facing, opts);
     sh.hull.cur = Math.max(0, sh.hull.cur - res.final);
+    // "Next hit" statuses are spent by this hit, in the same write that applies it.
+    for (const id of res.consumed || []) S.clearStatus(sh, id);
     // Callers that need a status set at the same moment ride this write rather
     // than issuing their own, which would race this function's read.
     if (opts.alsoStatus) S.applyStatus(sh, opts.alsoStatus.id, { round: next.round, src: opts.alsoStatus.src || "" });
@@ -2493,24 +2708,34 @@
 
     // The beat: a contained cool ring if the shields ate it, a hot expanding
     // burst if it went through. Absorbed hits never shake the screen.
-    try {
-      fxImpact(shipId, facing, { absorbed: res.final === 0 || res.shielded });
-      if (isGull && res.final > 0) fxRedAlert(res.final / Math.max(1, sh.hull.max));
-      if (res.final > 0) fx("jb2a.explosion.02", { atShip: shipId, scale: 0.6 });
-      else fx("jb2a.shield.01.outro_fast.blue", { atShip: shipId, scale: 0.5 });
-    } catch (e) { /* the fight matters more than the sparkle */ }
+    playFx({ kind: "impact", shipId, facing, absorbed: res.final === 0 || res.shielded });
+    // Only the Gull's own crew get the red alert — being shot at is their beat.
+    if (isGull && res.final > 0) playFx({ kind: "alert", fraction: res.final / Math.max(1, sh.hull.max) });
+    playFx(res.final > 0
+      ? { kind: "seq", path: "jb2a.explosion.02", atShip: shipId, scale: 0.6 }
+      : { kind: "seq", path: "jb2a.shield.01.outro_fast.blue", atShip: shipId, scale: 0.5 });
 
     const name = isGull ? getState().name : sh.name;
     const work = res.steps.map((x) => `${x.label} → ${x.value}`).join(" · ");
-    const line = res.final === 0
-      ? `<b>${esc(name)}</b> — <b style="color:#38e1c4">absorbed</b> the hit on the ${esc(S.FACING_LABEL[facing] || facing)}.`
-      : `<b>${esc(name)}</b> takes <b style="color:#e0454d">${res.final}</b> to the <b>${esc(S.FACING_LABEL[facing] || facing)}</b>` +
+    const face = esc(S.FACING_LABEL[facing] || facing);
+    // Your own ship's numbers are always yours. An enemy's are only public once
+    // the Science officer has actually resolved her vitals.
+    const numbers = isGull || !!sh.revealed?.ac;
+    const full = res.final === 0
+      ? `<b>${esc(name)}</b> — <b style="color:#38e1c4">absorbed</b> the hit on the ${face}.`
+      : `<b>${esc(name)}</b> takes <b style="color:#e0454d">${res.final}</b> to the <b>${face}</b>` +
         `${res.absorbed ? ` <span style="opacity:.7">(${res.absorbed} absorbed)</span>` : ""} — hull <b>${sh.hull.cur}</b>/${sh.hull.max}`;
+    const vague = res.final === 0
+      ? `<b>${esc(name)}</b> — the round <b style="color:#38e1c4">washes off</b> her ${face}. Something is up over there.`
+      : `<b>${esc(name)}</b> — <b style="color:#e0454d">${esc(S.hitWord(res.final, sh.hull.max))}</b> to the <b>${face}</b>. ` +
+        `<span style="opacity:.8">She is <b>${esc(S.hullWord(sh.hull.cur, sh.hull.max))}</b>.</span>` +
+        `<br><span style="opacity:.55;font-size:11px">Exact hull unknown — run a sensor sweep.</span>`;
     const tail = outcome === "derelict"
       ? `<br><b style="color:#7fb4c8">DERELICT</b> — drifting and unpowered. Her crew are alive; she can be boarded and salvaged.`
       : outcome === "destroyed" ? `<br><b style="color:#e0454d">DESTROYED</b> — no wreck worth taking.` : "";
-    await ChatMessage.create({ content: `${line}${tail}<br><span style="opacity:.55;font-size:11px">${esc(work)}</span>`,
-      speaker: { alias: "SSV Silver Gull" } });
+    const working = `<br><span style="opacity:.55;font-size:11px">${esc(work)}</span>`;
+    await sayRedacted(`${numbers ? full : vague}${tail}${numbers ? working : ""}`,
+                      numbers ? "" : `${full}${tail}${working}`, { alias: "SSV Silver Gull" });
     refreshUI();
     return { ...res, outcome };
   }
@@ -2540,7 +2765,7 @@
     if (!hull) return "";
     const sk = hull.skins?.[skin] || Object.values(hull.skins || {})[0];
     if (!sk) return "";
-    const node = which === "exterior" ? sk.exterior : sk.decks?.[String(deck)];
+    const node = which === "exterior" ? sk.exterior : S.decksForSkin(hull, skin).decks[String(deck)];
     return node ? hull.artRoot + node.art : "";
   };
 
@@ -2634,6 +2859,8 @@
 
   /* ---- the overlay ----------------------------------------------------- */
   let _fleet = null, fleetSelected = null;
+  let fleetCrewSelected = "";   // which enemy seat the GM has folded open
+  const _lastHull = new Map();  // shipId -> the hull we last drew, for the damage ghost
   const fleetOpen = () => _fleet && _fleet.style.display !== "none" && document.body.contains(_fleet);
   function closeFleet() { if (_fleet) _fleet.style.display = "none"; renderBar(); }
   function renderFleet() {
@@ -2645,6 +2872,10 @@
   }
   function refreshFleet() { if (fleetOpen()) renderFleet(); }
   async function openFleet() {
+    // The keybinding is `restricted`, but the module API sits on globalThis for
+    // everyone — without this guard a player could open the GM's board from the
+    // console. The data is redacted either way; the board itself is not theirs.
+    if (!game.user.isGM) return ui.notifications?.warn("Fleet Command is the GM's board.");
     if (fleetOpen()) return closeFleet();
     await loadFleet(); await loadCrests();
     renderFleet();
@@ -2671,6 +2902,16 @@
       view.art = sh.art || hullArt(hull, sh.skin);
       out.push(view);
     }
+    // The damage ghost: how much hull each card lost since it was last drawn, so
+    // the bar shows what was TAKEN and not only the new total. Purely local and
+    // transient — it is a 700 ms visual, not state, so it never goes near the
+    // reveal boundary or the world setting.
+    for (const v of out) {
+      if (!v || !v.hull) continue;
+      const was = _lastHull.get(v.id);
+      if (was != null && was > v.hull.cur) v._ghost = was - v.hull.cur;
+      _lastHull.set(v.id, v.hull.cur);
+    }
     return out;
   }
 
@@ -2683,7 +2924,7 @@
       activeShip: combat.activeShip || "gull",
       initiative: combat.initiative || [],
       selectedId: fleetSelected,
-      select: (id) => { fleetSelected = id; renderFleet(); },
+      select: (id) => { if (fleetSelected !== id) fleetCrewSelected = ""; fleetSelected = id; renderFleet(); },
       crest: crestFor,
       artUrl: (p) => (/^(https?:|modules\/|worlds\/|data\/)/i.test(p) ? p : assetUrl(p)),
       spawn: () => spawnShipBrowser(),
@@ -2691,7 +2932,14 @@
       endShipTurn: () => gmEndShipTurn(),
       runShip: (id) => gmRunShip(id),
       removeShip: (id) => gmRemoveShip(id),
-      driveCrew: (shipId, crewId) => { fleetSelected = shipId; ui.notifications?.info("Per-seat driving lands with the station consoles."); },
+      crewId: fleetCrewSelected,
+      // Click a seat to open its actions; click it again to fold it away.
+      driveCrew: (shipId, crewId) => {
+        if (fleetSelected !== shipId) { fleetSelected = shipId; fleetCrewSelected = crewId; }
+        else fleetCrewSelected = fleetCrewSelected === crewId ? "" : crewId;
+        renderFleet();
+      },
+      crewAct: async (shipId, crewId, actionId) => { await gmCrewAct(shipId, crewId, actionId); refreshFleet(); },
       close: closeFleet
     };
   }
@@ -2980,43 +3228,315 @@
         c.buff = { flat: 0, adv: false, die: "" };
       }
       next.gunBuff = "";
-      const ship = getState();
-      let dirty = false;
-      if (ship.shield.secondary) { ship.shield.secondary = null; dirty = true; }
-      const expired = S.expireStatuses(ship, next.round);
-      if (expired.length) dirty = true;
-      if (dirty) await setState(ship);
     } else if (next.ships[startingId]) {
       const sh = next.ships[startingId];
       for (const c of Object.values(sh.crew)) { c.action = false; c.bonus = false; c.maneuver = null; c.mp = 0; c.gun = null; }
       S.expireStatuses(sh, next.round);
       sh.shield.secondary = null;
+      // An unspent Focus Fire / Sensor Lock does not keep across the round.
+      sh.aimBonus = 0;
     }
+    // The combat write goes FIRST, with nothing awaited since it was read. The
+    // Gull's own ship state is a different setting, so it is handled after — a
+    // setState in the middle used to yield and let another client's combat write
+    // be discarded by the save below.
     await saveCombat(next);
+    if (startingId === "gull") {
+      const ship = getState();
+      let dirty = false;
+      if (ship.shield.secondary) { ship.shield.secondary = null; dirty = true; }
+      if (S.expireStatuses(ship, next.round).length) dirty = true;
+      if (dirty) await setState(ship);
+    }
     refreshFleet();
   }
 
+  /* ---- driving an enemy ship -------------------------------------------- */
+
+  /** Rotate or step an enemy's own token, the same way the pilot moves the Gull. */
+  async function moveEnemyToken(shipId, kind) {
+    const sh = getCombat().ships[shipId]; if (!sh?.tokenId) return false;
+    const scene = game.scenes.get(sh.sceneId) || game.scenes.active;
+    const tdoc = scene?.tokens.get(sh.tokenId); if (!tdoc) return false;
+    const g = scene.grid?.size || 100;
+    const upd = { _id: tdoc.id };
+    if (kind === "toward" || kind === "away") {
+      const me = shipPoint(shipId), them = shipPoint("gull");
+      if (!me || !them) return false;
+      const dx = them.x - me.x, dy = them.y - me.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const sign = kind === "toward" ? 1 : -1;
+      upd.x = Math.round(tdoc.x + (dx / len) * g * sign);
+      upd.y = Math.round(tdoc.y + (dy / len) * g * sign);
+      // Point the nose along the direction of travel — rotation 0 = nose up, and
+      // forward is (sin r, -cos r), matching the pilot's own convention. A ship
+      // running away therefore turns its stern to you, which is the point.
+      const tx = dx * sign, ty = dy * sign;
+      upd.rotation = (Math.round((Math.atan2(tx, -ty) * 180) / Math.PI) % 360 + 360) % 360;
+    } else {
+      const delta = { rotL45: -45, rotR45: 45, rotL90: -90, rotR90: 90 }[kind];
+      if (delta == null) return false;
+      upd.rotation = (((tdoc.rotation || 0) + delta) % 360 + 360) % 360;
+    }
+    await scene.updateEmbeddedDocuments("Token", [upd]);
+    return true;
+  }
+
+  /**
+   * An enemy gunner shoots at the Gull.
+   *
+   * The mirror of gmResolveAgainstShip, and deliberately the same shape: measure
+   * the facing off the two tokens, roll against THAT facing's AC, and push the
+   * damage through gmApplyDamage so shields, armour, resistances, statuses, the
+   * impact beat and the red alert all happen exactly as they do for the players.
+   */
+  async function gmEnemyFire(shipId, crewId, gunId) {
+    if (!game.user.isGM) return;
+    const combat = getCombat();
+    const sh = combat.ships[shipId]; if (!sh) return;
+    const crew = sh.crew?.[crewId];
+    if (!crew || crew.dead) return ui.notifications?.warn("That seat is empty.");
+    const gun = (sh.guns || []).find((g) => g.id === gunId);
+    if (!gun) return ui.notifications?.warn(`${sh.name} has no gun "${gunId}".`);
+    if (!S.gunOnline(sh, gunId)) return ui.notifications?.warn(`${gun.label || gunId} is offline.`);
+
+    const from = shipPoint(shipId), gull = shipPoint("gull");
+    const measured = !!(from && gull);
+    // Which of the GULL's facings this shot walks into.
+    const facing = measured ? S.facingFrom(gull, from) : "fore";
+    // …and which of the ENEMY's arcs the Gull is sitting in. A port broadside
+    // cannot fire at something dead ahead; the button's own hint says so.
+    const bearing = measured ? S.facingFrom(from, gull) : "fore";
+    const arc = String(gun.arc || "fore");
+    if (measured && arc !== "all" && arc !== "turret" && arc !== bearing) {
+      return ui.notifications?.warn(
+        `${gun.label || gunId} is a ${arc} mount — the Gull is off her ${S.FACING_LABEL[bearing]}. Come about first.`);
+    }
+    const dist = shipDistance(shipId, "gull");
+    const range = S.rangePenalty(gun, dist ?? 0);
+    const unmeasured = measured ? "" :
+      `<br><span style="color:#f2b03d">One of these ships has no token on the map — this resolved at point-blank on the bow.</span>`;
+    if (dist != null && !range.ok) {
+      await ChatMessage.create({
+        content: `<b>${esc(sh.name)}</b> — the ${esc(gun.label || gunId)} cannot reach you (${dist} squares, max ${gun.longMax}).`,
+        speaker: { alias: esc(sh.name) } });
+      return;
+    }
+
+    const gullState = S.normalize(getState());
+    const ac = S.shipAC(gullState, Object.values(combat.crew || {}));
+    // Focus Fire / Sensor Lock, both set by another seat on this ship this round.
+    const bonus = Number(sh.aimBonus) || 0;
+    const roll = await new Roll(`1d20 + ${Number(gun.toHit) || 0}${bonus ? ` + ${bonus}` : ""}${range.toHit ? ` - ${Math.abs(range.toHit)}` : ""}`).evaluate();
+    const die = roll.dice?.[0]?.results?.[0]?.result ?? 0;
+    const crit = die === 20;
+    const hit = crit || roll.total >= ac[facing];
+    const bits = `AC ${ac[facing]} on your ${S.FACING_LABEL[facing]}${range.toHit ? ` · long range ${range.toHit}` : ""}${bonus ? ` · +${bonus} laid on` : ""}`;
+
+    await ChatMessage.create({
+      content: `<b>${esc(sh.name)}</b> — ${esc(crew.name)} fires the <b>${esc(gun.label || gunId)}</b>: ` +
+               `<b>${roll.total}</b> vs ${bits} — ` +
+               (hit ? `<b style="color:#e0454d">${crit ? "CRITICAL" : "hit"}</b>` : `<b style="color:#42d16a">miss</b>`) + unmeasured,
+      speaker: { alias: esc(sh.name) }, rolls: [roll]
+    });
+
+    // Spend the seat and burn the aim bonus, in one write, before anything awaits.
+    { const nx = getCombat(); const t = nx.ships[shipId];
+      if (t) { if (t.crew?.[crewId]) t.crew[crewId].action = true; t.aimBonus = 0; }
+      await saveCombat(nx); }
+
+    if (!hit) {
+      playFx({ kind: "tracer", fromId: shipId, toId: "gull", color: 0x6f97a6, width: 2 });
+      refreshUI(); refreshFleet();
+      return;
+    }
+    playFx({ kind: "tracer", fromId: shipId, toId: "gull", color: 0xe0454d });
+    playFx({ kind: "seq", path: "jb2a.magic_missile", fromShip: shipId, toShip: "gull" });
+    const dmgRoll = await new Roll(String(gun.damage || "1d6")).evaluate();
+    let raw = Math.max(1, dmgRoll.total);
+    if (range.halve) raw = Math.floor(raw / 2);
+    if (crit) raw *= 2;
+    await ChatMessage.create({ content: `<b>${esc(sh.name)}</b> — damage${range.halve ? " <span style='opacity:.7'>(halved at long range)</span>" : ""}${crit ? " <span style='opacity:.7'>(doubled)</span>" : ""}`,
+      speaker: { alias: esc(sh.name) }, rolls: [dmgRoll] });
+
+    // Frostwatch never shoot the hull — every round is a called shot on a system.
+    const precise = (sh.abilities || []).includes("precision_fire");
+    await gmApplyDamage("gull", raw, facing, { crit, type: "kinetic" });
+    if (precise) await gmCalledShotGull(sh);
+    refreshUI(); refreshFleet();
+  }
+
+  /** Frostwatch precision: knock a Gull system down instead of chewing hull. */
+  async function gmCalledShotGull(sh) {
+    const st = S.normalize(getState());
+    const live = Object.entries(st.systemHp || {}).filter(([id, hp]) => hp.cur > 0 && S.SYSTEMS.find((x) => x.id === id));
+    if (!live.length) return;
+    const pick = live.sort((a, b) => b[1].cur - a[1].cur)[0];
+    st.systemHp[pick[0]].cur = Math.max(0, st.systemHp[pick[0]].cur - 2);
+    st.systems[pick[0]] = S.systemState(st.systemHp[pick[0]]);
+    await setState(st);
+    await ChatMessage.create({
+      content: `<b>${esc(sh.name)}</b> — <b style="color:#7fd4e8">precision fire</b>: your <b>${esc(S.SYSTEMS.find((x) => x.id === pick[0])?.label || pick[0])}</b> takes the round, not your hull.`,
+      speaker: { alias: esc(sh.name) } });
+  }
+
+  /**
+   * Drive one enemy seat. Every button in the fleet crew strip lands here, and
+   * so does every step of `▶ Run`, so hand-play and standing orders can never
+   * drift apart.
+   */
+  async function gmCrewAct(shipId, crewId, actionId, { quiet = false } = {}) {
+    if (!game.user.isGM) return;
+    const combat = getCombat();
+    const sh = combat.ships[shipId]; if (!sh) return;
+    const crew = sh.crew?.[crewId]; if (!crew || crew.dead) return;
+    const say = async (html) => { if (!quiet) await ChatMessage.create({ content: html, speaker: { alias: esc(sh.name) } }); };
+    const spend = async (mut) => {
+      // Read-modify-write with nothing awaited in between — the trap this repo
+      // has already been bitten by three times.
+      const nx = getCombat(); const t = nx.ships[shipId]; if (!t) return;
+      if (t.crew?.[crewId]) t.crew[crewId].action = true;
+      if (mut) mut(t, nx);
+      await saveCombat(nx);
+    };
+
+    if (actionId.startsWith("e_fire:")) return gmEnemyFire(shipId, crewId, actionId.slice(7));
+
+    switch (actionId) {
+      case "e_close": case "e_open": {
+        const ok = await moveEnemyToken(shipId, actionId === "e_close" ? "toward" : "away");
+        if (!ok) return ui.notifications?.warn(`${sh.name} has no token on this scene to move.`);
+        await spend();
+        const d = shipDistance(shipId, "gull");
+        return say(`<b>${esc(crew.name)}</b> ${actionId === "e_close" ? "closes" : "opens the range"} — now <b>${d ?? "?"}</b> squares off.`);
+      }
+      case "e_about": {
+        const ok = await moveEnemyToken(shipId, "rotR90");
+        if (!ok) return ui.notifications?.warn(`${sh.name} has no token on this scene to turn.`);
+        await spend();
+        return say(`<b>${esc(crew.name)}</b> brings her about, presenting a fresh arc.`);
+      }
+      case "e_evade":
+        await spend((t, nx) => S.applyStatus(t, "evasive", { round: nx.round, rounds: 1, src: crew.name }));
+        return say(`<b>${esc(crew.name)}</b> throws her into an evasive weave — <b>+4 AC</b> until her next turn.`);
+      case "e_rally": {
+        const bad = (sh.statuses || []).find((x) => S.STATUSES[x.id]?.kind === "bad");
+        if (!bad) { await spend(); return say(`<b>${esc(crew.name)}</b> calls the deck steady — nothing to shake off.`); }
+        await spend((t) => S.clearStatus(t, bad.id));
+        return say(`<b>${esc(crew.name)}</b> rallies the crew — <b>${esc(S.STATUSES[bad.id].label)}</b> is cleared.`);
+      }
+      case "e_focus":
+        await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
+        return say(`<b>${esc(crew.name)}</b> calls the target — every mount aboard gets <b>+2 to hit</b>.`);
+      case "e_ram": {
+        const d = shipDistance(shipId, "gull");
+        if (d != null && d > 1) return ui.notifications?.warn(`${sh.name} is ${d} squares off — close to 1 before ramming.`);
+        await spend((t, nx) => S.applyStatus(t, "ramming_committed", { round: nx.round, rounds: 1, src: crew.name }));
+        const dmg = await new Roll("4d6").evaluate();
+        await ChatMessage.create({ content: `<b>${esc(sh.name)}</b> — <b style="color:#e0454d">RAMMING</b>. ${esc(crew.name)} puts the nose through you.`,
+          speaker: { alias: esc(sh.name) }, rolls: [dmg] });
+        const gull = shipPoint("gull"), me = shipPoint(shipId);
+        await gmApplyDamage("gull", dmg.total, (gull && me) ? S.facingFrom(gull, me) : "fore", { type: "kinetic" });
+        // She takes it too — half, on her own bow.
+        return gmApplyDamage(shipId, Math.floor(dmg.total / 2), "fore", { type: "kinetic" });
+      }
+      case "e_repair": {
+        const hurt = Object.entries(sh.systemHp || {}).filter(([, hp]) => hp.cur < hp.max).sort((a, b) => a[1].cur - b[1].cur)[0];
+        if (!hurt) { await spend(); return say(`<b>${esc(crew.name)}</b> finds nothing broken.`); }
+        await spend((t) => {
+          const hp = t.systemHp[hurt[0]]; hp.cur = Math.min(hp.max, hp.cur + 2);
+          t.systems[hurt[0]] = S.systemState(hp);
+          if (hurt[0] === "shields" && hp.cur > 0) S.clearStatus(t, "shields_down");
+        });
+        const lbl = S.SYSTEMS.find((x) => x.id === hurt[0])?.label || hurt[0];
+        return say(`<b>${esc(crew.name)}</b> patches the <b>${esc(lbl)}</b> — back to ${Math.min(S.SYSTEM_HP_MAX, hurt[1].cur + 2)}/${S.SYSTEM_HP_MAX}.`);
+      }
+      case "e_reroute":
+        await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
+        return say(`<b>${esc(crew.name)}</b> dumps the reactor into the mounts — <b>+2</b> on this ship's next shot.`);
+      case "e_shield": {
+        const me = shipPoint(shipId), gull = shipPoint("gull");
+        const face = (me && gull) ? S.facingFrom(me, gull) : "fore";
+        await spend((t) => { t.shield.on = true; t.shield.facing = face; });
+        return say(`<b>${esc(crew.name)}</b> walks the shield round to <b>${esc(S.FACING_LABEL[face])}</b> — the arc you are actually on.`);
+      }
+      case "e_jam":
+        await spend();
+        return say(`<b>${esc(crew.name)}</b> floods your fire-control band — <b>the Gull's next gunnery roll has disadvantage</b>.`);
+      case "e_lock": {
+        // Ghost Their Sensors, spent: the Cloaking Officer's block eats exactly
+        // one enemy lock, then clears.
+        const gullNow = S.normalize(getState());
+        if (gullNow.scanBlock) {
+          gullNow.scanBlock = false; await setState(gullNow);
+          await spend();
+          return say(`<b>${esc(crew.name)}</b> reaches for a lock and finds <b>nothing there</b> — the Gull's sensor ghost holds.`);
+        }
+        await spend((t) => { t.aimBonus = (Number(t.aimBonus) || 0) + 2; });
+        return say(`<b>${esc(crew.name)}</b> lays a sensor lock — <b>+2</b> on this ship's next attack.`);
+      }
+      case "e_cm":
+        await spend();
+        return say(`<b>${esc(crew.name)}</b> spins up countermeasures — <b>your next scan of this hull has disadvantage</b>.`);
+      case "e_brace":
+        await spend((t, nx) => S.applyStatus(t, "rerouted", { round: nx.round, rounds: 1, src: crew.name }));
+        return say(`<b>${esc(crew.name)}</b> shores up a bulkhead — <b>+2 AC</b> this round.`);
+      case "e_nogun":
+        return ui.notifications?.warn(`${sh.name} has no gun online.`);
+      default:
+        return ui.notifications?.warn(`Unknown enemy action "${actionId}".`);
+    }
+  }
+
+  /**
+   * Run a whole enemy turn from its doctrine. Same primitives as hand-driving,
+   * executed in order, with one summary line so the table sees what happened.
+   */
   async function gmRunShip(shipId) {
     if (!game.user.isGM) return;
     const combat = getCombat(); const sh = combat.ships[shipId];
     if (!sh) return;
+    if (sh.outcome) return ui.notifications?.warn(`${sh.name} is ${sh.outcome} — she does not act.`);
     const doc = S.doctrine(sh.doctrine); const f = S.faction(sh.faction);
-    // Standing Orders: what this hull does when the GM does not want to micro it.
+    const dist = shipDistance(shipId, "gull");
+    const plan = S.enemyStandingOrders(sh, { distance: dist ?? 4 });
+
     await ChatMessage.create({
       content: `<b>${esc(sh.name)}</b> — standing orders<br><i>${esc(doc.name)}: ${esc(doc.hint)}</i>` +
-               (f ? `<br><span style="opacity:.75">Wants: ${esc(f.wants)}</span>` : ""),
+               (f ? `<br><span style="opacity:.75">Wants: ${esc(f.wants)}</span>` : "") +
+               `<br><span style="opacity:.55;font-size:11px">${plan.length} order${plan.length === 1 ? "" : "s"} at ${dist ?? "?"} squares</span>`,
       speaker: { alias: esc(sh.name) }, whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id)
     });
-    ui.notifications?.info(`${sh.name}: ${doc.hint}`);
+    if (!plan.length) { ui.notifications?.info(`${sh.name}: nobody left to give an order to.`); return; }
+    for (const step of plan) {
+      // Re-read every step: an earlier order may have killed a seat or ended the ship.
+      const now = getCombat().ships[shipId];
+      if (!now || now.outcome) break;
+      await gmCrewAct(shipId, step.crewId, step.action);
+    }
+    refreshUI(); refreshFleet();
   }
 
   async function gmRemoveShip(shipId) {
     if (!game.user.isGM) return;
-    const next = getCombat(); const sh = next.ships[shipId];
+    const sh = getCombat().ships[shipId];
     if (!sh) return;
     await destroyShipDocuments(sh);
+    // Read AFTER the deletes: they await document updates, and a snapshot taken
+    // before them would roll back anything that landed while tokens were going.
+    const next = getCombat();
+    if (!next.ships[shipId]) return;
+    const order = (next.initiative || []).map((e) => e.shipId);
+    const at = order.indexOf(shipId);
     delete next.ships[shipId];
     next.initiative = (next.initiative || []).filter((e) => e.shipId !== shipId);
+    // Hand the turn on rather than leaving activeShip pointing at a ship that is
+    // gone: gmEndShipTurn reads indexOf(-1) as "wrapped", which skipped the rest
+    // of the round and bumped the round counter.
+    if (next.activeShip === shipId) {
+      const rest = next.initiative.map((e) => e.shipId);
+      next.activeShip = (at >= 0 && rest[at]) || rest[0] || "gull";
+    }
     await saveCombat(next);
     refreshFleet();
   }
@@ -3042,9 +3562,10 @@
    */
   async function gmClearFleet({ silent = false } = {}) {
     if (!game.user.isGM) return 0;
-    const next = getCombat();
     let n = 0;
-    for (const sh of Object.values(next.ships)) { await destroyShipDocuments(sh); n++; }
+    for (const sh of Object.values(getCombat().ships)) { await destroyShipDocuments(sh); n++; }
+    // …then read, for the same reason gmRemoveShip does.
+    const next = getCombat();
     next.ships = {};
     next.initiative = [];
     next.activeShip = "gull";
@@ -3441,6 +3962,33 @@
     canvas.app.ticker.add(tick);
   }
 
+  /* ---------------------------------------------------------------------- */
+  /*  Playing a visual on EVERY screen                                        */
+  /*                                                                          */
+  /*  Every fx call in this module is made from inside a `gm*` handler, which  */
+  /*  returns early on a player's client — so the tracers, the impact rings,   */
+  /*  the red alert and the screen shake were only ever drawn for the GM. The  */
+  /*  players, who are the ones being shot at, saw a silent map.               */
+  /*                                                                          */
+  /*  playFx runs the effect locally and, from the GM, broadcasts it so every  */
+  /*  client draws its own copy against its own canvas.                        */
+  /* ---------------------------------------------------------------------- */
+  function runFx(spec) {
+    if (!spec || typeof spec !== "object") return;
+    canvasSafe(`fx ${spec.kind}`, () => {
+      switch (spec.kind) {
+        case "impact": fxImpact(spec.shipId, spec.facing, { absorbed: !!spec.absorbed }); break;
+        case "tracer": fxTracer(spec.fromId, spec.toId, { color: spec.color, width: spec.width }); break;
+        case "alert":  fxRedAlert(Number(spec.fraction) || 0); break;
+        case "seq":    fx(spec.path, { atShip: spec.atShip, fromShip: spec.fromShip, toShip: spec.toShip, scale: spec.scale }); break;
+      }
+    });
+  }
+  function playFx(spec) {
+    runFx(spec);
+    if (game.user.isGM) emit({ type: "vfx", spec, userId: game.user.id });
+  }
+
   /** Sequencer/JB2A garnish. A module update should break sparkles, not combat. */
   function fx(effectPath, { atShip, fromShip, toShip, scale = 1 } = {}) {
     try {
@@ -3543,11 +4091,30 @@
     Hooks.on("refreshToken", (tok) => { if (overlays.size && isShipToken(tok?.document)) { canvasSafe("overlay follow", () => positionOverlay(shipIdForToken(tok.document.id), tok)); } });
     Hooks.on("canvasTearDown", () => { stopPulse(); clearOverlays(); });
     drawGunCone();
-    // Esc closes the full-screen console (capture phase so we can stop Foundry's own Esc handling).
+    /* Esc closes whatever this module has on TOP, not whatever it happens to know
+     * about. Before this the handler only knew the console and the fleet board,
+     * so pressing Esc over the scan readout or a mini-game closed the console
+     * underneath and left the modal stranded on an empty screen.
+     *
+     * Capture phase, so we can stop Foundry's own Esc handling for our layers —
+     * but only when one of ours is actually open. */
+    const ESC_STACK = [
+      { id: "ssv-scan", close: () => S.closeScan() },
+      { id: "ssv-nav-game", close: () => S.closeNavGame() },
+      { id: "ssv-repair-puzzle", close: () => S.closeRepairPuzzle() },
+      { id: "ssv-item-browser", close: () => S.closeItemBrowser() },
+      { id: "ssv-fleet", close: () => closeFleet(), open: () => fleetOpen() },
+      { id: "ssv-ship-console", close: () => closeConsole(), open: () => consoleOpen() }
+    ];
     window.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
-      if (fleetOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); return closeFleet(); }
-      if (consoleOpen()) { ev.preventDefault(); ev.stopImmediatePropagation(); closeConsole(); }
+      for (const layer of ESC_STACK) {
+        const showing = layer.open ? layer.open() : !!document.getElementById(layer.id);
+        if (!showing) continue;
+        ev.preventDefault(); ev.stopImmediatePropagation();
+        S.hideInvPop();
+        return layer.close();
+      }
     }, true);
     staleScriptWarning();
     const mod = game.modules.get(MODULE_ID);
@@ -3574,7 +4141,7 @@
         const h = hullById(sh.profileId); if (!h) return null;
         return buildDeckScene({ ...h, name: sh.name }, sh.skin || Object.keys(h.skins)[0], opts || {});
       },
-      goToDeck: (userId, shipId, deck) => gmGoToDeck(userId, shipId, deck),
+      goToDeck: (userId, shipId, deck) => gmGoToDeck(userId, shipId, deck, { trusted: true }),
       whereIs: () => getCombat().whereIs || {},
       getState, setState, defaultState: S.defaultState,
       SYSTEMS: S.SYSTEMS, FACINGS: S.FACINGS, STATIONS: S.STATIONS,

@@ -1504,6 +1504,13 @@
        "art": "HyperdriveFleet-Barracuda-Destroyer/Ship Images/GL_Barracuda_Racing_Interior.webp"
       }
      }
+    },
+    "Goblin": {
+     "exterior": {
+      "sceneId": "sij8T40EoOw70St8",
+      "art": "Hyperdrive Fleet - The Claymore Carrier/Ship Images/GoblinExterior.webp"
+     },
+     "decks": {}
     }
    },
    "supplements": {
@@ -1766,7 +1773,7 @@
     "Original": {
      "exterior": {
       "sceneId": "9icYYMNEIfO3qxHF",
-      "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/Animated/Brutus_Original_Exterior.webm",
+      "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Exterior.png",
       "artAnim": "HyperdriveFleet-Brutus-TugShip/Ship Images/Animated/Brutus_Original_Exterior.webm"
      },
      "decks": {
@@ -1784,163 +1791,20 @@
       }
      }
     },
-    "Classic": {
+    "Whoops": {
      "exterior": {
-      "sceneId": "bK3WVFznuRPXS2DW",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
+      "sceneId": "avMgJaRxTt03mZoQ",
+      "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Exterior.png"
      },
      "decks": {
       "1": {
-       "sceneId": "lWp0UIqDnJd06kGu",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
+       "sceneId": "Ah3EW6OE5qLxuZqz",
+       "art": "HyperdriveFleet-Brutus-TugShip/Ship Images/GL_Brutus_Whooops_Interior_Level01.png"
       },
       "2": {
-       "sceneId": "35v35MikE43KXsfm",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "Aliens": {
-     "exterior": {
-      "sceneId": "hfzUPoddhwEETiRE",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "dVw0MI8Grc1rtSDT",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "4PLkRItu2g6iVdqK",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "Reaver": {
-     "exterior": {
-      "sceneId": "76bMyAUD4Y3ITfd8",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "HkyrmLG0QTUrHDLA",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "QoYYR5p0ys8WhIzL",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "CyberPunk": {
-     "exterior": {
-      "sceneId": "FWREvox7pNspUNrD",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "8IkzXiwrHSRYXjZ6",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "lZAB4IfQ8LdYj52f",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "Tugsi": {
-     "exterior": {
-      "sceneId": "Cp4Uku96UJhezlEV",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "wW4pJCnIBeomAZdA",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "HK4rbov69if5o9WG",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "Canon": {
-     "exterior": {
-      "sceneId": "yNq3VYAulhlnYdDl",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "FvH8GE1jAU1x6Fzw",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "ZoBukpkUPCg600XT",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "DualThruster": {
-     "exterior": {
-      "sceneId": "tuZNMxIpjspYW68C",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Dual Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "v2x6u1nparmr93WM",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Dual Booster.png"
-      },
-      "2": {
-       "sceneId": "Pkuoah4HRgUdME0G",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Dual Booster.png"
-      }
-     }
-    },
-    "Breached Massacre": {
-     "exterior": {
-      "sceneId": "bPQmFJT9jxCYFB3H",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "RxIKltJTrKL6TYjA",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "Qk05xrfk1uEPZA1h",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "Breached": {
-     "exterior": {
-      "sceneId": "kPPWwIZiSYtaOuvV",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "UyqQTnDLCtqk5Axt",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "hBaoMpN4mDLnN7gZ",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      }
-     }
-    },
-    "OldRusty": {
-     "exterior": {
-      "sceneId": "fs3smMMgQOBDdw4f",
-      "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "tpl9cNpcBd9LAIXS",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
-      },
-      "2": {
-       "sceneId": "ZU1cCRV0KDi4AF6C",
-       "art": "HyperdriveFleet-Brutus-TugShip/Supplements/Triple Booster.png"
+       "sceneId": "lk4qyvYxlLL2u27B",
+       "art": "HyperdriveFleet-Animated-Brutus-TugShip/Ship Images/Brutus_Whoops_Interior_Level2.webm",
+       "artAnim": "HyperdriveFleet-Animated-Brutus-TugShip/Ship Images/Brutus_Whoops_Interior_Level2.webm"
       }
      }
     }
@@ -2613,7 +2477,7 @@
     "Animated": {
      "exterior": {
       "sceneId": "PRZQfnlPB9io7rjg",
-      "art": "Cargo Camel Original Exterior 4K.webm",
+      "art": "GL_Cargo_Camel_Original_Exterior_EnginesOff.png",
       "artAnim": "Cargo Camel Original Exterior 4K.webm"
      },
      "decks": {
@@ -3219,7 +3083,7 @@
    "boardingParty": 0,
    "blurb": "Absurdly fast. Will not stay to finish anything.",
    "skins": {
-    "- Massacre": {
+    "Massacre": {
      "exterior": {
       "sceneId": "6g2FS5v4wdEAt1g2",
       "art": "GL_Dragonette_Massacre_Exterior.png"
@@ -3231,7 +3095,7 @@
       }
      }
     },
-    "- Stealth Invisible": {
+    "Stealth Invisible": {
      "exterior": {
       "sceneId": "PhwyS2iXWZQfs39a",
       "art": "GL_Dragonette_StealthInvisible_Exterior.png"
@@ -3243,7 +3107,7 @@
       }
      }
     },
-    "- Pirate": {
+    "Pirate": {
      "exterior": {
       "sceneId": "7eQx8k5tcpeCijml",
       "art": "GL_Dragonette_Pirate_Exterior.png"
@@ -3255,7 +3119,7 @@
       }
      }
     },
-    "- Military": {
+    "Military": {
      "exterior": {
       "sceneId": "8MgwpCIxCOOutdA6",
       "art": "GL_Dragonette_Military_Exterior.png"
@@ -3267,7 +3131,7 @@
       }
      }
     },
-    "- Original": {
+    "Original": {
      "exterior": {
       "sceneId": "91BROCGouie5rRQd",
       "art": "GL_Dragonette_Original_Exterior.png"
@@ -3279,7 +3143,7 @@
       }
      }
     },
-    "- Blue Chrome": {
+    "Blue Chrome": {
      "exterior": {
       "sceneId": "Cyna5O6zU7G9QPNl",
       "art": "GL_Dragonette_BlueChrome_Exterior.png"
@@ -3291,7 +3155,7 @@
       }
      }
     },
-    "- Butterfly": {
+    "Butterfly": {
      "exterior": {
       "sceneId": "L5aFc2SPUHQ6z5bm",
       "art": "GL_Dragonette_Butterfly_Exterior.png"
@@ -3303,7 +3167,7 @@
       }
      }
     },
-    "- Racer": {
+    "Racer": {
      "exterior": {
       "sceneId": "af4P8wG8Uaf9DljS",
       "art": "GL_Dragonette_Racer_Exterior.png"
@@ -3315,7 +3179,7 @@
       }
      }
     },
-    "- Rainbow Pride": {
+    "Rainbow Pride": {
      "exterior": {
       "sceneId": "Gub5a1yPXjZNi5dw",
       "art": "GL_Dragonette_RainbowPride_Exterior.png"
@@ -3327,7 +3191,7 @@
       }
      }
     },
-    "- Scrapship": {
+    "Scrapship": {
      "exterior": {
       "sceneId": "XrgRn5fPfsBS9TCN",
       "art": "GL_Dragonette_Scrapship_Exterior.png"
@@ -3339,21 +3203,7 @@
       }
      }
     },
-    "-": {
-     "exterior": {
-      "sceneId": "lbcmfEXwxICW21jj",
-      "art": "Dragonette Original Exterior 4K.webm",
-      "artAnim": "Dragonette Original Exterior 4K.webm"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "ToktkIkJWAj8CnnP",
-       "art": "Dragonette Original Interior Alert 4K.webm",
-       "artAnim": "Dragonette Original Interior Alert 4K.webm"
-      }
-     }
-    },
-    "- Stealth": {
+    "Stealth": {
      "exterior": {
       "sceneId": "VhntoQ63ysg7SjVB",
       "art": "GL_Dragonette_Stealth_Exterior.png"
@@ -3365,7 +3215,7 @@
       }
      }
     },
-    "- Breached": {
+    "Breached": {
      "exterior": {
       "sceneId": "tNxbEceWaMG2FiZk",
       "art": "GL_Dragonette_Breached_Exterior.png"
@@ -3442,26 +3292,7 @@
    "boardingParty": 0,
    "blurb": "Slow, fragile, and carrying far too much ordnance.",
    "skins": {
-    "-": {
-     "exterior": {
-      "sceneId": "HZC6Uxa4b3NMTGro",
-      "art": "Dynamo Original Exterior 4K.webm",
-      "artAnim": "Dynamo Original Exterior 4K.webm"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "PXox5cgDbXp797nX",
-       "art": "Dynamo Original Interior Level 1 4K.webm",
-       "artAnim": "Dynamo Original Interior Level 1 4K.webm"
-      },
-      "2": {
-       "sceneId": "1HD7Hl1mjQRoY76k",
-       "art": "Dynamo Original Interior Level 2 Alert 4K.webm",
-       "artAnim": "Dynamo Original Interior Level 2 Alert 4K.webm"
-      }
-     }
-    },
-    "- Wasp": {
+    "Wasp": {
      "exterior": {
       "sceneId": "5w3EgHRZAFSbi5oO",
       "art": "GL_Dynamo_Wasp_Exterior.png"
@@ -3473,7 +3304,7 @@
       }
      }
     },
-    "- StealthInvisible": {
+    "StealthInvisible": {
      "exterior": {
       "sceneId": "2tc54jgfZweBpybC",
       "art": "GL_Dynamo_StealthInvisible_Exterior.png"
@@ -3485,7 +3316,7 @@
       }
      }
     },
-    "- Massacre": {
+    "Massacre": {
      "exterior": {
       "sceneId": "bfEHxQlRovvhUYM8",
       "art": "GL_Dynamo_Massacre_Exterior.png"
@@ -3501,10 +3332,10 @@
       }
      }
     },
-    "- Whoops": {
+    "Whoops": {
      "exterior": {
       "sceneId": "KB2yHL9AWGsS9lex",
-      "art": "Dynamo Whoops Exterior 4K.webm",
+      "art": "GL_Dynamo_Original_Exterior.png",
       "artAnim": "Dynamo Whoops Exterior 4K.webm"
      },
      "decks": {
@@ -3519,7 +3350,7 @@
       }
      }
     },
-    "- Stealth": {
+    "Stealth": {
      "exterior": {
       "sceneId": "8fQXW6yBkFjVvY7t",
       "art": "GL_Dynamo_Stealth_Exterior.png"
@@ -3531,7 +3362,7 @@
       }
      }
     },
-    "- Arctic": {
+    "Arctic": {
      "exterior": {
       "sceneId": "giGg7I8XLMkSbyDC",
       "art": "GL_Dynamo_Arctic_Exterior.png"
@@ -3547,7 +3378,7 @@
       }
      }
     },
-    "- Military": {
+    "Military": {
      "exterior": {
       "sceneId": "dMG7NPCC4d1XladX",
       "art": "GL_Dynamo_Military_Exterior.png"
@@ -3563,7 +3394,7 @@
       }
      }
     },
-    "- Original": {
+    "Original": {
      "exterior": {
       "sceneId": "GwRqSxyfOfUFZ3uK",
       "art": "GL_Dynamo_Original_Exterior.png"
@@ -3579,7 +3410,7 @@
       }
      }
     },
-    "- Breach": {
+    "Breach": {
      "exterior": {
       "sceneId": "chDCzbyNeeWUIzdG",
       "art": "GL_Dynamo_Breach_Exterior.png"
@@ -4321,7 +4152,7 @@
    "id": "gryphon-s-wrath",
    "name": "Gryphon's Wrath",
    "pack": "czepeku-sci-fi-gryphons-wrath.czepeku-sci-fi-gryphons-wrath",
-   "artRoot": "modules/czepeku-sci-fi-gryphons-wrath/",
+   "artRoot": "modules/czepeku-sci-fi-gryphons-wrath/Maps/",
    "faction": "apostles-threshold",
    "cls": "cruiser",
    "doctrine": "sniper",
@@ -4391,276 +4222,264 @@
     "Camo Brown": {
      "exterior": {
       "sceneId": "2wZyYiIHtdRNbbvn",
-      "art": "Maps/GL_Gryphon'sWrath_Camo_Brown_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Camo_Brown_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "0xwJOcj9FXJOs2Pg",
-       "art": "Maps/GL_Gryphon'sWrath_Camo_Brown_Interior.png"
+       "art": "GL_Gryphon'sWrath_Camo_Brown_Interior.png"
       }
      }
     },
     "Cannons": {
      "exterior": {
       "sceneId": "1TnMtsckDVm7MXED",
-      "art": "Maps/GL_Gryphon'sWrath_Cannons_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Cannons_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "1nvQe6rcqUIqTl3p",
-       "art": "Maps/GL_Gryphon'sWrath_Cannons_Interior.png"
+       "art": "GL_Gryphon'sWrath_Cannons_Interior.png"
       }
      }
     },
     "Wing Split": {
      "exterior": {
       "sceneId": "iksUzbO1mDgmwS7J",
-      "art": "Maps/GL_Gryphon'sWrath_WingSplit_Exterior.png"
+      "art": "GL_Gryphon'sWrath_WingSplit_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "3jgvxbgERJ69eXaX",
-       "art": "Maps/GL_Gryphon'sWrath_WingSplit_Interior.png"
+       "art": "GL_Gryphon'sWrath_WingSplit_Interior.png"
       }
      }
     },
     "Camo Space": {
      "exterior": {
       "sceneId": "4Av61ocZzHmtVW4X",
-      "art": "Maps/GL_Gryphon'sWrath_Camo_Space_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Camo_Space_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "qUIpEN6hIY8fv8bc",
-       "art": "Maps/GL_Gryphon'sWrath_Camo_Space_Interior.png"
+       "art": "GL_Gryphon'sWrath_Camo_Space_Interior.png"
       }
      }
     },
     "Parakeet": {
      "exterior": {
       "sceneId": "mQQxXit3dMQBtLDj",
-      "art": "Maps/GL_Gryphon'sWrath_Parakeet_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Parakeet_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "51au6VzlWQJWDpib",
-       "art": "Maps/GL_Gryphon'sWrath_Parakeet_Interior.png"
+       "art": "GL_Gryphon'sWrath_Parakeet_Interior.png"
       }
      }
     },
     "Dark Raven": {
      "exterior": {
       "sceneId": "Hof6AiW0uRJRFdX5",
-      "art": "Maps/GL_Gryphon'sWrath_DarkRaven_Exterior.png"
+      "art": "GL_Gryphon'sWrath_DarkRaven_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "7WWARAy6jQBRggp3",
-       "art": "Maps/GL_Gryphon'sWrath_DarkRaven_Interior.png"
+       "art": "GL_Gryphon'sWrath_DarkRaven_Interior.png"
       }
      }
     },
     "Power Off": {
      "exterior": {
       "sceneId": "NWsZSHd74tj373aM",
-      "art": "Maps/GL_Gryphon'sWrath_PowerOff_Exterior.png"
+      "art": "GL_Gryphon'sWrath_PowerOff_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "CPlyqACwwB7VvZTB",
-       "art": "Maps/GL_Gryphon'sWrath_PowerOff_Interior.png"
+       "art": "GL_Gryphon'sWrath_PowerOff_Interior.png"
       }
      }
     },
     "Hawk": {
      "exterior": {
       "sceneId": "DWyRHIThEq8SrIEL",
-      "art": "Maps/GL_Gryphon'sWrath_Hawk_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Hawk_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "vgfKl1DMAsW9g1ak",
-       "art": "Maps/GL_Gryphon'sWrath_Hawk_Interior.png"
+       "art": "GL_Gryphon'sWrath_Hawk_Interior.png"
       }
      }
     },
     "Dwarf": {
      "exterior": {
       "sceneId": "F3CSVjC0vVOTpQnk",
-      "art": "Maps/GL_Gryphon'sWrath_Dwarf_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Dwarf_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "QgCfPpC50T71B16A",
-       "art": "Maps/GL_Gryphon'sWrath_Dwarf_Interior.png"
+       "art": "GL_Gryphon'sWrath_Dwarf_Interior.png"
       }
      }
     },
     "Evangelion": {
      "exterior": {
       "sceneId": "Gzs5biaFBqwgCIlL",
-      "art": "Maps/GL_Gryphon'sWrath_Evangelion_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Evangelion_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "QIqNfndj1ucDjIYV",
-       "art": "Maps/GL_Gryphon'sWrath_Evangelion_Interior.png"
+       "art": "GL_Gryphon'sWrath_Evangelion_Interior.png"
       }
      }
     },
     "Wingless": {
      "exterior": {
       "sceneId": "HXHywoz27zY8kl1V",
-      "art": "Maps/GL_Gryphon'sWrath_Wingless_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Wingless_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "QqUjUG0KVsKZ1HQB",
-       "art": "Maps/GL_Gryphon'sWrath_Wingless_Interior.png"
+       "art": "GL_Gryphon'sWrath_Wingless_Interior.png"
       }
      }
     },
     "Golden Eagle": {
      "exterior": {
       "sceneId": "KY46FHvxUeOSoEqg",
-      "art": "Maps/GL_Gryphon'sWrath_GoldenEagle_Exterior.png"
+      "art": "GL_Gryphon'sWrath_GoldenEagle_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "iz2SWCt9CXAbWtpo",
-       "art": "Maps/GL_Gryphon'sWrath_GoldenEagle_Interior.png"
+       "art": "GL_Gryphon'sWrath_GoldenEagle_Interior.png"
       }
      }
     },
     "Onyx": {
      "exterior": {
       "sceneId": "LTUE1EVdCbhtlB1N",
-      "art": "Maps/GL_Gryphon'sWrath_Onyx_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Onyx_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "nRVj1F6SmUoMvDLk",
-       "art": "Maps/GL_Gryphon'sWrath_Onyx_Interior.png"
-      }
-     }
-    },
-    "Glowing Wings": {
-     "exterior": {
-      "sceneId": "LklOKa13RKTBtFNE",
-      "art": "Backgrounds/Nebula_02.jpg"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "Yk86ZxJzeGMkVHWk",
-       "art": "Backgrounds/Nebula_02.jpg"
+       "art": "GL_Gryphon'sWrath_Onyx_Interior.png"
       }
      }
     },
     "Whoops": {
      "exterior": {
       "sceneId": "RNR1QwvBLKeMpj7o",
-      "art": "Maps/GL_Gryphon'sWrath_Whoops_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Whoops_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "xtUDs1Y5JLqS2j7c",
-       "art": "Maps/GL_Gryphon'sWrath_Whoops_Interior.png"
+       "art": "GL_Gryphon'sWrath_Whoops_Interior.png"
       }
      }
     },
     "Stealth": {
      "exterior": {
       "sceneId": "Tbp9igmajSceLDTg",
-      "art": "Maps/GL_Gryphon'sWrath_Stealth_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Stealth_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "XzybbP49LUbbsoMz",
-       "art": "Maps/GL_Gryphon'sWrath_Stealth_Interior.png"
+       "art": "GL_Gryphon'sWrath_Stealth_Interior.png"
       }
      }
     },
     "Xenos": {
      "exterior": {
       "sceneId": "UPfeBpPnswc6mFaL",
-      "art": "Maps/GL_Gryphon'sWrath_Xenos_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Xenos_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "lo7PbVVvYytHG27A",
-       "art": "Maps/GL_Gryphon'sWrath_Xenos_Interior.png"
+       "art": "GL_Gryphon'sWrath_Xenos_Interior.png"
       }
      }
     },
     "Original": {
      "exterior": {
       "sceneId": "beI1J4o9y8ejiZeO",
-      "art": "Maps/GL_Gryphon'sWrath_Original_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Original_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "XGZSRCYEN5uXwD1w",
-       "art": "Maps/GL_Gryphon'sWrath_Original_Interior.png"
+       "art": "GL_Gryphon'sWrath_Original_Interior.png"
       }
      }
     },
     "Breached Stage 1": {
      "exterior": {
       "sceneId": "oog7dJ2dpsnBRzJm",
-      "art": "Maps/GL_Gryphon'sWrath_Breached_Stage01_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Breached_Stage01_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "fRPjLzTbIljeesis",
-       "art": "Maps/GL_Gryphon'sWrath_Breached_Stage01_Interior.png"
+       "art": "GL_Gryphon'sWrath_Breached_Stage01_Interior.png"
       }
      }
     },
     "Tropical": {
      "exterior": {
       "sceneId": "rO8JMqWUtdZeZ0Ik",
-      "art": "Maps/GL_Gryphon'sWrath_Tropical_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Tropical_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "gPn03QaECsKCX84Z",
-       "art": "Maps/GL_Gryphon'sWrath_Tropical_Interior.png"
+       "art": "GL_Gryphon'sWrath_Tropical_Interior.png"
       }
      }
     },
     "Butterfly": {
      "exterior": {
       "sceneId": "yt1uD9yy3Zny6xpR",
-      "art": "Maps/GL_Gryphon'sWrath_Butterfly_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Butterfly_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "kwhmzroStzAuKL1l",
-       "art": "Maps/GL_Gryphon'sWrath_Butterfly_Interior.png"
+       "art": "GL_Gryphon'sWrath_Butterfly_Interior.png"
       }
      }
     },
     "Angelic Wings": {
      "exterior": {
       "sceneId": "l5buUy5W9El3VaRY",
-      "art": "Maps/GL_Gryphon'sWrath_AngelicWings_Exterior.png"
+      "art": "GL_Gryphon'sWrath_AngelicWings_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "uxE4xhXzORYMNjC9",
-       "art": "Maps/GL_Gryphon'sWrath_AngelicWings_Interior.png"
+       "art": "GL_Gryphon'sWrath_AngelicWings_Interior.png"
       }
      }
     },
     "Breached Stage 2": {
      "exterior": {
       "sceneId": "sEh6HWoTgusQfwZM",
-      "art": "Maps/GL_Gryphon'sWrath_Breached_Stage02_Exterior.png"
+      "art": "GL_Gryphon'sWrath_Breached_Stage02_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "r7P6HfFCampD1eCd",
-       "art": "Maps/GL_Gryphon'sWrath_Breached_Stage02_Interior.png"
+       "art": "GL_Gryphon'sWrath_Breached_Stage02_Interior.png"
       }
      }
     }
@@ -8042,7 +7861,7 @@
    "boardingParty": 0,
    "blurb": "A closed ring of guns. There is no bad arc to be in — for it.",
    "skins": {
-    "- Snakebite": {
+    "Snakebite": {
      "exterior": {
       "sceneId": "42a8MV03FKMTkrvA",
       "art": "GL_Ouroboros_Snakebite_Exterior.png"
@@ -8054,7 +7873,7 @@
       }
      }
     },
-    "- Original": {
+    "Original": {
      "exterior": {
       "sceneId": "BchNUWX75b6BmHsF",
       "art": "GL_Ouroboros_Original_Exterior.png"
@@ -8066,7 +7885,7 @@
       }
      }
     },
-    "- Breached Massacre": {
+    "Breached Massacre": {
      "exterior": {
       "sceneId": "u8Ya8pre0pDsQLSC",
       "art": "GL_Ouroboros_Breached_Massacre_Exterior.png"
@@ -8078,7 +7897,7 @@
       }
      }
     },
-    "- Massacre": {
+    "Massacre": {
      "exterior": {
       "sceneId": "VpEbdDpRluiGvWOF",
       "art": "GL_Ouroboros_Massacre_Exterior.png"
@@ -8090,7 +7909,7 @@
       }
      }
     },
-    "- Crimson": {
+    "Crimson": {
      "exterior": {
       "sceneId": "ZIYaRuraYpIEWuna",
       "art": "GL_Ouroboros_Crimson_Exterior.png"
@@ -8102,7 +7921,7 @@
       }
      }
     },
-    "- Medical": {
+    "Medical": {
      "exterior": {
       "sceneId": "qR1Fp4H9SSvIFCpP",
       "art": "GL_Ouroboros_Medical_Exterior.png"
@@ -8114,7 +7933,7 @@
       }
      }
     },
-    "- Breached": {
+    "Breached": {
      "exterior": {
       "sceneId": "o0smxro5uZLcAZOe",
       "art": "GL_Ouroboros_Breached_Exterior.png"
@@ -8151,7 +7970,7 @@
     135
    ],
    "decks": 1,
-   "hull": 0,
+   "hull": 1150,
    "acBase": 10,
    "armour": 8,
    "resist": {},
@@ -8537,6 +8356,18 @@
       "1": {
        "sceneId": "VPbCU53MxZefvFY7",
        "art": "GL_PrimeMover_Massacre_Interior.png"
+      }
+     }
+    },
+    "Mini Mover Hazard": {
+     "exterior": {
+      "sceneId": "bprDBGzaCQLB80ZS",
+      "art": "GL_PrimeMover_Hazard_Midnight_Exterior.png"
+     },
+     "decks": {
+      "1": {
+       "sceneId": "oBCdt5BgfmQLbWe5",
+       "art": "GL_PrimeMover_Hazard_Midnight_Interior.png"
       }
      }
     },
@@ -9899,7 +9730,7 @@
    "id": "tenrec-digger-asteroid-mining-ship",
    "name": "Tenrec Digger - Asteroid Mining Ship",
    "pack": "HyperdriveFleet-Tenrec-Digger.scenes",
-   "artRoot": "modules/HyperdriveFleet-Tenrec-Digger/",
+   "artRoot": "modules/HyperdriveFleet-Tenrec-Digger/Ship Images/",
    "faction": "",
    "cls": "corvette",
    "doctrine": "turtle",
@@ -9955,144 +9786,132 @@
     "Industrial": {
      "exterior": {
       "sceneId": "VyvTq7MXChbUIxJv",
-      "art": "Ship Images/GL_TenrecDigger_Industrial_Exterior.png"
+      "art": "GL_TenrecDigger_Industrial_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "05e7dR8IcAzDuwkj",
-       "art": "Ship Images/GL_TenrecDigger_Industrial_Interior.png"
+       "art": "GL_TenrecDigger_Industrial_Interior.png"
       }
      }
     },
     "Bane": {
      "exterior": {
       "sceneId": "BgVMVH7tgCxKb3nU",
-      "art": "Ship Images/GL_TenrecDigger_Bane_Exterior.png"
+      "art": "GL_TenrecDigger_Bane_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "4SMAM7Q155QLap3G",
-       "art": "Ship Images/GL_TenrecDigger_Bane_Interior.png"
+       "art": "GL_TenrecDigger_Bane_Interior.png"
       }
      }
     },
     "Pirate": {
      "exterior": {
       "sceneId": "66j8uEw9mIKQe6bT",
-      "art": "Ship Images/GL_TenrecDigger_Pirate_Exterior.png"
+      "art": "GL_TenrecDigger_Pirate_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "RrQqiytrGeWGoYJV",
-       "art": "Ship Images/GL_TenrecDigger_Pirate_Interior.png"
+       "art": "GL_TenrecDigger_Pirate_Interior.png"
       }
      }
     },
     "Pristine": {
      "exterior": {
       "sceneId": "eSS9la82F9GSaORH",
-      "art": "Ship Images/GL_TenrecDigger_Pristine_Exterior.png"
+      "art": "GL_TenrecDigger_Pristine_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "9gEiNR0Mi7sMs18a",
-       "art": "Ship Images/GL_TenrecDigger_Pristine_Interior.png"
+       "art": "GL_TenrecDigger_Pristine_Interior.png"
       }
      }
     },
     "Breached": {
      "exterior": {
       "sceneId": "ibdISFrtNAMzszpK",
-      "art": "Ship Images/GL_TenrecDigger_Breached_Exterior.png"
+      "art": "GL_TenrecDigger_Breached_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "9gpVDhs7Mp5k3Oal",
-       "art": "Ship Images/GL_TenrecDigger_Breached_Interior.png"
+       "art": "GL_TenrecDigger_Breached_Interior.png"
       }
      }
     },
     "Oxidised": {
      "exterior": {
       "sceneId": "fQG0QAvnSgmVQskL",
-      "art": "Ship Images/GL_TenrecDigger_Oxidised_Exterior.png"
+      "art": "GL_TenrecDigger_Oxidised_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "B9RLYm8t2dKMSbGQ",
-       "art": "Ship Images/GL_TenrecDigger_Oxidised_Interior.png"
+       "art": "GL_TenrecDigger_Oxidised_Interior.png"
       }
      }
     },
     "Original": {
      "exterior": {
       "sceneId": "D1yGDS9MAHkEb6hN",
-      "art": "Ship Images/GL_TenrecDigger_Original_Exterior.png"
+      "art": "GL_TenrecDigger_Original_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "vGY4p1xmhT6zT8fH",
-       "art": "Ship Images/GL_TenrecDigger_Original_Interior.png"
-      }
-     }
-    },
-    "Desert Camo": {
-     "exterior": {
-      "sceneId": "F93s8GqReLO3n4yw",
-      "art": "Supplements/THRUSTERS_7.png"
-     },
-     "decks": {
-      "1": {
-       "sceneId": "JPQUp9yYj56GOqWE",
-       "art": "Supplements/THRUSTERS_7.png"
+       "art": "GL_TenrecDigger_Original_Interior.png"
       }
      }
     },
     "Plagueship": {
      "exterior": {
       "sceneId": "H0E8fNuHmMyQOGYG",
-      "art": "Ship Images/GL_TenrecDigger_Plagueship_Exterior.png"
+      "art": "GL_TenrecDigger_Plagueship_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "nSXeop8m7Dx4uoWg",
-       "art": "Ship Images/GL_TenrecDigger_Plagueship_Interior.png"
+       "art": "GL_TenrecDigger_Plagueship_Interior.png"
       }
      }
     },
     "Red Devil": {
      "exterior": {
       "sceneId": "La76zB75AeClEHif",
-      "art": "Ship Images/GL_TenrecDigger_RedDevil_Exterior.png"
+      "art": "GL_TenrecDigger_RedDevil_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "Q2WNg2PjjCCE0voB",
-       "art": "Ship Images/GL_TenrecDigger_RedDevil_Interior.png"
+       "art": "GL_TenrecDigger_RedDevil_Interior.png"
       }
      }
     },
     "Whoops": {
      "exterior": {
       "sceneId": "twVWDL00Hjhn2muW",
-      "art": "Ship Images/GL_TenrecDigger_Whoops_Exterior.png"
+      "art": "GL_TenrecDigger_Whoops_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "MR8vIdiZSMxjaeHy",
-       "art": "Ship Images/GL_TenrecDigger_Whoops_Interior.png"
+       "art": "GL_TenrecDigger_Whoops_Interior.png"
       }
      }
     },
     "Hazard": {
      "exterior": {
       "sceneId": "R490tBb05b6L0wgM",
-      "art": "Ship Images/GL_TenrecDigger_Hazard_Exterior.png"
+      "art": "GL_TenrecDigger_Hazard_Exterior.png"
      },
      "decks": {
       "1": {
        "sceneId": "U9aNOVP207eNlpHM",
-       "art": "Ship Images/GL_TenrecDigger_Hazard_Interior.png"
+       "art": "GL_TenrecDigger_Hazard_Interior.png"
       }
      }
     }
