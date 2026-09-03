@@ -83,6 +83,28 @@ python3 tools/build_fleet.py --verify        # HEAD-checks all ~1,500 art paths
 
 ---
 
+## 3b. The printed rules are the spec
+
+`source/pdfs/ssv-silver-gull-crew-dossier.pdf` is the campaign's own rulebook and
+the module must match it. A balance pass once changed six numbers at once and the
+drift went unnoticed for weeks, so **`--selftest` now asserts each one by name**:
+
+| Constant | Dossier |
+|---|---|
+| `S.SHIELD_AC` = 5 | Allocate Shields — *"half damage + 5 AC"* |
+| `S.MICRO_AC` = 2, `S.MICRO_DR` = 0 | Micro-Adjust — *"+2 AC … (no damage-halving)"* |
+| `S.MANEUVERS` | Evasive +5 / 5 MP · Steady 0 / 3 MP · Aggressive −5 / 2 MP |
+| `S.CALLED_SHOT_PENALTY` = −5 | Called Shot — *"−5 to hit, no hull damage either way"* |
+| `S.STATUSES.rerouted.ac` = 5 | Reroute Power — *"+5 temp AC … stacks with maneuver AC"* |
+| `S.QUICK_AIM_BONUS` = 2 · `S.SCAN_DC` / `S.BOARDING_DC` = 15 | as printed |
+
+**Shields are AC *and* damage reduction**, which is why `S.shipAC` returns a
+different number per facing — a shielded bow is five better than a bare stern, and
+that difference is the entire reason to allocate. Anything that renders AC must
+read `ac[facing]`, never a single value.
+
+---
+
 ## 4. The combat model
 
 Every ship — the Gull included, as id `"gull"` — is one record shape, so one set
@@ -469,6 +491,17 @@ setup session and 403s otherwise. The UI buttons always work — prefer them.
 - **`anyCrew` is the wrong rule for the inventory.** It is used *between* fights,
   when `combat.crew` is empty — so every player-side inventory action was silently
   refused out of combat. That is what `player` is for.
+- **`enterCombat` must keep `combatState.ships`.** It built a fresh
+  `S.defaultCombat()` and copied only the roster across, so pressing
+  **⚔ ENTER SHIP COMBAT** silently deleted every enemy the GM had already spawned
+  from Fleet Command — the records went, their actors and tokens stayed as
+  orphans. The turn bar and the fleet board are one system; that was the seam
+  where they came apart. The idle bar now shows the contact count and carries a
+  🛰 Fleet button so the link is visible.
+- **ABSENT is not FALSE in a normalizer.** `gmSpawnShip` passes no `shield` block,
+  and `on: !!stored.shield?.on` read that as "shields down" — every enemy in the
+  fleet had been arriving with her bow open and five AC light. Fall back to the
+  default when the key is missing, and only honour an explicit `false`.
 - **Never put a backtick inside the CSS template literals.** They are one big
   template string; a backtick in a comment ends it and the file stops parsing.
   `node --check` catches it, which is why it runs first in the gate.

@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.28.1";
+  S.VERSION = "0.29.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -1217,6 +1217,71 @@
         x: Math.round(b.x + padX + (usableW * (c + 0.5)) / cols),
         y: Math.round(b.y + padY + (usableH * (r + 0.5)) / rows)
       });
+    }
+    return out;
+  };
+
+  /* ---------------------------------------------------------------------- */
+  /*  Reactions — what a ship can do on somebody ELSE's turn                   */
+  /*                                                                          */
+  /*  The dossier is full of these and none of them were surfaced anywhere:    */
+  /*  the Captain's Command Point ("at any time, even outside your turn"),     */
+  /*  held Countermeasures, the flak turret's always-on point defence, Phase   */
+  /*  Shift. With fleet initiative the GM needs them at a glance on the ship    */
+  /*  whose turn it ISN'T, which is exactly when they matter.                  */
+  /* ---------------------------------------------------------------------- */
+  S.STATION_REACTIONS = {
+    captain: [{ id: "command_point", label: "Command Point",
+      text: "Once per combat, at any time — even outside your turn — turn one failed roll into a success." }],
+    science: [{ id: "countermeasures", label: "Countermeasures (held)",
+      text: "Held from your own turn: negate an enemy Scan or Jam as it happens, then Quick Ping free." }],
+    cloaking: [{ id: "phase_shift", label: "Phase Shift",
+      text: "One declared incoming attack this round automatically misses." },
+      { id: "decoy", label: "Decoy running",
+      text: "The next shot at the Gull hits the decoy instead." }],
+    boarding: [{ id: "repel", label: "Repel boarders",
+      text: "Spend your Bonus to leave your station and fight boarders already aboard." }],
+    turret_flak: [{ id: "point_defence", label: "Point Defence (always on)",
+      text: "One free Suppressing Burst at any boarding pod or missile, the instant it launches." }]
+  };
+  /** Faction reactions an ENEMY hull brings, keyed by the ability it comes from. */
+  S.ABILITY_REACTIONS = {
+    slip: { label: "Slip", text: "Once a round when hit, she forfeits her movement to halve the damage." },
+    point_defence: { label: "Point Defence", text: "A free shot at any boarder or missile launched at her." },
+    reflector_shields: { label: "Reflector Shields", text: "She can overcharge a facing to throw part of a hit back." },
+    compliance: { label: "Compliance", text: "Any round you do not fire, her damage halves and her next shot is announced." },
+    shield_link: { label: "Shield Link", text: "While another Directorate hull is within 2, they share a shield pool." },
+    armour_plate: { label: "Armour", text: "Every damage packet is reduced before anything else applies." },
+    phase_discontinuity: { label: "Phase Discontinuity", text: "An attack that would hit may simply not have happened." },
+    it_notices_you: { label: "It Notices You", text: "Every scan or lock aimed at her adds a token. At two, she acts." }
+  };
+
+  /**
+   * Everything this ship could do on someone else's turn, as display rows.
+   * `crew` is the seat list; for an enemy, pass her own crew.
+   */
+  S.reactionsFor = function (ship, crew) {
+    const out = [];
+    const seats = S.crewList(crew).filter((c) => c && !c.dead);
+    for (const c of seats) {
+      for (const r of (S.STATION_REACTIONS[c.station] || [])) {
+        out.push({ id: r.id, label: r.label, text: r.text, who: c.name });
+      }
+    }
+    // A built flak turret watches the sky whether or not anyone is sitting in it.
+    if (ship?.turrets?.turret_flak?.built && !seats.some((c) => c.station === "turret_flak")) {
+      out.push({ ...S.STATION_REACTIONS.turret_flak[0], who: "Flak turret" });
+    }
+    for (const ab of (ship?.abilities || [])) {
+      const r = S.ABILITY_REACTIONS[ab];
+      if (r) out.push({ id: ab, label: r.label, text: r.text, who: S.factionName(ship.faction) });
+    }
+    // Things already running.
+    for (const st of (ship?.statuses || [])) {
+      const def = S.STATUSES[st.id];
+      if (def && def.kind === "good" && def.incomingAdv < 0) {
+        out.push({ id: st.id, label: def.label, text: def.blurb, who: "in effect" });
+      }
     }
     return out;
   };
@@ -2606,47 +2671,129 @@
     root.style.display = "flex";
 
     if (cctx.isGM) {
-      const crew = Object.values(combat.crew);
-      const stationOpts = (cur) => `<option value="">— station —</option>` +
-        S.STATIONS.filter((st) => combat.rolesEnabled[st.id]).map((st) => `<option value="${st.id}" ${st.id === cur ? "selected" : ""}>${st.num}. ${esc(st.name)}</option>`).join("");
-      const roster = crew.length ? crew.map((c) => {
-        const ctrlOpts = (cctx.users || []).map((u) => `<option value="${u.id}" ${u.id === c.controllerUserId ? "selected" : ""}>${esc(u.name)}${u.isGM ? " (GM)" : ""}</option>`).join("");
-        const seat = `<div class="ct-seat" data-crew="${c.id}">` +
-          `<div><div class="ct-name">${esc(c.name)}</div><div class="ct-sub">owner: ${esc(c.ownerUserId ? nameOf(cctx, c.ownerUserId) : "—")}</div></div>` +
-          `<select class="ct-sel" data-station title="Station">${stationOpts(c.station)}</select>` +
-          `<div class="ct-toks">${token("action", actionState(c), true)}${token("bonus", c.bonus, true)}${grantedTokens(c.granted)}</div>` +
-          `<div class="ct-ctrl"><select class="ct-sel" data-ctrl title="Controlled by">${ctrlOpts}</select>` +
-          `<span class="ct-x" data-remove title="Exclude from combat">✕</span></div></div>`;
-        const panel = seatPanel(c, cctx);
-        return panel ? `<div class="ct-seatwrap">${seat}${panel}</div>` : seat;
-      }).join("") : `<div class="ct-empty">No crew in this fight — use “+ Add crew”.</div>`;
-      const swap = combat.pendingSwap ? `<div class="ct-note">Station swap pending — awaiting confirmation…</div>` : "";
+      /* ------------------------------------------------------------------ *
+       * A tracker the GM can actually keep on screen.
+       *
+       * The old one drew every crew member as a full-width row with two
+       * dropdowns and a controller select — seven of those is half a monitor,
+       * and it showed the Gull's crew whether or not it was the Gull's turn.
+       *
+       * Now: an INITIATIVE STRIP across the top with every ship in the fight,
+       * then the seats of the ONE ship whose turn it is. Click any other ship
+       * to read its reactions — the things it can do on your turn, which is
+       * exactly when you need them. The housekeeping lives behind ⋯.
+       * ------------------------------------------------------------------ */
+      const ships = cctx.ships || [];
+      const activeId = combat.activeShip || "gull";
+      const sel = cctx.trackSel || activeId;
+      const selShip = ships.find((x) => x.id === sel) || ships.find((x) => x.id === activeId) || null;
+      const isGullTurn = activeId === "gull";
+
+      const chip = (v) => {
+        const f = S.faction(v.faction);
+        const init = (combat.initiative || []).find((e) => e.shipId === v.id);
+        const on = v.id === activeId, picked = v.id === sel;
+        return `<button class="ct-ship${on ? " now" : ""}${picked ? " sel" : ""}${v.outcome ? " out" : ""}" data-ship="${esc(v.id)}"
+                  title="${esc(v.name)}${init ? ` — initiative ${init.roll}` : ""}">
+          <span class="ct-shipart">${v.art
+            ? `<img src="${cctx.artUrl ? cctx.artUrl(v.art) : v.art}" alt="" onerror="this.style.display='none'">`
+            : `<span class="ct-q">?</span>`}</span>
+          <span class="ct-shipbar" style="background:${v.own ? "#38e1c4" : f ? f.color : "#6f97a6"}"></span>
+          <span class="ct-shipname">${esc(v.name)}</span>
+          <span class="ct-init">${init ? init.roll : "—"}</span>
+        </button>`;
+      };
+
+      const strip = ships.length
+        ? ships.map(chip).join("")
+        : `<span class="ct-none">No contacts — press <b>F</b> for Fleet Command to spawn some.</span>`;
+
+      // The seats of whoever's turn it is. Compact chips; click one to open it.
+      const seatsOf = (v) => {
+        if (!v) return [];
+        if (v.id === "gull") return Object.values(combat.crew);
+        return Object.values(v.crew || {});
+      };
+      const openSeat = cctx.seatSel || "";
+      const seatChip = (c, own) => {
+        const st = c.station ? (S.station(c.station)?.name || c.station) : "no station";
+        const spent = c.action ? " spent" : "";
+        return `<button class="ct-seatchip${openSeat === c.id ? " open" : ""}${c.dead ? " dead" : ""}${spent}" data-seat="${esc(c.id)}"
+                  title="${c.dead ? "Killed — this station is offline" : esc(st)}">
+          <span class="ct-seatname">${esc(c.name)}</span>
+          <span class="ct-seatstn">${esc(st)}</span>
+          <span class="ct-pips">${own ? token("action", actionState(c), true) + token("bonus", c.bonus, true) + grantedTokens(c.granted) : ""}</span>
+        </button>`;
+      };
+
+      const seats = seatsOf(selShip);
+      const bodyRows = seats.length
+        ? `<div class="ct-seatrow">${seats.map((c) => seatChip(c, selShip.id === "gull")).join("")}</div>`
+        : `<div class="ct-none">${selShip ? "Nobody aboard her." : "No ship selected."}</div>`;
+
+      // The open seat's own panel: the Gull's pilot/gunner inline controls, or
+      // an enemy seat's action strip.
+      let seatPanelHtml = "";
+      const openC = seats.find((c) => c.id === openSeat);
+      if (openC && selShip) {
+        if (selShip.id === "gull") seatPanelHtml = seatPanel(openC, cctx) || "";
+        else if (!openC.dead) {
+          seatPanelHtml = `<div class="fl-acts">${S.enemySeatActions(selShip, openC).map((a) =>
+            `<button class="fl-actbtn" data-crewact="${esc(a.id)}" data-crewfor="${esc(openC.id)}"
+               title="${esc(a.hint || "")}"${a.disabled ? " disabled" : ""}>${esc(a.label)}</button>`).join("")}</div>`;
+        }
+      }
+
+      // Reactions — shown for a ship it is NOT the turn of, because that is when
+      // they fire.
+      const reax = selShip && selShip.id !== activeId
+        ? S.reactionsFor(selShip, seatsOf(selShip)) : [];
+      const reaxHtml = reax.length
+        ? `<div class="ct-reax"><span class="ct-reaxh">REACTIONS · ${esc(selShip.name)}</span>` +
+          reax.map((r) => `<span class="ct-reaxrow" title="${esc(r.text)}"><b>${esc(r.label)}</b> <i>${esc(r.who)}</i></span>`).join("") +
+          `</div>`
+        : (selShip && selShip.id !== activeId ? `<div class="ct-reax"><span class="ct-reaxh">REACTIONS · ${esc(selShip.name)}</span><span class="ct-reaxrow">Nothing she can do out of turn.</span></div>` : "");
+
+      const turnName = ships.find((x) => x.id === activeId)?.name || "SSV Silver Gull";
       root.innerHTML =
-        `<div class="ct-top"><span class="ct-turn">SHIP'S TURN ${combat.turn}</span>` +
-        `<button class="ct-btn" data-act="next">⏭ Next Turn</button>` +
-        `<button class="ct-btn" data-act="add">+ Add crew</button>` +
-        `<button class="ct-btn" data-act="crew">Edit crew</button>` +
-        `<button class="ct-btn" data-act="roles">Stations</button>` +
-        `<button class="ct-btn" data-act="resend">Re-send picker</button>` +
-        collapseBtn +
-        `<button class="ct-btn warn" data-act="end">✖ End Combat</button></div>` +
-        `<div class="ct-seats">${roster}</div>${swap}`;
-      const on = (sel, fn) => { const e = root.querySelector(sel); if (e) e.onclick = fn; };
-      on('[data-act="next"]', () => cctx.nextTurn());
-      on('[data-act="add"]', () => cctx.addCrew());
-      on('[data-act="crew"]', () => cctx.editCrew());
-      on('[data-act="roles"]', () => cctx.openRoles());
-      on('[data-act="resend"]', () => cctx.broadcastPick());
+        `<div class="ct-top">` +
+          `<span class="ct-turn">ROUND ${combat.round || 1}</span>` +
+          `<div class="ct-strip">${strip}</div>` +
+          `<button class="ct-btn" data-act="endturn" title="Hand the turn to the next ship">⏭ End turn</button>` +
+          `<button class="ct-btn" data-act="menu" title="Crew, stations, end combat">⋯</button>` +
+          collapseBtn +
+        `</div>` +
+        `<div class="ct-body">` +
+          `<div class="ct-active"><span class="ct-dot${isGullTurn ? " own" : ""}"></span>` +
+            `<b>${esc(turnName)}</b><span class="ct-sub">${selShip && selShip.id !== activeId
+              ? `— viewing ${esc(selShip.name)}` : "— her turn"}</span>` +
+            (!isGullTurn && selShip && selShip.id === activeId
+              ? `<button class="ct-btn tiny" data-act="run">▶ Run her turn</button>` : "") +
+          `</div>` +
+          bodyRows + seatPanelHtml + reaxHtml +
+        `</div>` +
+        (combat.pendingSwap ? `<div class="ct-note">Station swap pending — awaiting confirmation…</div>` : "");
+
+      const on = (q, fn) => { const e = root.querySelector(q); if (e) e.onclick = fn; };
+      on('[data-act="endturn"]', () => cctx.endShipTurn ? cctx.endShipTurn() : cctx.nextTurn());
+      on('[data-act="menu"]', () => cctx.openMenu && cctx.openMenu());
       on('[data-act="collapse"]', () => cctx.toggleCollapse());
-      on('[data-act="end"]', () => cctx.endCombat());
-      root.querySelectorAll(".ct-seat").forEach((el) => {
-        const id = el.dataset.crew;
-        wireTokens(el, id, cctx);
-        const stn = el.querySelector("[data-station]"); if (stn) stn.onchange = () => cctx.setStation(id, stn.value);
-        const sel = el.querySelector("[data-ctrl]"); if (sel) sel.onchange = () => cctx.assignController(id, sel.value);
-        const x = el.querySelector("[data-remove]"); if (x) x.onclick = () => cctx.excludeCrew(id);
+      on('[data-act="run"]', () => cctx.runShip && cctx.runShip(activeId));
+      root.querySelectorAll("[data-ship]").forEach((el) => {
+        el.onclick = () => cctx.selectShip && cctx.selectShip(el.dataset.ship);
       });
-      wirePilotPanels(root, cctx);
+      root.querySelectorAll("[data-seat]").forEach((el) => {
+        el.onclick = () => cctx.selectSeat && cctx.selectSeat(el.dataset.seat);
+      });
+      root.querySelectorAll("[data-crewact]").forEach((el) => {
+        el.onclick = (ev) => { ev.stopPropagation();
+          if (cctx.crewAct && selShip) cctx.crewAct(selShip.id, el.dataset.crewfor, el.dataset.crewact); };
+      });
+      // The Gull's own seats keep their action/bonus pips clickable.
+      if (selShip && selShip.id === "gull") {
+        root.querySelectorAll(".ct-seatchip").forEach((el) => wireTokens(el, el.dataset.seat, cctx));
+        wirePilotPanels(root, cctx);
+      }
       return;
     }
 
@@ -3890,6 +4037,56 @@
 `;
 
   S.FLEET_CSS += `
+/* --- the compact fleet-aware turn bar ------------------------------------ */
+.sgct .ct-top{flex-wrap:nowrap;align-items:center;gap:8px;}
+.sgct .ct-strip{display:flex;gap:6px;flex:1;min-width:0;overflow-x:auto;padding:2px 0;scrollbar-width:thin;}
+.sgct .ct-strip::-webkit-scrollbar{height:5px}
+.sgct .ct-strip::-webkit-scrollbar-thumb{background:#2b5d6e;border-radius:3px}
+.sgct .ct-ship{position:relative;display:flex;align-items:center;gap:6px;flex:0 0 auto;cursor:pointer;
+  background:rgba(10,26,36,.85);border:1px solid #1d4b5c;border-radius:5px;padding:3px 8px 3px 3px;
+  font:600 11px/1.1 'Courier New',monospace;color:#9fc3cf;letter-spacing:.03em;max-width:190px;}
+.sgct .ct-ship:hover{border-color:#38e1c4;color:#cfeef0}
+.sgct .ct-ship.now{border-color:#38e1c4;background:rgba(56,225,196,.14);color:#eafcff;
+  box-shadow:0 0 0 1px rgba(56,225,196,.35)}
+.sgct .ct-ship.sel{outline:1px dashed #7fd4e8;outline-offset:1px}
+.sgct .ct-ship.out{opacity:.42;text-decoration:line-through}
+.sgct .ct-shipart{width:30px;height:30px;flex:0 0 30px;border-radius:4px;overflow:hidden;background:#08141c;
+  display:flex;align-items:center;justify-content:center;}
+.sgct .ct-shipart img{width:100%;height:100%;object-fit:contain}
+.sgct .ct-q{color:#46606e;font-size:14px}
+.sgct .ct-shipbar{width:3px;height:26px;border-radius:2px;flex:0 0 3px}
+.sgct .ct-shipname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:104px}
+.sgct .ct-init{margin-left:auto;font-size:13px;font-weight:700;color:#cfeef0;min-width:18px;text-align:right;
+  font-variant-numeric:tabular-nums}
+.sgct .ct-ship.now .ct-init{color:#38e1c4}
+/* A hard ceiling: whatever the crew count, the bar never eats the screen. */
+.sgct .ct-body{padding:6px 10px 8px;max-height:32vh;overflow-y:auto;scrollbar-width:thin}
+.sgct .ct-body::-webkit-scrollbar{width:6px}
+.sgct .ct-body::-webkit-scrollbar-thumb{background:#2b5d6e;border-radius:3px}
+.sgct .ct-active{display:flex;align-items:center;gap:8px;font:700 12px/1.2 'Courier New',monospace;
+  color:#cfeef0;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.sgct .ct-active .ct-sub{text-transform:none;font-weight:400;opacity:.7;letter-spacing:0}
+.sgct .ct-dot{width:8px;height:8px;border-radius:50%;background:#e0454d;flex:0 0 8px}
+.sgct .ct-dot.own{background:#38e1c4}
+.sgct .ct-btn.tiny{padding:2px 8px;font-size:10px;margin-left:auto}
+.sgct .ct-seatrow{display:flex;flex-wrap:wrap;gap:5px}
+.sgct .ct-seatchip{display:flex;align-items:center;gap:7px;cursor:pointer;text-align:left;
+  background:rgba(10,26,36,.8);border:1px solid #1d4b5c;border-radius:5px;padding:4px 8px;
+  font:11px/1.15 'Courier New',monospace;color:#cfeef0;}
+.sgct .ct-seatchip:hover{border-color:#38e1c4}
+.sgct .ct-seatchip.open{border-color:#38e1c4;background:rgba(56,225,196,.12)}
+.sgct .ct-seatchip.dead{opacity:.45;text-decoration:line-through}
+.sgct .ct-seatchip.spent .ct-seatname{opacity:.6}
+.sgct .ct-seatname{font-weight:700;letter-spacing:.03em}
+.sgct .ct-seatstn{opacity:.62;font-size:10px}
+.sgct .ct-pips{display:flex;gap:3px;align-items:center;margin-left:2px}
+.sgct .ct-none{font:11px/1.5 'Courier New',monospace;color:#6f97a6;padding:2px 0}
+.sgct .ct-reax{margin-top:7px;padding:6px 8px;border-left:2px solid #b06bf0;border-radius:0 4px 4px 0;
+  background:rgba(176,107,240,.08);display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline}
+.sgct .ct-reaxh{font:700 10px/1.2 'Courier New',monospace;color:#c79bf5;letter-spacing:.08em;
+  width:100%;text-transform:uppercase}
+.sgct .ct-reaxrow{font:11px/1.4 'Courier New',monospace;color:#cfeef0;cursor:help}
+.sgct .ct-reaxrow i{opacity:.6;font-style:normal}
 .sgct .ct-sub{font:11px/1.4 'Courier New',monospace;color:#7fd4e8;opacity:.8;padding:2px 12px 6px;letter-spacing:.03em}
 `;
 

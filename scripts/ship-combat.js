@@ -1527,7 +1527,7 @@
       case "cloak":          gmCloak(msg.which, msg.byName); break;
       case "goDeck":         gmGoToDeck(msg.userId, msg.shipId, msg.deck); break;
       case "breach":         gmBreach(msg.crewId, msg.shipId, msg.toolId, msg.total, { die: msg.die }, msg.facing); break;
-      case "viewDeck":       viewDeck(msg.sceneId, msg.levelId); break;
+      case "viewDeck":       viewDeck(msg.sceneId); break;
       case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
       case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
@@ -1847,6 +1847,18 @@
     openRoles: rolesDialog,
     addCrew: addCrewDialog,
     broadcastPick: () => { emit({ type: "pickPrompt" }); ui.notifications?.info("Re-sent the station picker to players."); },
+    // The bar is fleet-aware now: it draws the initiative strip from the same
+    // redacted ship views the fleet board uses, so the two cannot disagree.
+    get ships() { return game.user.isGM ? fleetShips() : []; },
+    get trackSel() { return trackSel; },
+    get seatSel() { return seatSel; },
+    artUrl: (p) => (/^(https?:|modules\/|worlds\/|data\/)/i.test(p) ? p : assetUrl(p)),
+    selectShip: (id) => { if (trackSel !== id) seatSel = ""; trackSel = id; renderBar(); },
+    selectSeat: (id) => { seatSel = seatSel === id ? "" : id; renderBar(); },
+    endShipTurn: () => gmEndShipTurn(),
+    runShip: (id) => gmRunShip(id),
+    crewAct: async (shipId, crewId, actionId) => { await gmCrewAct(shipId, crewId, actionId); renderBar(); },
+    openMenu: () => trackerMenu(),
     assignController, excludeCrew,
     setStation: (crewId, station) => gmSetStation(crewId, station, null),
     spend: (crewId, which) => { if (game.user.isGM) gmSpend(crewId, which, null); else emit({ type: "spend", toGM: true, crewId, which, userId: game.user.id }); },
@@ -1885,7 +1897,45 @@
 
   /* The always-on tracker bar mounted into the Foundry UI */
   let _bar = null;
+  let trackSel = "", seatSel = "";
+
+  /**
+   * The housekeeping that used to sit as six buttons across the top of the bar.
+   * It is all still here, one click deeper, so the bar can stay one row tall.
+   */
+  async function trackerMenu() {
+    if (!game.user.isGM) return;
+    const opts = [
+      { value: "add",    label: "+ Add crew" },
+      { value: "crew",   label: "Edit crew — owners, controllers, who is in this fight" },
+      { value: "roles",  label: "Stations — which of the 15 are enabled" },
+      { value: "prof",   label: "Proficiencies" },
+      { value: "resend", label: "Re-send the station picker to players" },
+      { value: "fleet",  label: "🛰 Fleet Command (F)" },
+      { value: "next",   label: "⏭ Next ship's turn" },
+      { value: "init",   label: "⚔ Re-roll ship initiative" },
+      { value: "end",    label: "✖ End combat" }
+    ];
+    const pick = await chooseDlg("Ship combat", "", opts);
+    if (!pick) return;
+    if (pick === "add") return addCrewDialog();
+    if (pick === "crew") return editCrewDialog();
+    if (pick === "roles") return rolesDialog();
+    if (pick === "prof") return gmProficiencyDialog();
+    if (pick === "resend") { emit({ type: "pickPrompt" }); return ui.notifications?.info("Re-sent the station picker."); }
+    if (pick === "fleet") return openFleet();
+    if (pick === "next") return gmEndShipTurn();
+    if (pick === "init") return gmRollInitiative();
+    if (pick === "end") return endCombat();
+  }
+
+  let _fleetWarmed = false;
   function renderBar() {
+    // The strip draws each hull's art out of data/fleet.json, so warm it once.
+    if (game.user?.isGM && !_fleetWarmed && Object.keys(getCombat().ships || {}).length) {
+      _fleetWarmed = true;
+      loadFleet().then(() => renderBar()).catch(() => {});
+    }
     if (!_bar || !document.body.contains(_bar)) {
       _bar = document.createElement("div");
       _bar.id = "ssv-combat-bar";
@@ -1995,215 +2045,112 @@
   /* ====================================================================== */
 
   const DECK_FOLDER = "SSV — Boarded Hulls";
-  const deckSceneName = (hullName, skin) => `${hullName} — ${skin} (decks)`;
+  const deckSceneName = (hullName, skin, deck) => `${hullName} — ${skin} · Deck ${deck}`;
 
-  /** Has this hull+skin already been built as a multi-level scene? */
-  function findDeckScene(hullName, skin) {
-    const want = deckSceneName(hullName, skin);
-    return game.scenes.find((s) => s.getFlag(MODULE_ID, "deckScene") === want) || game.scenes.getName(want) || null;
+  /** The scene for one deck of one hull+skin, if it has already been imported. */
+  function findDeckScene(hullName, skin, deck = 1) {
+    const want = deckSceneName(hullName, skin, deck);
+    return game.scenes.find((s) => s.getFlag(MODULE_ID, "deckScene") === want)
+        || game.scenes.getName(want) || null;
+  }
+  /** Every deck scene this module has imported for a hull+skin. */
+  function findDeckScenes(hullName, skin) {
+    const prefix = `${hullName} — ${skin} · Deck `;
+    return game.scenes.filter((s) => String(s.getFlag(MODULE_ID, "deckScene") || "").startsWith(prefix))
+      .sort((a, b) => (a.getFlag(MODULE_ID, "deck") || 0) - (b.getFlag(MODULE_ID, "deck") || 0));
   }
 
   /**
-   * Build (or reuse) the multi-Level scene for one hull + skin.
-   * Reads the pack's own interior scenes so the art, walls and lights are the
-   * artist's, not something derived.
+   * Import a deck straight out of the map pack, exactly as the artist built it.
+   *
+   * The earlier version reconstructed a scene: it made one Level per deck, took
+   * the ship's interior PNG out of the pack scene's TILES and used it as the
+   * Level BACKGROUND, then copied the walls and lights across. The art is a tile
+   * at a specific size and position — the Razorbill's is 3640x5600 inside a
+   * 7000x7000 scene — so promoting it to a full-bleed background stretched it,
+   * and everything then sat slightly off the walls.
+   *
+   * These packs already ship finished maps: correct art placement, walls,
+   * lighting, grid, padding. So take the whole scene. One scene per deck, which
+   * also gives deck separation for free — no Levels, no `levels: []` trap.
    */
-  const _deckBuilds = new Map();   // name -> the in-flight build, so a double-click waits
-  async function buildDeckScene(hull, skin, opts = {}) {
-    // Two GMs, or one impatient double-click, used to run this twice and create
-    // two scenes with the same name — after which findDeckScene picks whichever
-    // it sees first and half the party ends up on the other one.
-    const key = deckSceneName(hull?.name || "", skin || "");
+  const _deckBuilds = new Map();
+  async function deckScene(hull, skin, deck = 1, opts = {}) {
+    const key = deckSceneName(hull?.name || "", skin || "", deck);
     if (_deckBuilds.has(key)) return _deckBuilds.get(key);
-    const p = _buildDeckScene(hull, skin, opts).finally(() => _deckBuilds.delete(key));
+    const p = _importDeck(hull, skin, deck, opts).finally(() => _deckBuilds.delete(key));
     _deckBuilds.set(key, p);
     return p;
   }
-  async function _buildDeckScene(hull, skin, { rebuild = false } = {}) {
-    if (!game.user.isGM) return null;
-    const existing = findDeckScene(hull.name, skin);
+
+  async function _importDeck(hull, skin, deck, { rebuild = false } = {}) {
+    if (!hull) return null;
+    const name = deckSceneName(hull.name, skin, deck);
+    const existing = findDeckScene(hull.name, skin, deck);
     if (existing && !rebuild) {
-      // Scenes built before ownership was set are invisible to players: they
-      // cannot call scene.view() on a non-active scene below OBSERVER, so
-      // walking aboard silently failed for everyone but the GM. Repair in place
-      // rather than making the GM notice and rebuild.
+      // Scenes imported before ownership was set are invisible to players:
+      // scene.view() on a non-active scene needs OBSERVER. Repair in place.
       const want = CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2;
       if ((existing.ownership?.default ?? 0) < want && game.user.isGM) {
         try { await existing.update({ ownership: { default: want } }); } catch (e) {}
       }
       return existing;
     }
+    if (!game.user.isGM) return existing || null;
 
-    const sk = hull.skins?.[skin]; if (!sk) return null;
-    // Pose skins ("Landed", "TuckedUp", "Breached Stage 2") ship no interior at
-    // all, and a few colour skins are missing an upper deck. Borrow those from a
-    // skin that has them rather than refusing to build — a ship's inside does not
-    // change because its outside is painted differently.
     const plan = S.decksForSkin(hull, skin);
-    const deckMap = plan.decks;
-    const deckKeys = Object.keys(deckMap).sort((a, b) => Number(a) - Number(b));
-    if (!deckKeys.length) { ui.notifications?.warn(`${hull.name} (${skin}) has no interior decks in the pack.`); return null; }
-    if (plan.borrowed) ui.notifications?.info(`${hull.name} (${skin}) ships ${plan.count - plan.borrowed} of ${plan.count} decks — borrowing the rest from "${plan.donor}".`);
-
+    const node = plan.decks[String(deck)];
+    if (!node) { ui.notifications?.warn(`${hull.name} (${skin}) has no deck ${deck}.`); return null; }
     const pack = game.packs.get(hull.pack);
     if (!pack) { ui.notifications?.error(`Map pack ${hull.pack} is not installed.`); return null; }
+    const src = await pack.getDocument(node.sceneId);
+    if (!src) { ui.notifications?.error(`${hull.name}: deck ${deck} is missing from ${hull.pack}.`); return null; }
 
-    ui.notifications?.info(`Building ${hull.name} — ${skin}: ${deckKeys.length} deck${deckKeys.length === 1 ? "" : "s"}…`);
-    // Read the art off the SOURCE SCENE when the profile has no path of its own.
-    // The Gull's profile is built from a compendium index and carries no art
-    // string at all, so `artRoot + art` was "" — and rebuilding her deck plan
-    // (a button in the DECKS panel) would have wiped the floor out of the one
-    // hand-made asset in the world.
-    // The deck art is a TILE — a transparent PNG of the ship laid over a nebula
-    // BACKGROUND. Reading `background.src` gets you the star field, which is how
-    // a rebuild turned the Gull's decks into deep space. Prefer the interior
-    // tile, then the biggest tile, and only then the background.
-    const artOf = (doc) => {
-      const tiles = [...(doc?.tiles ?? [])].map((t) => ({
-        src: t.texture?.src || t.img || "", area: (Number(t.width) || 0) * (Number(t.height) || 0) }))
-        .filter((t) => t.src);
-      // Prefer a STILL, non-alert interior. The packs ship `_alert` (red-alert)
-      // and `.webm` (animated) variants of the same deck, and picking either as
-      // the default background is wrong: alert is a state, and a Level background
-      // wants an image.
-      const score = (t) => (/\.webm$/i.test(t.src) ? 2 : 0) + (/alert/i.test(t.src) ? 4 : 0);
-      const interior = tiles.filter((t) => /interior/i.test(t.src))
-        .sort((a, b) => (score(a) - score(b)) || (b.area - a.area))[0];
-      if (interior) return interior.src;
-      const biggest = tiles.sort((a, b) => b.area - a.area)[0];
-      // A tile has to actually be the floor, not a thruster decal in the corner.
-      if (biggest && biggest.area > (Number(doc.width) || 0) * (Number(doc.height) || 0) * 0.1) return biggest.src;
-      return doc?.levels?.contents?.[0]?.background?.src || doc?.background?.src || "";
-    };
-    const sources = [];
-    const missing = [];
-    // A still beats an animation; anything beats nothing.
-    const rank = (a) => (!a ? 3 : /alert/i.test(a) ? 2 : /\.webm$/i.test(a) ? 1 : 0);
-    for (const k of deckKeys) {
-      const ids = deckMap[k].alts?.length ? deckMap[k].alts : [deckMap[k].sceneId];
-      let best = null;
-      for (const id of ids) {
-        const doc = await pack.getDocument(id);
-        if (!doc) continue;
-        const art = (hull.artRoot + deckMap[k].art) || artOf(doc);
-        if (!best || rank(art) < rank(best.art)) best = { deck: Number(k), doc, art };
-        if (rank(art) === 0) break;                       // a still — stop looking
-      }
-      if (!best) { missing.push(k); continue; }
-      if (!best.art) missing.push(k);
-      sources.push(best);
-    }
-    if (!sources.length) return null;
-    // A deck that would not load must be SAID, not silently skipped: the levels
-    // are built in order, so a hole quietly renumbered every deck above it.
-    if (missing.length) ui.notifications?.warn(
-      `${hull.name} (${skin}): deck ${missing.join(", ")} could not be read from the pack. ` +
-      `The remaining decks keep their own numbers.`);
-
-    const first = sources[0].doc;
-    const width = first.width, height = first.height, gridSize = first.grid?.size || 100;
-
-    // One Level per deck, stacked 20 elevation units apart so tokens on
-    // different decks cannot see or shoot each other.
-    const levels = sources.map((s, i) => ({
-      // The NAME carries the deck number, and levelForDeck matches on it — an
-      // index lookup renumbered everything above a deck that failed to import.
-      name: `Deck ${s.deck}`,
-      elevation: { bottom: i * 20, top: (i + 1) * 20 },
-      // alphaThreshold matters: the deck art is a transparent PNG on a nebula,
-      // and without it the empty surround counts as floor.
-      background: { src: s.art, alphaThreshold: 0.6 }
-    }));
+    ui.notifications?.info(`Importing ${name} from the map pack…`);
+    // Everything the artist built — background, tiles, walls, lights, sounds,
+    // regions, notes, grid, padding — comes across untouched.
+    const data = src.toObject();
+    delete data._id;
+    delete data.folder;
+    (data.tokens || []).length = 0;             // their demo tokens are not our crew
+    data.name = name;
+    data.active = false;
+    data.navigation = false;
+    data.ownership = { default: CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2 };
+    data.flags = { ...(data.flags || {}), [MODULE_ID]: {
+      deckScene: name, hullId: hull.id, skin, deck,
+      borrowedFrom: node.borrowedFrom || "", sourceScene: src.name } };
+    const folder = await ensureFolder("Scene", DECK_FOLDER);
+    if (folder) data.folder = folder.id;
 
     let scene = existing;
-    const core = {
-      name: deckSceneName(hull.name, skin),
-      // Match the SOURCE scene's padding. Walls, lights and tiles are copied at
-      // their source coordinates, and padding shifts the whole coordinate frame —
-      // forcing 0 against a padded source slid every wall off the art by the
-      // padding delta.
-      width, height, padding: Number(first.padding) || 0,
-      grid: { type: first.grid?.type ?? CONST.GRID_TYPES.SQUARE, size: gridSize,
-              distance: first.grid?.distance ?? 5, units: first.grid?.units ?? "ft" },
-      tokenVision: true,
-      // Players must be at least OBSERVER to call scene.view() on a scene that is
-      // not the active one — otherwise walking aboard silently fails for everyone
-      // but the GM. (The same trap the settlements module documents.)
-      ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2 },
-      navigation: false,
-      flags: { [MODULE_ID]: { deckScene: deckSceneName(hull.name, skin), hullId: hull.id, skin, decks: deckKeys.length } }
-    };
-
-    if (!scene) scene = await Scene.create({ ...core, levels });
-    else {
-      await scene.update(core);
-      // Replace only what we own; anything the GM added by hand stays.
-      const del = (type, ids) => ids.length ? scene.deleteEmbeddedDocuments(type, ids) : null;
-      await del("Wall", scene.walls.map((d) => d.id));
-      await del("AmbientLight", scene.lights.map((d) => d.id));
-      await del("Tile", scene.tiles.filter((t) => t.getFlag(MODULE_ID, "deckArt")).map((t) => t.id));
-      await del("Region", scene.regions?.filter?.((r) => r.getFlag(MODULE_ID, "deckLink"))?.map((r) => r.id) || []);
-      // Remember which DECK each token was on before the levels change, or every
-      // token is left pointing at a level id that no longer exists.
-      const wasOn = scene.tokens.map((t) => ({ id: t.id, deck: deckForLevel(scene, t.level) }));
-      // CREATE the replacements first, then delete the originals. Foundry v14
-      // refuses to remove a scene's last Level ("must have at least one level"),
-      // so delete-then-create threw halfway — after the walls and lights had
-      // already gone. Rebuild has never worked on v14.
-      const oldLevels = scene.levels.map((l) => l.id);
-      await scene.createEmbeddedDocuments("Level", levels);
-      if (oldLevels.length) await scene.deleteEmbeddedDocuments("Level", oldLevels);
-      const moved = wasOn
-        .map((t) => ({ _id: t.id, level: levelForDeck(scene, t.deck) }))
-        .filter((t) => t.level);
-      if (moved.length) await scene.updateEmbeddedDocuments("Token", moved);
+    if (scene) {
+      // Rebuild in place so anything pointing at this scene id keeps working.
+      const keep = scene.id;
+      await scene.delete();
+      scene = await Scene.create({ ...data, _id: keep }, { keepId: true }).catch(() => null)
+           || await Scene.create(data);
+    } else {
+      scene = await Scene.create(data);
     }
-    const levelIds = scene.levels.contents.map((l) => l.id);
-
-    // Walls, lights and decorative tiles, each TAGGED with its own deck's level.
-    const walls = [], lights = [], tiles = [];
-    sources.forEach((s, i) => {
-      const lvl = levelIds[i];
-      for (const w of s.doc.walls) { const o = w.toObject(); delete o._id; o.levels = [lvl]; walls.push(o); }
-      for (const l of s.doc.lights) { const o = l.toObject(); delete o._id; o.levels = [lvl]; lights.push(o); }
-      // The pack's own extras — burner glow, turret mounts — belong to that deck.
-      for (const t of s.doc.tiles) {
-        const src = decodeURIComponent(t.texture?.src || "");
-        if (/Ship.?Images|\/Maps\//i.test(src) && !/turret|burner|glow/i.test(src)) continue;  // that IS the deck art
-        if (/nebula|background/i.test(src)) continue;                                          // the backdrop is the level's job
-        const o = t.toObject(); delete o._id; o.levels = [lvl];
-        o.flags = { ...(o.flags || {}), [MODULE_ID]: { deckArt: true } };
-        tiles.push(o);
-      }
-    });
-    if (walls.length) await scene.createEmbeddedDocuments("Wall", walls);
-    if (lights.length) await scene.createEmbeddedDocuments("AmbientLight", lights);
-    if (tiles.length) await scene.createEmbeddedDocuments("Tile", tiles);
-
-    // File it away so the scene sidebar does not fill up with hulls.
-    const folder = await ensureFolder("Scene", DECK_FOLDER);
-    if (folder && scene.folder?.id !== folder.id) await scene.update({ folder: folder.id });
-
-    ui.notifications?.info(`${scene.name}: ${levelIds.length} decks, ${walls.length} walls, ${lights.length} lights.`);
+    if (!scene) return null;
+    ui.notifications?.info(`${name}: ${scene.walls.size} walls, ${scene.lights.size} lights, ${scene.tiles.size} tiles — as shipped.`);
     return scene;
   }
 
-  /** Which level id is deck N on this scene? */
-  /** Match on the level's NAME ("Deck 2"), falling back to position for scenes
-   *  built before the names carried the number. An index-only lookup silently
-   *  renumbered every deck above one that failed to import. */
-  const levelForDeck = (scene, deck) => {
-    const n = Math.max(1, Number(deck) || 1);
-    const byName = scene?.levels?.contents?.find((l) => new RegExp(`\\b${n}\\b`).test(l.name || ""));
-    return (byName || scene?.levels?.contents?.[n - 1])?.id || null;
-  };
-  const deckForLevel = (scene, levelId) => {
-    const lv = scene?.levels?.contents?.find((l) => l.id === levelId);
-    const m = lv && String(lv.name || "").match(/(\d+)/);
-    if (m) return Number(m[1]);
-    const i = scene?.levels?.contents?.findIndex((l) => l.id === levelId);
-    return i >= 0 ? i + 1 : 1;
-  };
+  /** Import (or refresh) every deck of a hull+skin. Returns them in deck order. */
+  async function buildDeckScene(hull, skin, opts = {}) {
+    if (!game.user.isGM) return null;
+    const plan = S.decksForSkin(hull, skin);
+    const out = [];
+    for (const k of Object.keys(plan.decks).sort((a, b) => Number(a) - Number(b))) {
+      const sc = await deckScene(hull, skin, Number(k), opts);
+      if (sc) out.push(sc);
+    }
+    if (plan.borrowed) ui.notifications?.info(
+      `${hull.name} (${skin}) ships ${plan.count - plan.borrowed} of ${plan.count} decks — the rest came from "${plan.donor}".`);
+    return out[0] || null;
+  }
 
   /* ---- where everyone is standing ---------------------------------------- */
 
@@ -2304,12 +2251,9 @@
    * centre of the SCENE is usually open space beside the hull. Everything that
    * places a token on a deck goes through this.
    */
-  function deckInterior(scene, levelId) {
-    const walls = scene.walls.filter((w) => {
-      const lv = w._source?.levels;
-      // An empty `levels` set means EVERY level (client/documents/wall.mjs).
-      return !Array.isArray(lv) || !lv.length || lv.includes(levelId);
-    }).map((w) => ({ c: w.c }));
+  function deckInterior(scene) {
+    // One scene per deck now, so every wall on it is this deck's.
+    const walls = scene.walls.map((w) => ({ c: w.c }));
     return S.deckBounds(walls, { x: 0, y: 0, w: scene.width, h: scene.height });
   }
 
@@ -2346,13 +2290,11 @@
     }
     const hull = isGull ? await gullHull() : hullFor(shipId).hull;
     if (!hull) return notifyUser(userId, "No deck plan for that hull.");
+    const shipName = isGull ? getState().name : hullFor(shipId).name;
     const skin = isGull ? "Original" : (getCombat().ships[shipId]?.skin || Object.keys(hull.skins)[0]);
-    let scene = findDeckScene(isGull ? getState().name : hullFor(shipId).name, skin);
-    if (!scene) scene = await buildDeckScene({ ...hull, name: isGull ? getState().name : hullFor(shipId).name }, skin);
-    if (!scene) return notifyUser(userId, "Could not build that deck plan.");
-
-    const levelId = levelForDeck(scene, deck);
-    if (!levelId) return notifyUser(userId, `That hull has no deck ${deck}.`);
+    const n = Math.max(1, Number(deck) || 1);
+    const scene = await deckScene({ ...hull, name: shipName }, skin, n);
+    if (!scene) return notifyUser(userId, `Could not open deck ${n} of ${shipName}.`);
 
     // Put the player's own token on that deck — at the airlock they cut, if they
     // cut one, otherwise in the middle of the HULL (not the middle of the canvas).
@@ -2360,17 +2302,17 @@
     const actor = user?.character || game.actors.find((a) => a.type === "character" && a.testUserPermission(user, "OWNER"));
     if (actor) {
       const g = scene.grid?.size || 100;
-      const box = deckInterior(scene, levelId);
+      const box = deckInterior(scene);
       const at = facing
         ? S.breachPoint(box, facing, g)
         : { x: Math.round(box.x + box.w / 2), y: Math.round(box.y + box.h / 2) };
       // Off every other hull first: standing on two ships at once is not boarding.
       await liftTokenFrom(actor.id, scene.id);
       const existing = scene.tokens.find((t) => t.actorId === actor.id);
-      if (existing) await existing.update({ level: levelId, x: at.x, y: at.y });
+      if (existing) await existing.update({ x: at.x, y: at.y });
       else {
         const td = (await actor.getTokenDocument({ x: at.x, y: at.y, actorLink: true })).toObject();
-        delete td._id; td.level = levelId;
+        delete td._id;
         await scene.createEmbeddedDocuments("Token", [td]);
       }
     }
@@ -2378,15 +2320,15 @@
     const next = getCombat();
     next.whereIs = { ...(next.whereIs || {}), [userId]: { shipId, deck, facing: facing || "" } };
     await saveCombat(next);
-    emit({ type: "viewDeck", toUser: userId, sceneId: scene.id, levelId });
-    if (userId === game.user.id) await viewDeck(scene.id, levelId);
+    emit({ type: "viewDeck", toUser: userId, sceneId: scene.id });
+    if (userId === game.user.id) await viewDeck(scene.id);
   }
 
   /** Switch this client's view to a scene + level. */
-  async function viewDeck(sceneId, levelId) {
+  async function viewDeck(sceneId) {
     const scene = game.scenes.get(sceneId); if (!scene) return;
-    try { await scene.view({ level: levelId }); }
-    catch (e) { try { await scene.view(); } catch (e2) { console.warn(`${MODULE_ID} | could not view deck`, e2); } }
+    try { await scene.view(); }
+    catch (e) { console.warn(`${MODULE_ID} | could not view deck`, e); }
   }
 
   /**
@@ -2428,10 +2370,10 @@
     const hull = isGull ? await gullHull() : hullFor(me.shipId).hull;
     const name = isGull ? getState().name : hullFor(me.shipId).name;
     const skin = isGull ? "Original" : (getCombat().ships[me.shipId]?.skin || Object.keys(hull?.skins || {})[0]);
-    const scene = findDeckScene(name, skin);
-    if (!scene) return;                       // no plan built yet — the panel says so
+    const scene = findDeckScene(name, skin, me.deck || 1);
+    if (!scene) return;                       // not imported yet — the panel says so
     if (game.scenes.current?.id === scene.id) return;
-    await viewDeck(scene.id, levelForDeck(scene, me.deck || 1));
+    await viewDeck(scene.id);
   }
 
   /** Back to the Gull — only if someone has physically recovered you. */
@@ -2488,44 +2430,54 @@
    * Put an enemy ship's crew on its own decks, as hidden tokens.
    * Lazy — nothing is created until somebody actually boards.
    */
-  async function materialiseCrew(shipId, scene) {
+  async function materialiseCrew(shipId) {
     if (!game.user.isGM) return 0;
-    const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh || !scene) return 0;
-    const g = scene.grid?.size || 100;
+    const combat = getCombat(); const sh = combat.ships[shipId]; if (!sh) return 0;
+    const hull = hullById(sh.profileId); if (!hull) return 0;
+    const skin = sh.skin || Object.keys(hull.skins || {})[0];
+
     const byDeck = {};
     for (const c of Object.values(sh.crew)) {
       if (c.dead || c.tokenId) continue;
       (byDeck[c.deck || 1] ||= []).push(c);
     }
-    const made = [];
+    let total = 0;
+    const placed = [];
+    // One scene per deck now, so each deck's crew go onto their own map.
     for (const [deck, list] of Object.entries(byDeck)) {
-      const levelId = levelForDeck(scene, Number(deck));
+      const scene = await deckScene({ ...hull, name: sh.name }, skin, Number(deck));
+      if (!scene) continue;
+      const g = scene.grid?.size || 100;
       // Inside the hull, spread across it — the old hex spiral around the middle
-      // of the CANVAS put half a crew in the void beside their own ship.
-      const spots = S.deckSpots(deckInterior(scene, levelId), g, list.length);
+      // of the map image put half a crew in the void beside their own ship.
+      const spots = S.deckSpots(deckInterior(scene), g, list.length);
+      const made = [];
       for (let i = 0; i < list.length; i++) {
         const c = list[i];
         const actor = await actorForBlock(c.block, c.name);
         if (!actor) continue;
         const proto = actor.prototypeToken.toObject();
         made.push({ ...proto, name: c.name, actorId: actor.id, actorLink: false,
-          x: spots[i].x, y: spots[i].y, level: levelId,
+          x: spots[i].x, y: spots[i].y,
           hidden: true,                       // the GM reveals a compartment as the boarders reach it
           disposition: -1,
           flags: { [MODULE_ID]: { boardingCrew: true, shipId, crewId: c.id } } });
       }
+      if (!made.length) continue;
+      const docs = await scene.createEmbeddedDocuments("Token", made);
+      for (const d of docs) placed.push(d);
+      total += docs.length;
     }
-    if (!made.length) return 0;
-    const docs = await scene.createEmbeddedDocuments("Token", made);
+    if (!total) return 0;
     // Remember which token is which crew member, so killing one takes that
     // station offline — the rule ship-combat.md has always specified.
     const next = getCombat();
-    docs.forEach((d) => {
+    placed.forEach((d) => {
       const cid = d.getFlag(MODULE_ID, "crewId");
       if (next.ships[shipId]?.crew[cid]) next.ships[shipId].crew[cid].tokenId = d.id;
     });
     await saveCombat(next);
-    return docs.length;
+    return total;
   }
 
   /**
@@ -2549,16 +2501,14 @@
       return false;
     }
 
-    // The Gull's own two-deck scene, built on demand exactly like an enemy's.
+    // The Gull's own deck 1, imported on demand exactly like an enemy's.
     const hull = await gullHull();
     const name = getState().name;
-    let scene = findDeckScene(name, "Original");
-    if (!scene && hull) scene = await buildDeckScene({ ...hull, name }, "Original");
-    if (!scene) { ui.notifications?.error("The Gull has no deck plan to board — build it from the DECKS panel."); return false; }
+    const scene = hull ? await deckScene({ ...hull, name }, "Original", 1) : null;
+    if (!scene) { ui.notifications?.error("The Gull has no deck plan to board — open DECKS in the ship console."); return false; }
 
-    const levelId = levelForDeck(scene, 1);
     const g = scene.grid?.size || 100;
-    const box = deckInterior(scene, levelId);
+    const box = deckInterior(scene);
     // They cut in on the arc they are actually on, same rule the players get.
     const gullP = shipPoint("gull"), meP = shipPoint(shipId);
     const face = (gullP && meP) ? S.facingFrom(gullP, meP) : "fore";
@@ -2577,7 +2527,7 @@
       if (!actor) continue;
       const proto = actor.prototypeToken.toObject();
       made.push({ ...proto, name: `${label} ${i + 1}`, actorId: actor.id, actorLink: false,
-        x: spots[i].x, y: spots[i].y, level: levelId, hidden: false, disposition: -1,
+        x: spots[i].x, y: spots[i].y, hidden: false, disposition: -1,
         flags: { [MODULE_ID]: { boardingCrew: true, shipId, boarder: true } } });
     }
     if (!made.length) { ui.notifications?.error(`No stat block "${block}" in any bestiary — cannot spawn her marines.`); return false; }
@@ -2670,12 +2620,8 @@
       return;
     }
 
-    // Build their decks (once) and put their crew on them.
-    const hull = hullById(sh.profileId);
-    const skin = sh.skin || Object.keys(hull?.skins || {})[0];
-    let scene = findDeckScene(sh.name, skin);
-    if (!scene && hull) scene = await buildDeckScene({ ...hull, name: sh.name }, skin);
-    if (scene) await materialiseCrew(shipId, scene);
+    // Import her decks (once) and put her crew on them.
+    await materialiseCrew(shipId);
 
     const next = getCombat();
     S.applyStatus(next.ships[shipId], "boarded", { round: next.round, src: crew.name });
@@ -3925,7 +3871,9 @@
     if (!game.user.isGM) return;
     const next = getCombat();
     const order = (next.initiative || []).map((e) => e.shipId).filter((id) => id === "gull" || next.ships[id]);
-    if (!order.length) return ui.notifications?.warn("Roll ship initiative first.");
+    // No initiative rolled (a Gull-only fight, or the GM never pressed ⚔) — then
+    // "end turn" just means the crew's round is over, which is what nextTurn does.
+    if (!order.length) return nextTurn();
     const at = order.indexOf(next.activeShip);
     const wrapped = at < 0 || at === order.length - 1;
     next.activeShip = order[wrapped ? 0 : at + 1];
@@ -4368,6 +4316,11 @@
       const ids = scene.tokens.filter((t) => t.getFlag(MODULE_ID, "shipId") === sh.id).map((t) => t.id);
       if (ids.length) { try { await scene.deleteEmbeddedDocuments("Token", ids); } catch (e) {} }
     }
+    // …and the deck scenes imported for her, unless someone is standing on one.
+    for (const sc of findDeckScenes(sh.name, sh.skin || "")) {
+      if (sc.active || sc.id === game.scenes.current?.id) continue;
+      try { await sc.delete(); } catch (e) {}
+    }
     // By id first, then by flag: a token dragged to another scene, or an actor
     // whose id was lost in an older build, still has to go somewhere.
     for (const scene of game.scenes) {
@@ -4419,6 +4372,7 @@
     blockCache.clear();
     const gullName = getState().name;
     const decks = game.scenes.filter((sc) => sc.getFlag(MODULE_ID, "deckScene")
+      && sc.getFlag(MODULE_ID, "hullId") !== "gull"
       && !String(sc.getFlag(MODULE_ID, "deckScene")).startsWith(gullName));
     // "Never delete what someone is standing on" used to check only the GM's own
     // current scene — a player left aboard an enemy would have had the floor
@@ -4427,8 +4381,8 @@
     for (const [uid, w] of Object.entries(next.whereIs || {})) {
       if (!w?.shipId || w.shipId === "gull") continue;
       const sh2 = getCombat().ships[w.shipId];
-      const nm = sh2 ? deckSceneName(sh2.name, sh2.skin || "") : "";
-      for (const sc of game.scenes) if (nm && sc.getFlag(MODULE_ID, "deckScene") === nm) occupied.add(sc.id);
+      if (!sh2) continue;
+      for (const sc of findDeckScenes(sh2.name, sh2.skin || "")) occupied.add(sc.id);
     }
     for (const u of game.users) if (u.active && u.viewedScene) occupied.add(u.viewedScene);
     for (const sc of decks) {
