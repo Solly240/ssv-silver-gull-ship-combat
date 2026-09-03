@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.23.1";
+  S.VERSION = "0.24.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -621,6 +621,9 @@
     for (const st of S.STATIONS) rolesEnabled[st.id] = !!st.defaultUnlocked;
     return { active: false, turn: 1, round: 1, rolesEnabled, roster: S.defaultRoster(), crew: {},
              pendingSwap: null,
+             // Boarding: userId -> {shipId, deck}. Absent means "on the Gull's
+             // main deck", which is where everyone starts and where they return.
+             whereIs: {},
              spool: 0,             // Captain's hyperfold spool: three successes and the fight is over
              gunBuff: "",          // Engineer's gun rail: added to the next gunner hit
              ships: {},            // every ship in the engagement, the Gull included as "gull"
@@ -641,6 +644,14 @@
         ? stored.initiative.filter((e) => e && e.shipId).map((e) => ({ shipId: String(e.shipId), roll: Number(e.roll) || 0 }))
         : [],
       activeShip: String(stored.activeShip || "gull"),
+      whereIs: (() => {
+        const out = {};
+        for (const [uid, w] of Object.entries(stored.whereIs || {})) {
+          if (!w || !w.shipId) continue;
+          out[uid] = { shipId: String(w.shipId), deck: Math.max(1, Number(w.deck) || 1) };
+        }
+        return out;
+      })(),
       spool: Math.max(0, Math.min(3, Number(stored.spool) || 0)),
       gunBuff: String(stored.gunBuff || ""),
       rolesEnabled: { ...d.rolesEnabled },
@@ -1786,6 +1797,7 @@
 `;
     st.textContent += S.FLEET_CSS;   // Fleet Command shares the sheet and the palette
     st.textContent += S.SCAN_CSS;
+    st.textContent += S.DECK_CSS;
     document.head.appendChild(st);
   };
 
@@ -2860,6 +2872,119 @@
     rightEl.querySelectorAll("[data-turret]").forEach((b) => { b.onclick = () => kctx.toggleTurret && kctx.toggleTurret(b.dataset.turret); });
   }
 
+
+  /* ---------------------------------------------------------------------- */
+  /*  The SPACE ⇄ DECKS toggle                                               */
+  /*                                                                          */
+  /*  One switch in the ship console. SPACE is the battle; DECKS is the hull  */
+  /*  you are standing in — the Gull by default, and whatever you have boarded */
+  /*  once you breach. A deck strip stacks bottom-to-top like a cross-section, */
+  /*  so "which deck am I on" is a glance rather than a label.                 */
+  /* ---------------------------------------------------------------------- */
+
+  S.DECK_CSS = `
+.sgcon .dk-wrap{display:flex;flex-direction:column;gap:12px;padding:2px 0;}
+.sgcon .dk-toggle{display:flex;position:relative;background:#0a1c26;border:1px solid #1d6a86;border-radius:9px;padding:3px;}
+.sgcon .dk-toggle button{flex:1;position:relative;z-index:2;font-family:inherit;font-size:12px;font-weight:700;
+  letter-spacing:2px;color:#6f97a6;background:none;border:none;padding:7px 0;cursor:pointer;transition:color .18s;text-align:center;}
+.sgcon .dk-toggle button.on{color:#04121c;}
+.sgcon .dk-thumb{position:absolute;top:3px;bottom:3px;left:3px;width:calc(50% - 3px);border-radius:7px;
+  background:#2ec2aa;box-shadow:0 0 14px rgba(56,225,196,.45);transition:transform .22s cubic-bezier(.2,.75,.25,1);}
+.sgcon .dk-toggle.decks .dk-thumb{transform:translateX(100%);}
+
+/* where you are: calm teal aboard your own hull, a slow red breath aboard someone else's */
+.sgcon .dk-aboard{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;font-size:12px;
+  border:1px solid #1d6a86;background:rgba(10,28,38,.6);}
+.sgcon .dk-aboard b{color:#dff3f6;}
+.sgcon .dk-aboard.enemy{border-color:#7a2b30;background:rgba(58,17,20,.5);animation:dk-breathe 3.2s ease-in-out infinite;}
+@keyframes dk-breathe{0%,100%{box-shadow:0 0 0 rgba(224,69,77,0);}50%{box-shadow:0 0 16px rgba(224,69,77,.45);}}
+.sgcon .dk-aboard .dk-dot{width:8px;height:8px;border-radius:50%;background:#38e1c4;flex:none;}
+.sgcon .dk-aboard.enemy .dk-dot{background:#e0454d;}
+
+/* the deck strip reads as a cross-section: deck 1 at the bottom */
+.sgcon .dk-strip{display:flex;flex-direction:column-reverse;gap:6px;}
+.sgcon .dk-deck{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid #14455a;border-radius:9px;
+  background:rgba(8,21,33,.65);cursor:pointer;transition:border-color .14s,box-shadow .14s;}
+.sgcon .dk-deck:hover{border-color:#1d6a86;box-shadow:0 0 12px rgba(29,106,134,.35);}
+.sgcon .dk-deck.here{border-color:#38e1c4;box-shadow:0 0 16px rgba(56,225,196,.32);}
+.sgcon .dk-num{width:26px;height:26px;flex:none;border-radius:7px;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;color:#6f97a6;border:1px solid #1d6a86;background:#081521;}
+.sgcon .dk-deck.here .dk-num{color:#04121c;background:#2ec2aa;border-color:#38e1c4;}
+.sgcon .dk-name{font-size:12px;color:#dff3f6;}
+.sgcon .dk-sub{font-size:10px;color:#6f97a6;letter-spacing:1px;}
+.sgcon .dk-count{margin-left:auto;font-size:10px;letter-spacing:1px;color:#f2b03d;}
+.sgcon .dk-count.none{color:#5a7c8a;}
+.sgcon .dk-note{font-size:11px;color:#8fb2c0;line-height:1.5;background:rgba(56,225,196,.06);
+  border-left:2px solid #1d6a86;padding:8px 10px;border-radius:0 6px 6px 0;}
+.sgcon .dk-note b{color:#f2b03d;}
+.sgcon .dk-btn{font-family:inherit;font-size:12px;font-weight:700;letter-spacing:1px;color:#cfeef0;background:#0a1c26;
+  border:1px solid #1d6a86;border-radius:8px;padding:9px 12px;cursor:pointer;}
+.sgcon .dk-btn:hover{border-color:#38e1c4;color:#38e1c4;box-shadow:0 0 12px rgba(56,225,196,.28);}
+.sgcon .dk-btn.warn{border-color:#6b3238;}
+.sgcon .dk-btn.warn:hover{border-color:#e0454d;color:#e0454d;}
+`;
+
+  /**
+   * The DECKS panel.
+   *
+   * dctx = { isGM, hullName, isOwnShip, decks:[{n,name,crew,here}], deck,
+   *          canReturn, goDeck(n), returnToShip(), buildDecks(), breachInfo }
+   */
+  S.renderDecks = function (rightEl, kctx) {
+    const d = kctx.decks;
+    const head = `<div class="con-head"><span class="con-title">DECKS</span>` +
+      `${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}` +
+      `<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button>` +
+      `<button class="con-x" title="Close (Esc)">✕</button></div>`;
+
+    if (!d || !d.decks?.length) {
+      rightEl.innerHTML = head + `<div class="dk-wrap">${spaceDecksToggle(true)}` +
+        `<div class="con-empty">${kctx.isGM
+          ? "No deck plan built for this hull yet. Build one from ⚙ GM → Decks, or board a ship to generate it."
+          : "No deck plan for this hull — the Science officer may need to scan it first."}</div></div>`;
+      wireDeckHead(rightEl, kctx);
+      return;
+    }
+
+    const strip = d.decks.map((k) => `
+      <div class="dk-deck${k.here ? " here" : ""}" data-deck="${k.n}">
+        <span class="dk-num">${k.n}</span>
+        <span><span class="dk-name">${esc(k.name)}</span><br><span class="dk-sub">${k.here ? "YOU ARE HERE" : "deck " + k.n}</span></span>
+        <span class="dk-count${k.crew ? "" : " none"}">${k.crew == null ? "?" : k.crew ? `${k.crew} aboard` : "clear"}</span>
+      </div>`).join("");
+
+    rightEl.innerHTML = head + `<div class="dk-wrap">
+      ${spaceDecksToggle(true)}
+      <div class="dk-aboard${d.isOwnShip ? "" : " enemy"}">
+        <span class="dk-dot"></span>
+        <span>${d.isOwnShip ? "Aboard <b>" + esc(d.hullName) + "</b> — your own hull."
+                            : "Aboard <b>" + esc(d.hullName) + "</b> — this is not your ship."}</span>
+      </div>
+      <div class="dk-strip">${strip}</div>
+      ${d.breachInfo ? `<div class="dk-note">${d.breachInfo}</div>` : ""}
+      ${!d.isOwnShip && d.canReturn ? `<button class="dk-btn warn" data-return>⟵ Back to the Gull</button>` : ""}
+      ${d.isOwnShip && kctx.isGM ? `<button class="dk-btn" data-rebuild>⟳ Rebuild this deck plan</button>` : ""}
+    </div>`;
+    wireDeckHead(rightEl, kctx);
+    rightEl.querySelectorAll("[data-deck]").forEach((el) => { el.onclick = () => kctx.goDeck(Number(el.dataset.deck)); });
+    const back = rightEl.querySelector("[data-return]"); if (back) back.onclick = () => kctx.returnToShip();
+    const rb = rightEl.querySelector("[data-rebuild]"); if (rb) rb.onclick = () => kctx.buildDecks(true);
+  };
+
+  function spaceDecksToggle(onDecks) {
+    return `<div class="dk-toggle${onDecks ? " decks" : ""}"><span class="dk-thumb"></span>` +
+      `<button data-view="space" class="${onDecks ? "" : "on"}">SPACE</button>` +
+      `<button data-view="decks" class="${onDecks ? "on" : ""}">DECKS</button></div>`;
+  }
+  S.spaceDecksToggle = spaceDecksToggle;
+
+  function wireDeckHead(rightEl, kctx) {
+    rightEl.querySelector(".con-x").onclick = () => kctx.close();
+    const inv = rightEl.querySelector("[data-inv]"); if (inv) inv.onclick = () => kctx.toggleInv();
+    const gm = rightEl.querySelector("[data-gm]"); if (gm) gm.onclick = () => kctx.toggleGM();
+    rightEl.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => kctx.setView(b.dataset.view); });
+  }
+
   S.renderConsole = function (root, kctx) {
     S.ensureStyles();
     root.className = "sgcon" + (kctx.invMode ? " inv-mode" : "") + (kctx.animateSwap ? " do-swap" : "");
@@ -2890,6 +3015,7 @@
     // Right column: GM Actions / inventory modes override the station panel.
     if (kctx.gmActMode && kctx.isGM) { renderGMPanel(rightEl, kctx); return; }
     if (kctx.invMode) { renderInventoryPanel(rightEl, kctx); return; }
+    if (kctx.deckMode) { S.renderDecks(rightEl, kctx); return; }
 
     // Right column = station action panel.
     const stId = kctx.station, crew = kctx.crew;
@@ -2926,6 +3052,9 @@
     };
     rightEl.innerHTML =
       `<div class="con-head"><span class="con-title">${esc(stName)}</span>${picker}${kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : ""}<button class="con-inv" data-inv="1" title="Ship inventory">📦 Inventory</button><button class="con-x" title="Close (Esc)">✕</button></div>` +
+      // The same switch the DECKS panel carries, so the crew can flip to the deck
+      // they are standing on from wherever they are.
+      `<div style="padding:0 0 10px">${spaceDecksToggle(false)}</div>` +
       `<div class="con-crew"><span class="con-cname">${esc(crew.name)}</span>` +
       `<span class="con-toks">${token("action", crew.action, false)}${token("bonus", crew.bonus, false)}${grantedTokens(crew.granted)}</span></div>` +
       `<div class="con-sec"><div class="con-h">MAIN ACTION${crew.action ? " · used" : ""}</div><div class="con-btns">${acts.main.map((a) => btn(a, false)).join("") || `<span class="con-empty">— none —</span>`}</div></div>` +
@@ -2936,6 +3065,7 @@
     const invBtn = rightEl.querySelector("[data-inv]"); if (invBtn) invBtn.onclick = () => kctx.toggleInv();
     const gmBtn = rightEl.querySelector("[data-gm]"); if (gmBtn) gmBtn.onclick = () => kctx.toggleGM();
     const sel = rightEl.querySelector(".con-sel"); if (sel) sel.onchange = () => kctx.selectStation(sel.value);
+    rightEl.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => kctx.setView(b.dataset.view); });
     const wire = (a, isBonus) => {
       const el = rightEl.querySelector(`[data-act="${a.id}"]`); if (!el || el.disabled) return;
       el.onclick = () => {
@@ -3555,6 +3685,7 @@
     roundTrip("combatState", S.defaultCombat(), S.normalizeCombat, (d) => {
       d.active = true; d.turn = 6; d.round = 4; d.activeShip = "e1";
       d.spool = 2; d.gunBuff = "1d6";
+      d.whereIs = { u1: { shipId: "e1", deck: 2 } };
       d.initiative = [{ shipId: "e1", roll: 17 }];
       d.crew = { k: { id: "k", name: "K", ownerUserId: "u1", controllerUserId: "u2", station: "captain",
         action: true, bonus: true, granted: 1, maneuver: "evasive", mp: 5, mpMax: 6, navMult: 2,

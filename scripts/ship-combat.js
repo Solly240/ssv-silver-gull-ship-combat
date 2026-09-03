@@ -65,6 +65,8 @@
   let gmDriveCrewId = null;    // which crew the GM is driving in the console
   let playerDriveCrewId = null;// which of THEIR OWN crew a player is viewing (when they control more than one)
   let invMode = false;         // console showing the inventory panel instead of the station panel
+  let deckMode = false;        // console showing the DECKS panel (the hull you are standing in)
+  let deckData = null;         // last-resolved deck context (deckCtx is async; the renderer is not)
   let gmActMode = false;       // console showing the GM Actions panel (GM-only, direct state control)
   let invTab = "ship";         // inventory active tab: 'ship' | 'you'
   let swapAnim = false;        // one-shot: play the mode-swap animation on the next render
@@ -76,7 +78,7 @@
     try { S.renderConsole(_console, consoleCtx()); } catch (e) { console.error(`${MODULE_ID} | console render failed`, e); }
     renderBar();                       // hide the top tracker bar while the console is open
   }
-  function closeConsole() { armed = null; invMode = false; gmActMode = false; hideInvPop(); closeItemBrowser(); if (_console) _console.style.display = "none"; renderBar(); }
+  function closeConsole() { armed = null; invMode = false; gmActMode = false; deckMode = false; hideInvPop(); closeItemBrowser(); if (_console) _console.style.display = "none"; renderBar(); }
   function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
@@ -95,6 +97,26 @@
     const stName = crew?.station ? (S.station(crew.station)?.name || crew.station) : "";
     return {
       isGM: game.user.isGM, userId: game.user.id,
+      deckMode, decks: deckData,
+      // Flipping to DECKS resolves the panel's data first, then re-renders — the
+      // renderer stays synchronous so it can also run in preview.html.
+      setView: async (v) => {
+        if (v === "decks") { deckData = await deckCtx(); deckMode = true; invMode = false; gmActMode = false; }
+        else { deckMode = false; }
+        swapAnim = true; refreshOpen();
+      },
+      goDeck: async (n) => { await goToDeck(n); deckData = await deckCtx(); refreshOpen(); },
+      returnToShip: async () => { await returnToShip(); deckData = await deckCtx(); refreshOpen(); },
+      buildDecks: async (rebuild) => {
+        if (!game.user.isGM) return;
+        const me = whereAmI(game.user.id);
+        const isGull = me.shipId === "gull";
+        const hull = isGull ? await gullHull() : hullFor(me.shipId).hull;
+        if (!hull) return ui.notifications?.warn("No hull profile for that ship.");
+        const skin = isGull ? "Original" : (getCombat().ships[me.shipId]?.skin || Object.keys(hull.skins)[0]);
+        await buildDeckScene({ ...hull, name: isGull ? getState().name : hullFor(me.shipId).name }, skin, { rebuild: !!rebuild });
+        deckData = await deckCtx(); refreshOpen();
+      },
       overviewCtx: ctx(),
       getCombat,
       station: crew?.station || null, crew, currentCrewId: crew?.id || null,
@@ -119,7 +141,7 @@
       },
       runAction: (a, isBonus) => runStationAction(a, isBonus, crew, stName),
       // GM Actions panel (GM-only, direct control + chat, no action economy)
-      gmActMode, toggleGM: () => { gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
+      gmActMode, toggleGM: () => { deckMode = false; gmActMode = !gmActMode; invMode = false; armed = null; swapAnim = true; renderConsole(); },
       armShield: (slot) => { armed = (armed === slot ? null : slot); renderConsole(); },
 
       // Build or scrap a turret. Also flips its station on, so the seat appears
@@ -143,7 +165,7 @@
         refreshUI();
       },      openProficiency: () => gmProficiencyDialog(),
       // Inventory
-      invMode, toggleInv: () => { invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
+      invMode, toggleInv: () => { deckMode = false; invMode = !invMode; gmActMode = false; armed = null; swapAnim = true; renderConsole(); },
       invTab, setInvTab: (tb) => { invTab = (tb === "you" ? "you" : "ship"); renderConsole(); },
       animateSwap: (() => { const a = swapAnim; swapAnim = false; return a; })(),
       addItem: () => gmAddItemBrowser(),
@@ -1086,6 +1108,8 @@
       case "ram":            gmRam(msg.shipId, msg.byName); break;
       case "spool":          gmSpool({ total: msg.total, die: msg.die }, msg.byName); break;
       case "cloak":          gmCloak(msg.which, msg.byName); break;
+      case "goDeck":         gmGoToDeck(msg.userId, msg.shipId, msg.deck); break;
+      case "viewDeck":       viewDeck(msg.sceneId, msg.levelId); break;
       case "turretShot":     gmTurretShot(msg.crewId, msg.turretId, msg.shipId, { total: msg.total, die: msg.die }, msg.str); break;
       case "adjustAim":      gmAdjustAim(msg.crewId, msg.byName); break;
       case "applyDamage":    gmApplyDamage(msg.shipId, msg.raw, msg.facing, msg.opts || {}); break;
@@ -1443,6 +1467,262 @@
   /* ====================================================================== */
   /*  Fleet Command (key F)                                                 */
   /* ====================================================================== */
+
+  /* ====================================================================== */
+  /*  Boarding: multi-deck scenes                                           */
+  /*                                                                          */
+  /*  Foundry v14 has native scene Levels, so a multi-deck ship is ONE scene  */
+  /*  with N Levels rather than N scenes and a teleporter between them —      */
+  /*  switching decks is scene.view({level}), with no scene change and no     */
+  /*  multi-megabyte texture reload.                                         */
+  /*                                                                          */
+  /*  The one rule that matters: a wall, tile or light with an EMPTY `levels` */
+  /*  set is on EVERY level (client/documents/wall.mjs:164). The map packs    */
+  /*  ship exactly that, so every placeable copied out of a deck MUST be      */
+  /*  written with an explicit levels:[thatLevelId] or deck 1's walls will    */
+  /*  block deck 2.                                                          */
+  /* ====================================================================== */
+
+  const DECK_FOLDER = "SSV — Boarded Hulls";
+  const deckSceneName = (hullName, skin) => `${hullName} — ${skin} (decks)`;
+
+  /** Has this hull+skin already been built as a multi-level scene? */
+  function findDeckScene(hullName, skin) {
+    const want = deckSceneName(hullName, skin);
+    return game.scenes.find((s) => s.getFlag(MODULE_ID, "deckScene") === want) || game.scenes.getName(want) || null;
+  }
+
+  /**
+   * Build (or reuse) the multi-Level scene for one hull + skin.
+   * Reads the pack's own interior scenes so the art, walls and lights are the
+   * artist's, not something derived.
+   */
+  async function buildDeckScene(hull, skin, { rebuild = false } = {}) {
+    if (!game.user.isGM) return null;
+    const existing = findDeckScene(hull.name, skin);
+    if (existing && !rebuild) return existing;
+
+    const sk = hull.skins?.[skin]; if (!sk) return null;
+    const deckKeys = Object.keys(sk.decks || {}).sort((a, b) => Number(a) - Number(b));
+    if (!deckKeys.length) { ui.notifications?.warn(`${hull.name} (${skin}) has no interior decks in the pack.`); return null; }
+
+    const pack = game.packs.get(hull.pack);
+    if (!pack) { ui.notifications?.error(`Map pack ${hull.pack} is not installed.`); return null; }
+
+    ui.notifications?.info(`Building ${hull.name} — ${skin}: ${deckKeys.length} deck${deckKeys.length === 1 ? "" : "s"}…`);
+    const sources = [];
+    for (const k of deckKeys) {
+      const doc = await pack.getDocument(sk.decks[k].sceneId);
+      if (doc) sources.push({ deck: Number(k), doc, art: hull.artRoot + sk.decks[k].art });
+    }
+    if (!sources.length) return null;
+
+    const first = sources[0].doc;
+    const width = first.width, height = first.height, gridSize = first.grid?.size || 100;
+
+    // One Level per deck, stacked 20 elevation units apart so tokens on
+    // different decks cannot see or shoot each other.
+    const levels = sources.map((s, i) => ({
+      name: `Deck ${s.deck}`,
+      elevation: { bottom: i * 20, top: (i + 1) * 20 },
+      // alphaThreshold matters: the deck art is a transparent PNG on a nebula,
+      // and without it the empty surround counts as floor.
+      background: { src: s.art, alphaThreshold: 0.6 }
+    }));
+
+    let scene = existing;
+    const core = {
+      name: deckSceneName(hull.name, skin),
+      width, height, padding: 0,
+      grid: { type: first.grid?.type ?? CONST.GRID_TYPES.SQUARE, size: gridSize,
+              distance: first.grid?.distance ?? 5, units: first.grid?.units ?? "ft" },
+      tokenVision: true,
+      // Players must be at least OBSERVER to call scene.view() on a scene that is
+      // not the active one — otherwise walking aboard silently fails for everyone
+      // but the GM. (The same trap the settlements module documents.)
+      ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS?.OBSERVER ?? 2 },
+      navigation: false,
+      flags: { [MODULE_ID]: { deckScene: deckSceneName(hull.name, skin), hullId: hull.id, skin, decks: deckKeys.length } }
+    };
+
+    if (!scene) scene = await Scene.create({ ...core, levels });
+    else {
+      await scene.update(core);
+      // Replace only what we own; anything the GM added by hand stays.
+      const del = (type, ids) => ids.length ? scene.deleteEmbeddedDocuments(type, ids) : null;
+      await del("Wall", scene.walls.map((d) => d.id));
+      await del("AmbientLight", scene.lights.map((d) => d.id));
+      await del("Tile", scene.tiles.filter((t) => t.getFlag(MODULE_ID, "deckArt")).map((t) => t.id));
+      await del("Region", scene.regions?.filter?.((r) => r.getFlag(MODULE_ID, "deckLink"))?.map((r) => r.id) || []);
+      await scene.deleteEmbeddedDocuments("Level", scene.levels.map((l) => l.id));
+      await scene.createEmbeddedDocuments("Level", levels);
+    }
+    const levelIds = scene.levels.contents.map((l) => l.id);
+
+    // Walls, lights and decorative tiles, each TAGGED with its own deck's level.
+    const walls = [], lights = [], tiles = [];
+    sources.forEach((s, i) => {
+      const lvl = levelIds[i];
+      for (const w of s.doc.walls) { const o = w.toObject(); delete o._id; o.levels = [lvl]; walls.push(o); }
+      for (const l of s.doc.lights) { const o = l.toObject(); delete o._id; o.levels = [lvl]; lights.push(o); }
+      // The pack's own extras — burner glow, turret mounts — belong to that deck.
+      for (const t of s.doc.tiles) {
+        const src = decodeURIComponent(t.texture?.src || "");
+        if (/Ship.?Images|\/Maps\//i.test(src) && !/turret|burner|glow/i.test(src)) continue;  // that IS the deck art
+        if (/nebula|background/i.test(src)) continue;                                          // the backdrop is the level's job
+        const o = t.toObject(); delete o._id; o.levels = [lvl];
+        o.flags = { ...(o.flags || {}), [MODULE_ID]: { deckArt: true } };
+        tiles.push(o);
+      }
+    });
+    if (walls.length) await scene.createEmbeddedDocuments("Wall", walls);
+    if (lights.length) await scene.createEmbeddedDocuments("AmbientLight", lights);
+    if (tiles.length) await scene.createEmbeddedDocuments("Tile", tiles);
+
+    // File it away so the scene sidebar does not fill up with hulls.
+    const folder = await ensureFolder("Scene", DECK_FOLDER);
+    if (folder && scene.folder?.id !== folder.id) await scene.update({ folder: folder.id });
+
+    ui.notifications?.info(`${scene.name}: ${levelIds.length} decks, ${walls.length} walls, ${lights.length} lights.`);
+    return scene;
+  }
+
+  /** Which level id is deck N on this scene? */
+  const levelForDeck = (scene, deck) => scene?.levels?.contents?.[Math.max(0, (Number(deck) || 1) - 1)]?.id || null;
+  const deckForLevel = (scene, levelId) => {
+    const i = scene?.levels?.contents?.findIndex((l) => l.id === levelId);
+    return i >= 0 ? i + 1 : 1;
+  };
+
+  /* ---- where everyone is standing ---------------------------------------- */
+
+  /** The Gull is where you are unless the combat state says otherwise. */
+  function whereAmI(userId) {
+    const w = getCombat().whereIs?.[userId || game.user.id];
+    return w && w.shipId ? w : { shipId: "gull", deck: 1 };
+  }
+
+  /** The hull profile + skin for whichever ship a user is standing in. */
+  function hullFor(shipId) {
+    if (shipId === "gull") {
+      const h = (FLEET?.hulls || []).find((x) => x.pack === GULL_PACK);
+      return { hull: h || null, skin: "Original", name: getState().name };
+    }
+    const sh = getCombat().ships[shipId];
+    if (!sh) return { hull: null, skin: "", name: "" };
+    return { hull: hullById(sh.profileId), skin: sh.skin || "", name: sh.name };
+  }
+  // The Razorbill IS the Silver Gull; build_fleet.py skips it as the player ship,
+  // so resolve it straight from the pack rather than from data/fleet.json.
+  const GULL_PACK = "HyperdriveFleet-Razorbill-Interceptor.scenes";
+
+  /** The Gull's own hull profile, synthesised from the pack (it is not in fleet.json). */
+  async function gullHull() {
+    await loadFleet();
+    if (FLEET._gull) return FLEET._gull;
+    const pack = game.packs.get(GULL_PACK);
+    if (!pack) return null;
+    const idx = await pack.getIndex();
+    const skins = {};
+    for (const e of idx) {
+      const m = e.name.match(/\b\d\d[a-z]\s+(.+?)\s+Interior(?:\s+Level\s?0?(\d))?/i);
+      if (!m) continue;
+      let skin = m[1].trim(); const lvl = m[2] ? Number(m[2]) : 1;
+      if (/alert$/i.test(skin)) continue;                 // the alert variants are a swap, not a deck
+      skins[skin] ||= { exterior: { sceneId: "", art: "" }, decks: {} };
+      if (!skins[skin].decks[lvl]) skins[skin].decks[lvl] = { sceneId: e._id, art: "" };
+    }
+    FLEET._gull = { id: "gull", name: getState().name, pack: GULL_PACK, artRoot: "", skins,
+                    decks: Math.max(1, ...Object.values(skins).map((s) => Object.keys(s.decks).length)) };
+    return FLEET._gull;
+  }
+
+  /** The deck panel's data, already filtered for who is looking. */
+  async function deckCtx() {
+    const me = whereAmI(game.user.id);
+    const isGull = me.shipId === "gull";
+    const hull = isGull ? await gullHull() : hullFor(me.shipId).hull;
+    const name = isGull ? getState().name : hullFor(me.shipId).name;
+    const skin = isGull ? "Original" : (getCombat().ships[me.shipId]?.skin || "");
+    const sk = hull?.skins?.[skin] || Object.values(hull?.skins || {})[0];
+    const deckKeys = Object.keys(sk?.decks || {}).sort((a, b) => Number(a) - Number(b));
+
+    // How many enemy crew are on each deck — only if the players have earned it.
+    const sh = isGull ? null : getCombat().ships[me.shipId];
+    const view = sh ? S.shipView(sh, { isGM: game.user.isGM }) : null;
+    const canSeeCrew = !!(view?.known?.crew && view.crew && (game.user.isGM || (view.known.deckmap || 0) >= 3));
+    const perDeck = {};
+    if (canSeeCrew) for (const c of Object.values(view.crew)) if (!c.dead) perDeck[c.deck || 1] = (perDeck[c.deck || 1] || 0) + 1;
+
+    return {
+      hullName: name, isOwnShip: isGull, deck: me.deck, shipId: me.shipId,
+      decks: deckKeys.map((k) => ({
+        n: Number(k),
+        name: Number(k) === 1 ? "Main deck" : Number(k) === 2 ? "Lower deck / engineering" : `Deck ${k}`,
+        crew: canSeeCrew ? (perDeck[Number(k)] || 0) : null,
+        here: Number(k) === me.deck
+      })),
+      canReturn: !isGull,
+      breachInfo: isGull
+        ? "Your own hull. Enemy boarders appear here, and this is where recovered crew come back to."
+        : `You breached at the <b>⌁ boarding point</b>. You cannot teleport home — someone has to physically recover you before the fight ends.`
+    };
+  }
+
+  /** Move this user to a deck: switch the scene view and put their token there. */
+  async function goToDeck(deck) {
+    const me = whereAmI(game.user.id);
+    if (game.user.isGM) await gmGoToDeck(game.user.id, me.shipId, deck);
+    else emit({ type: "goDeck", toGM: true, shipId: me.shipId, deck, userId: game.user.id });
+  }
+
+  async function gmGoToDeck(userId, shipId, deck) {
+    if (!game.user.isGM) return;
+    const isGull = shipId === "gull";
+    const hull = isGull ? await gullHull() : hullFor(shipId).hull;
+    if (!hull) return notifyUser(userId, "No deck plan for that hull.");
+    const skin = isGull ? "Original" : (getCombat().ships[shipId]?.skin || Object.keys(hull.skins)[0]);
+    let scene = findDeckScene(isGull ? getState().name : hullFor(shipId).name, skin);
+    if (!scene) scene = await buildDeckScene({ ...hull, name: isGull ? getState().name : hullFor(shipId).name }, skin);
+    if (!scene) return notifyUser(userId, "Could not build that deck plan.");
+
+    const levelId = levelForDeck(scene, deck);
+    if (!levelId) return notifyUser(userId, `That hull has no deck ${deck}.`);
+
+    // Put the player's own token on that deck, at the first open square.
+    const user = game.users.get(userId);
+    const actor = user?.character || game.actors.find((a) => a.type === "character" && a.testUserPermission(user, "OWNER"));
+    if (actor) {
+      const g = scene.grid?.size || 100;
+      const at = { x: Math.round(scene.width / 2), y: Math.round(scene.height / 2) };
+      const existing = scene.tokens.find((t) => t.actorId === actor.id);
+      if (existing) await existing.update({ level: levelId });
+      else {
+        const td = (await actor.getTokenDocument({ ...at, actorLink: true })).toObject();
+        delete td._id; td.level = levelId;
+        await scene.createEmbeddedDocuments("Token", [td]);
+      }
+    }
+
+    const next = getCombat();
+    next.whereIs = { ...(next.whereIs || {}), [userId]: { shipId, deck } };
+    await saveCombat(next);
+    emit({ type: "viewDeck", toUser: userId, sceneId: scene.id, levelId });
+    if (userId === game.user.id) await viewDeck(scene.id, levelId);
+  }
+
+  /** Switch this client's view to a scene + level. */
+  async function viewDeck(sceneId, levelId) {
+    const scene = game.scenes.get(sceneId); if (!scene) return;
+    try { await scene.view({ level: levelId }); }
+    catch (e) { try { await scene.view(); } catch (e2) { console.warn(`${MODULE_ID} | could not view deck`, e2); } }
+  }
+
+  /** Back to the Gull — only if someone has physically recovered you. */
+  async function returnToShip() {
+    if (game.user.isGM) await gmGoToDeck(game.user.id, "gull", 1);
+    else emit({ type: "goDeck", toGM: true, shipId: "gull", deck: 1, userId: game.user.id });
+  }
 
   /* ---- Cloaking station -------------------------------------------------- */
 
