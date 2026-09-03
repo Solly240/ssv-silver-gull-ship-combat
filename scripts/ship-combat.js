@@ -228,7 +228,15 @@
   }
   async function promptNumber(title, label, value, max) {
     const content = `<div style="display:flex;flex-direction:column;gap:6px;"><label>${esc(label)}<input type="number" name="v" value="${value}" min="0"${max != null ? ` max="${max}"` : ""}/></label></div>`;
-    const read = (form) => { const n = Number(form.elements.v.value); return Number.isFinite(n) ? n : null; };
+    // A BLANK field is a cancel, not a zero. `Number("")` is 0, and a quantity of
+    // 0 deletes the item — so tabbing through the box and pressing OK silently
+    // destroyed a stack.
+    const read = (form) => {
+      const raw = String(form.elements.v.value ?? "").trim();
+      if (raw === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
     const d = D2();
     if (d) return d.prompt({ window: { title }, content, ok: { label: "OK", callback: (e, b) => read(b.form) } }).catch(() => null);
     return new Promise((res) => new Dialog({ title, content, buttons: { ok: { label: "OK", callback: (h) => res(read(h[0].querySelector("form") || h[0])) }, cancel: { label: "Cancel", callback: () => res(null) } }, default: "ok" }).render(true));
@@ -243,6 +251,11 @@
     const src = fromShip ? ship : pc, dst = fromShip ? pc : ship;
     const item = src.items.get(itemId); if (!item) return;
     const have = item.system?.quantity ?? 1;
+    // A stack that is already empty has nothing to move; taking one anyway made
+    // a unit out of nothing and left the source at -1.
+    if (!(have > 0)) {
+      return notifyUser(byUserId || game.user.id, `${item.name} is an empty stack — there is nothing to move.`);
+    }
     const move = Math.max(1, Math.min(Number(qty) || 1, have));
     const twin = dst.items.find((i) => i.name === item.name && i.type === item.type);
     if (twin) await twin.update({ "system.quantity": (twin.system?.quantity ?? 1) + move });
@@ -741,6 +754,19 @@
     // Science Nav Support: play the nav mini-game → set the Pilot's Movement-Point multiplier. Own consume.
     if (a.type === "navsupport") { await runNavSupport(crew, isBonus); return; }
     if (a.type === "scan") { await runScan(crew, isBonus); return; }
+    // Gunnery from the S console. These were `note` actions, so clicking Attack,
+    // Called Shot or Launch a Boarder posted the rules text, spent the Main
+    // action and the power, and fired nothing — the working versions were only
+    // reachable from the turn bar.
+    if (a.id === "attack")   { await runGunFire(crew.id); return; }
+    if (a.id === "called")   { await runCalledShot(crew.id); return; }
+    if (a.id === "launch")   { await runBoardingFire(crew.id); return; }
+    // Quick Aim is a checkbox inside the to-hit dialog, not a separate spend —
+    // clicking it here used to eat the Bonus action and change nothing.
+    if (a.id === "quickaim") {
+      ui.notifications?.info(`Quick Aim is a tick-box on the to-hit roll — it spends your Bonus there. Press Fire.`);
+      return;
+    }
     if (a.type === "rally") { await runBuffCrew(crew, isBonus, "rally"); return; }
     if (a.type === "command") { await runBuffCrew(crew, isBonus, "command"); return; }
     if (a.type === "reroute") { await runReroute(crew, isBonus); return; }
@@ -2005,7 +2031,11 @@
     let scene = existing;
     const core = {
       name: deckSceneName(hull.name, skin),
-      width, height, padding: 0,
+      // Match the SOURCE scene's padding. Walls, lights and tiles are copied at
+      // their source coordinates, and padding shifts the whole coordinate frame —
+      // forcing 0 against a padded source slid every wall off the art by the
+      // padding delta.
+      width, height, padding: Number(first.padding) || 0,
       grid: { type: first.grid?.type ?? CONST.GRID_TYPES.SQUARE, size: gridSize,
               distance: first.grid?.distance ?? 5, units: first.grid?.units ?? "ft" },
       tokenVision: true,
