@@ -643,6 +643,7 @@
     if (a.type === "repair") { await runRepair(crew, isBonus); return; }
     // Science Nav Support: play the nav mini-game → set the Pilot's Movement-Point multiplier. Own consume.
     if (a.type === "navsupport") { await runNavSupport(crew, isBonus); return; }
+    if (a.type === "scan") { await runScan(crew, isBonus); return; }
     let ok = true;
     if (a.type === "roll") ok = await stationRoll(a, crew, stName);
     else await ChatMessage.create({ content: `<b>${esc(stName)}</b> · ${esc(crew.name)} — ${esc(a.name)}<br><span style="opacity:.7">${esc(a.text)}</span>`, speaker: { alias: "SSV Silver Gull" } });
@@ -1029,6 +1030,7 @@
       case "pilotMove":      gmPilotMove(msg.crewId, msg.kind, msg.userId); break;
       case "selectGun":      gmSelectGun(msg.crewId, msg.gun, msg.userId); break;
       case "selectTarget":   gmSelectTarget(msg.crewId, msg.shipId, msg.userId); break;
+      case "applyScan":      gmApplyScan(msg.shipId, msg.result, msg.gunnerName, { total: msg.total, die: msg.die }, msg.painted); break;
       case "applyDamage":    gmApplyDamage(msg.shipId, msg.raw, msg.facing, msg.opts || {}); break;
       case "weaponsMishap":  gmWeaponsMishap(msg.userId); break;
       case "gunHitCheck":    gmGunHitCheck(msg); break;
@@ -1380,6 +1382,87 @@
   /* ====================================================================== */
   /*  Fleet Command (key F)                                                 */
   /* ====================================================================== */
+
+  /* ---- Science: Scan ---------------------------------------------------- */
+
+  /**
+   * A real scan. Whiff protection is the point: Session 5's roll of 5 returned
+   * nothing at all, so the floor here is class + allegiance + hot arc + Painted.
+   */
+  async function runScan(crew, isBonus) {
+    const combat = getCombat();
+    const hostiles = Object.values(combat.ships).filter((s) => s.id !== "gull" && s.disposition !== "ally" && !s.outcome);
+    if (!hostiles.length) return ui.notifications?.warn("Nothing out there to scan.");
+    const pw = S.ACTION_POWER.scan;
+    if (!game.user.isGM && S.normalize(getState()).power.cur < pw) return ui.notifications?.warn(`Not enough power — Scan needs ${pw}.`);
+
+    const chosen = hostiles.length === 1 ? hostiles[0].id : await chooseDlg(
+      "Scan", "Which contact?", hostiles.map((s) => ({ value: s.id, label: s.name })));
+    if (!chosen) return;
+    const ship = getCombat().ships[chosen]; if (!ship) return;
+
+    // Painted: a previous failed scan makes this one easier.
+    const painted = S.hasStatus(ship, "painted");
+    const mod = abilityMod("int");
+    const res = await stationRollValue(crew, "int", painted);
+    if (!res) return;
+    consumeSlot(crew, isBonus ? "bonus" : "action", pw);
+
+    const result = S.scanResult(res.total - S.SCAN_DC);
+    const facing = (() => { const a = shipPoint("gull"), b = shipPoint(ship.id); return a && b ? S.facingFrom(b, a) : null; })();
+
+    if (game.user.isGM) await gmApplyScan(chosen, result, crew.name, res, painted);
+    else emit({ type: "applyScan", toGM: true, shipId: chosen, result, gunnerName: crew.name, total: res.total, die: res.die, painted, userId: game.user.id });
+
+    // Show the readout to whoever ran it, straight away.
+    setTimeout(() => {
+      const after = getCombat().ships[chosen];
+      if (after) S.openScan(S.shipView(after, { isGM: game.user.isGM }), result, { facing });
+    }, 250);
+  }
+
+  async function gmApplyScan(shipId, result, byName, roll, painted) {
+    if (!game.user.isGM) return;
+    const next = getCombat(); const sh = next.ships[shipId]; if (!sh) return;
+    S.applyScan(sh, result);
+    if (result.painted) S.applyStatus(sh, "painted", { round: next.round, rounds: 3, src: byName });
+    else S.clearStatus(sh, "painted");
+    // The firing solution is shared as a status the gunners can see on the card.
+    if (result.gunnerAdvantage) S.applyStatus(sh, "painted", { round: next.round, rounds: 1, src: "firing solution", data: { adv: result.gunnerAdvantage } });
+    await saveCombat(next);
+    await ChatMessage.create({
+      content: `<b>Science / Sensors</b> · ${esc(byName)} — scan of <b>${esc(sh.name)}</b>: ` +
+               `<b>${roll.total}</b> vs DC ${S.SCAN_DC}${painted ? ` <span style="opacity:.7">(Painted — advantage)</span>` : ""} → ` +
+               `<b style="color:${result.margin >= 0 ? "#38e1c4" : "#f2b03d"}">${esc(result.label)}</b>, confidence ${result.confidence}%` +
+               (result.painted ? `<br><span style="color:#f2b03d">Too weak to resolve — but she is <b>Painted</b>. The next scan of her has advantage.</span>` : "") +
+               (result.gunnerAdvantage ? `<br><span style="color:#42d16a">Firing solution shared — ${result.gunnerAdvantage === 2 ? "both gunners" : "one gunner"} has advantage against her.</span>` : ""),
+      speaker: { alias: "SSV Silver Gull" }, rolls: roll.roll ? [roll.roll] : undefined
+    });
+    refreshUI();
+  }
+
+  /** d20 + an ability mod, with optional advantage. Roll or manual, like every other station. */
+  async function stationRollValue(crew, abil, advantage) {
+    const mod = abilityMod(abil);
+    const choice = await rollChoiceDialog(
+      `Scan — ${crew.name}`,
+      `<p>Intelligence <b>${signMod(mod)}</b> is added automatically.${advantage ? " <b>Advantage</b> — the target is Painted." : ""}</p>` +
+      `<div style="display:flex;flex-direction:column;gap:6px;">` +
+      `<label>Other bonuses <input type="number" name="bonus" value="0"/></label>` +
+      `<label>Manual d20 (if not rolling here) <input type="number" name="die" value=""/></label></div>`,
+      "🎲 Roll", "Use manual d20");
+    if (!choice) return null;
+    let die = Number(choice.values?.die);
+    let roll = null;
+    if (choice.action === "roll" || !Number.isFinite(die)) {
+      roll = await new Roll(advantage ? "2d20kh" : "1d20").evaluate();
+      die = roll.dice[0].results.filter((r) => r.active)[0]?.result ?? roll.total;
+    }
+    const bonus = Number(choice.values?.bonus) || 0;
+    return { die, total: die + mod + bonus, roll };
+  }
+
+  const abilityMod = (a) => Number(game.user.character?.system?.abilities?.[a]?.mod) || 0;
 
   /* ---- targeting and damage ------------------------------------------- */
 

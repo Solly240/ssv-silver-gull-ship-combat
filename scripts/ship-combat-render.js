@@ -24,7 +24,7 @@
   // manifest the server is actually serving: browsers cache esmodules hard,
   // and a client running yesterday's script against today's data fails in
   // ways that look like bugs. Better it says so out loud.
-  S.VERSION = "0.20.2";
+  S.VERSION = "0.21.0";
 
   /* ---------------------------------------------------------------------- */
   /*  Static definitions (the ship's fixed loadout)                         */
@@ -159,7 +159,8 @@
       ]
     },
     science: {
-      main: [N("scan", "Scan", "Int/Investigation DC 15 → reveal enemy AC, resistances, shield facing; beat by 3+/10+ grants gunners advantage."), N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), { id: "navsupport", name: "Navigation Support", type: "navsupport", text: "Play a quick nav mini-game (plot the course or thread the gates). The better you fly it, the bigger the Pilot's Movement-Point multiplier this turn — ×1.5 (rough) up to ×2.5 (perfect). Applies to their maneuver even if they've already started moving." }],
+      main: [{ id: "scan", name: "Scan", type: "scan",
+        text: "Int/Investigation vs DC 15 against one contact. Meet it for hull, armour, resistances and shield facing; beat it by 3 for every system and advantage for one gunner; by 10 for the crew manifest and advantage for both. A FAILED scan still names her class, allegiance and hot arc, and leaves her Painted — the next scan of her has advantage." }, N("counter", "Countermeasures", "Opposed Int to negate an enemy Scan/Jam; can be held for the enemy's turn."), { id: "navsupport", name: "Navigation Support", type: "navsupport", text: "Play a quick nav mini-game (plot the course or thread the gates). The better you fly it, the bigger the Pilot's Movement-Point multiplier this turn — ×1.5 (rough) up to ×2.5 (perfect). Applies to their maneuver even if they've already started moving." }],
       bonus: [N("ping", "Quick Ping", "No roll — ask the GM one factual question about the enemy, get a truthful answer.")]
     },
     cloaking: {
@@ -834,6 +835,64 @@
     }
     if (!S.systemWorks(ship, "weapons")) return false;
     return true;
+  };
+
+
+  /* ---------------------------------------------------------------------- */
+  /*  Scanning                                                               */
+  /*                                                                          */
+  /*  Mapped onto the three bands the printed rules already have (DC 15;      */
+  /*  beat by 3+; beat by 10+) rather than inventing a new subsystem. The     */
+  /*  deck map is the repeat-scan / Quick-Ping payoff on top.                 */
+  /*                                                                          */
+  /*  The important half is the FAILURE. Session 5's scan rolled a 5 and      */
+  /*  returned literally nothing, which is the worst thing a station can do.  */
+  /*  A failed scan here still names the hull's class and allegiance and      */
+  /*  leaves the target PAINTED, so the next scan of it has advantage — the   */
+  /*  officer always moves something.                                        */
+  /* ---------------------------------------------------------------------- */
+
+  S.SCAN_DC = 15;
+  S.SCAN_TIERS = [
+    { key: "silhouette", margin: -99, label: "SILHOUETTE",
+      gives: "Class, allegiance, and which arc is hot. Target is Painted — the next scan of it has advantage." },
+    { key: "vitals", margin: 0, label: "VITALS",
+      gives: "Hull, armour, resistances and the shield facing." },
+    { key: "systems", margin: 3, label: "SYSTEMS",
+      gives: "Every system and its condition. One gunner gets advantage against this hull." },
+    { key: "manifest", margin: 10, label: "MANIFEST",
+      gives: "Crew count and roles. Both gunners get advantage." }
+  ];
+
+  /** What a scan of this margin reveals. `margin` = roll − DC. */
+  S.scanResult = function (margin) {
+    const m = Number(margin) || 0;
+    const tiers = S.SCAN_TIERS.filter((t) => m >= t.margin);
+    const top = tiers[tiers.length - 1] || S.SCAN_TIERS[0];
+    return {
+      margin: m,
+      tier: top.key,
+      label: top.label,
+      tiers: tiers.map((t) => t.key),
+      // A confidence rating, in ASTRA's own idiom. Never 0 and never 100 —
+      // she has never once claimed certainty.
+      confidence: clamp(Math.round(38 + m * 4.5), 12, 97),
+      reveal: {
+        ac: m >= 0, shields: m >= 0, systems: m >= 3, crew: m >= 10,
+        deckmap: m >= 10 ? 1 : 0
+      },
+      gunnerAdvantage: m >= 10 ? 2 : m >= 3 ? 1 : 0,
+      painted: m < 0
+    };
+  };
+
+  /** Merge a scan into a ship's revealed record. Never un-reveals. */
+  S.applyScan = function (ship, result) {
+    if (!ship || !result) return ship;
+    const r = ship.revealed || (ship.revealed = { ac: false, shields: false, systems: false, crew: false, deckmap: 0 });
+    for (const k of ["ac", "shields", "systems", "crew"]) if (result.reveal[k]) r[k] = true;
+    r.deckmap = Math.max(r.deckmap || 0, result.reveal.deckmap || 0);
+    return ship;
   };
 
   /* ---------------------------------------------------------------------- */
@@ -1596,6 +1655,7 @@
 .sng-chan canvas{display:block;cursor:crosshair;}
 `;
     st.textContent += S.FLEET_CSS;   // Fleet Command shares the sheet and the palette
+    st.textContent += S.SCAN_CSS;
     document.head.appendChild(st);
   };
 
@@ -2966,6 +3026,149 @@
     });
   };
 
+
+  /* ---------------------------------------------------------------------- */
+  /*  The scan readout                                                       */
+  /*                                                                          */
+  /*  Styled after ASTRA's own nav scan, because that is what the crew have   */
+  /*  seen her produce all campaign: a "//" header rule with a confidence     */
+  /*  rating, a sweeping ring, and tiers that land one after another. Locked  */
+  /*  tiers stay on screen as redaction that keeps the SHAPE of what is       */
+  /*  missing — that is what makes a second scan feel worth an action.        */
+  /* ---------------------------------------------------------------------- */
+
+  S.SCAN_CSS = `
+.sgscan{position:fixed;inset:0;z-index:126;display:flex;align-items:center;justify-content:center;
+  background:rgba(2,6,12,.82);font-family:'Courier New',monospace;color:#cfeef0;}
+.sgscan .sn{position:relative;width:min(760px,94vw);max-height:92vh;overflow:auto;padding:0 0 18px;
+  background:linear-gradient(180deg,rgba(10,28,40,.97),rgba(4,12,20,.97));
+  border:1px solid #1d6a86;border-radius:12px;box-shadow:0 0 60px rgba(29,106,134,.45);}
+/* corner brackets, the nav-scan frame language */
+.sgscan .sn::before,.sgscan .sn::after{content:"";position:absolute;width:22px;height:22px;pointer-events:none;}
+.sgscan .sn::before{top:8px;left:8px;border-top:2px solid #38e1c4;border-left:2px solid #38e1c4;}
+.sgscan .sn::after{bottom:8px;right:8px;border-bottom:2px solid #38e1c4;border-right:2px solid #38e1c4;}
+.sgscan .sn-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 18px;
+  border-bottom:1px solid #12455a;font-size:12px;letter-spacing:1.5px;color:#6f97a6;}
+.sgscan .sn-brand{font-weight:700;letter-spacing:2.5px;color:#38e1c4;text-shadow:0 0 12px rgba(56,225,196,.45);}
+.sgscan .sn-sep{color:#2a5f70;}
+.sgscan .sn-head b{color:#cfeef0;}
+.sgscan .sn-conf b{color:#f2b03d;}
+.sgscan .sn-x{margin-left:auto;font-size:15px;color:#6f97a6;background:none;border:none;cursor:pointer;font-family:inherit;}
+.sgscan .sn-x:hover{color:#f2b03d;}
+
+/* the sweep: rings + a rotating wedge, one 1.4s pass before the tiers land */
+.sgscan .sn-sweep{position:relative;height:150px;margin:14px auto 4px;width:150px;}
+.sgscan .sn-ring{position:absolute;inset:0;border-radius:50%;border:1px dashed #1d6a86;}
+.sgscan .sn-ring.r2{inset:22px;border-color:#17566e;}
+.sgscan .sn-ring.r3{inset:44px;border-color:#124a5e;}
+.sgscan .sn-wedge{position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg,rgba(56,225,196,.42),transparent 26%);
+  animation:sn-spin 1.4s linear infinite;}
+@keyframes sn-spin{to{transform:rotate(360deg);}}
+.sgscan .sn-blip{position:absolute;top:50%;left:50%;width:9px;height:9px;margin:-4.5px;border-radius:50%;
+  background:#f2b03d;box-shadow:0 0 12px rgba(242,176,61,.9);}
+.sgscan .sn-target{text-align:center;font-size:15px;font-weight:700;color:#dff3f6;letter-spacing:1px;margin-bottom:2px;}
+.sgscan .sn-sub{text-align:center;font-size:11px;color:#6f97a6;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:12px;}
+
+.sgscan .sn-tier{margin:0 18px 9px;border:1px solid #14455a;border-radius:9px;overflow:hidden;
+  background:rgba(8,21,33,.7);opacity:0;transform:translateY(6px);animation:sn-land .34s ease forwards;}
+@keyframes sn-land{to{opacity:1;transform:none;}}
+.sgscan .sn-tier.locked{border-style:dashed;border-color:#2a4a5a;}
+.sgscan .sn-th{display:flex;align-items:center;gap:9px;padding:7px 11px;font-size:11px;letter-spacing:2px;
+  border-bottom:1px solid #123b4c;color:#38e1c4;}
+.sgscan .sn-tier.locked .sn-th{color:#5f8496;border-bottom-color:#1a3646;}
+.sgscan .sn-th .sn-lock{margin-left:auto;font-size:10px;letter-spacing:1px;color:#5f8496;}
+.sgscan .sn-body{padding:9px 11px;font-size:12px;line-height:1.6;}
+.sgscan .sn-row{display:flex;justify-content:space-between;gap:12px;padding:2px 0;}
+.sgscan .sn-row span:first-child{color:#6f97a6;letter-spacing:1px;}
+.sgscan .sn-row b{color:#dff3f6;}
+/* redaction that keeps the shape of what you do not know */
+.sgscan .sn-red{display:inline-block;min-width:52px;height:12px;border-radius:3px;vertical-align:-2px;
+  background:repeating-linear-gradient(135deg,#1a3a48 0 4px,#0d2531 4px 8px);border:1px solid #24596e;}
+.sgscan .sn-hint{font-size:11px;color:#8fb2c0;font-style:italic;}
+.sgscan .sn-pips{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;}
+.sgscan .sn-pip{font-size:10px;letter-spacing:.5px;padding:1px 7px;border-radius:9px;border:1px solid currentColor;}
+.sgscan .sn-pip.ok{color:#38e1c4;} .sgscan .sn-pip.dmg{color:#f2b03d;} .sgscan .sn-pip.dead{color:#e0454d;}
+.sgscan .sn-foot{padding:4px 18px 0;font-size:11px;color:#6f97a6;text-align:center;}
+.sgscan .sn-foot b{color:#f2b03d;}
+`;
+
+  function closeScan() { const o = document.getElementById("ssv-scan"); if (o) o.remove(); }
+  S.closeScan = closeScan;
+
+  /**
+   * Show a scan result. `view` is the ship AFTER the reveal has been applied and
+   * put back through S.shipView, so this renderer only ever sees what the viewer
+   * is allowed to see — the reveal boundary holds even here.
+   */
+  S.openScan = function (view, result, opts = {}) {
+    if (typeof document === "undefined") return;
+    S.ensureStyles();
+    closeScan();
+    const root = document.createElement("div");
+    root.id = "ssv-scan";
+    root.className = "sgscan";
+
+    const f = S.faction(view.faction);
+    const cls = S.shipClass(view.cls);
+    const red = `<span class="sn-red"></span>`;
+    const got = (k) => result.tiers.includes(k);
+
+    const tier = (key, label, bodyHtml, delayIdx) => {
+      const on = got(key);
+      return `<div class="sn-tier${on ? "" : " locked"}" style="animation-delay:${180 + delayIdx * 220}ms">
+        <div class="sn-th"><span>${label}</span>${on ? "" : `<span class="sn-lock">◌ NOT RESOLVED</span>`}</div>
+        <div class="sn-body">${on ? bodyHtml : `<span class="sn-hint">${esc(S.SCAN_TIERS.find((t) => t.key === key)?.gives || "")}</span>`}</div>
+      </div>`;
+    };
+
+    const row = (k, v) => `<div class="sn-row"><span>${k}</span><b>${v}</b></div>`;
+    const vitals = view.hull
+      ? row("HULL", `${view.hull.cur} / ${view.hull.max}`) +
+        row("ARMOUR", view.armour ? `−${view.armour} per hit` : "none") +
+        row("SHIELDS", view.shield?.on ? `${S.FACING_LABEL[view.shield.facing]} — halves damage` : "down") +
+        row("RESISTANCES", Object.keys(view.resist || {}).length
+          ? Object.entries(view.resist).map(([t, r]) => `${t} ${r}`).join(", ") : "none detected")
+      : row("HULL", red) + row("ARMOUR", red) + row("SHIELDS", red);
+    const systems = view.systems
+      ? `<div class="sn-pips">${Object.entries(view.systems).map(([id, st]) =>
+          `<span class="sn-pip ${st === "working" ? "ok" : st === "damaged" ? "dmg" : "dead"}">${esc(S.SYSTEMS.find((x) => x.id === id)?.label || id)}</span>`).join("")}</div>`
+      : row("SYSTEMS", red);
+    const crew = view.crew
+      ? row("COMPLEMENT", `${Object.values(view.crew).filter((c) => !c.dead).length} aboard`) +
+        `<div class="sn-pips">${Object.values(view.crew).map((c) =>
+          `<span class="sn-pip ${c.dead ? "dead" : "ok"}">${esc(c.roleId || "crew")}</span>`).join("")}</div>`
+      : row("COMPLEMENT", red);
+
+    root.innerHTML = `<div class="sn">
+      <div class="sn-head">
+        <span class="sn-brand">ASTRA SENSOR SWEEP</span><span class="sn-sep">//</span>
+        <span class="sn-conf">CONFIDENCE <b>${result.confidence}%</b></span><span class="sn-sep">//</span>
+        <span>${esc(result.label)}</span>
+        <button class="sn-x" data-x title="Close (Esc)">✕</button>
+      </div>
+      <div class="sn-sweep"><div class="sn-ring"></div><div class="sn-ring r2"></div><div class="sn-ring r3"></div>
+        <div class="sn-wedge"></div><div class="sn-blip"></div></div>
+      <div class="sn-target">${esc(view.name)}</div>
+      <div class="sn-sub">${view.unresolved ? "[UNRESOLVED]" : esc(cls ? cls.name : view.cls || "unknown class")} · ${esc(f ? f.short : "Unaligned")}</div>
+      ${tier("silhouette", "SILHOUETTE", row("CLASS", view.unresolved ? "[UNRESOLVED]" : esc(cls ? cls.name : "unknown")) +
+        row("ALLEGIANCE", esc(f ? f.name : "none detected")) +
+        row("HOT ARC", opts.facing ? esc(S.FACING_LABEL[opts.facing]) : red), 0)}
+      ${tier("vitals", "VITALS", vitals, 1)}
+      ${tier("systems", "SYSTEMS", systems, 2)}
+      ${tier("manifest", "MANIFEST", crew, 3)}
+      <div class="sn-foot">${result.painted
+        ? `Signal too weak to resolve — but she is <b>PAINTED</b> now. The next scan of her has advantage.`
+        : result.gunnerAdvantage === 2 ? `Firing solution shared — <b>both gunners</b> have advantage against this hull.`
+        : result.gunnerAdvantage === 1 ? `Firing solution shared — <b>one gunner</b> has advantage against this hull.`
+        : `Run it again to resolve the rest.`}</div>
+    </div>`;
+    document.body.appendChild(root);
+    root.querySelector("[data-x]").onclick = () => { closeScan(); opts.onClose && opts.onClose(); };
+    root.onmousedown = (e) => { if (e.target === root) { closeScan(); opts.onClose && opts.onClose(); } };
+    return root;
+  };
+
   // Expose for the preview harness, the Foundry wiring, and external callers.
   (typeof globalThis !== "undefined" ? globalThis : window).SSVShipHUD = S;
   if (typeof module !== "undefined" && module.exports) module.exports = S;
@@ -3139,6 +3342,29 @@
     const withBlock = S.normalizeShip({ crew: { c1: { name: "G", roleId: "gunner", block: "Thug", tier: 2 } } });
     ok(withBlock.crew.c1.block === "Thug" && withBlock.crew.c1.tier === 2,
        "a crew member's stat block and tier survive normalize — they are what boarding instantiates from");
+
+    // --- scanning ----------------------------------------------------------
+    ok(S.scanResult(-6).tier === "silhouette", "a failed scan still returns the silhouette tier");
+    ok(S.scanResult(-6).painted === true, "…and paints the target, so the next scan has advantage");
+    ok(S.scanResult(-6).reveal.ac === false, "…but reveals no vitals");
+    ok(S.scanResult(0).reveal.ac && S.scanResult(0).reveal.shields, "meeting the DC gives vitals and the shield facing");
+    ok(S.scanResult(0).reveal.systems === false, "…but not the systems");
+    ok(S.scanResult(3).reveal.systems === true, "beating it by 3 gives the systems");
+    ok(S.scanResult(3).gunnerAdvantage === 1, "…and one gunner advantage");
+    ok(S.scanResult(10).reveal.crew === true && S.scanResult(10).gunnerAdvantage === 2,
+       "beating it by 10 gives the manifest and both gunners");
+    ok(S.scanResult(10).reveal.deckmap === 1, "…and the first deck-map tier");
+    for (const m of [-20, -1, 0, 2, 3, 9, 10, 25]) {
+      const r = S.scanResult(m);
+      ok(r.confidence > 0 && r.confidence < 100, `confidence stays honest at margin ${m} (${r.confidence})`);
+      ok(!!S.SCAN_TIERS.find((t) => t.key === r.tier), `margin ${m} names a real tier`);
+    }
+    // applyScan never un-reveals what an earlier scan already got
+    const scanned = S.normalizeShip({ id: "s2" });
+    S.applyScan(scanned, S.scanResult(12));
+    ok(scanned.revealed.crew === true, "a great scan reveals the crew");
+    S.applyScan(scanned, S.scanResult(-5));
+    ok(scanned.revealed.crew === true, "a later BAD scan does not take it away again");
 
     // --- the reveal boundary (the leak audit) -------------------------------
     const secret = S.normalizeShip({ id: "s1", name: "Ghost", hull: { cur: 40, max: 200 }, ac: { base: 17 },
