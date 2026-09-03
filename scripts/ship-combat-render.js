@@ -705,6 +705,26 @@
              activeShip: "gull" };
   };
 
+  /**
+   * Which page the console should open on.
+   *
+   * Out of combat there is no crew and no stations at all — endCombat() clears
+   * `crew` outright — so the station panel is a dead end that says "you're not
+   * manning a station yet". The inventory is what the console is FOR between
+   * fights, and its socket rules are already `player: true` precisely so it works
+   * with no combat running. In a fight it is the other way round: you pressed the
+   * key to take your action.
+   *
+   * This decides the OPEN only. Once you are in, ⚔ Stations and 📦 Inventory are
+   * yours, and re-rendering an open console never re-applies it.
+   *
+   * A missing or malformed blob normalizes to active:false, so the load-time
+   * fallback is the harmless one.
+   */
+  S.defaultConsoleMode = function (combat) {
+    return S.normalizeCombat(combat).active ? "station" : "inventory";
+  };
+
   // Merge stored combat onto defaults so new fields/stations forward-migrate.
   S.normalizeCombat = function (stored) {
     const d = S.defaultCombat();
@@ -3433,8 +3453,12 @@
     rightEl.innerHTML =
       `<div class="inv-wrap">` +
         `<div class="con-head"><span class="con-title">SHIP INVENTORY</span>` +
+          (kctx.isGM ? `<button class="con-inv" data-gm="1" title="GM actions">⚙ GM</button>` : "") +
           `<button class="con-inv" data-act="stations" title="Back to stations">⚔ Stations</button>` +
           `<button class="con-x" title="Close (Esc)">✕</button></div>` +
+        // Out of combat this panel is where S lands you, so the walk-the-ship
+        // switch has to be here too — it must never need a fight to reach.
+        `<div style="padding:0 0 10px">${spaceDecksToggle(false)}</div>` +
         `<div class="inv-gauges">${gauge("FUEL", st.fuel, "fuel", "⛽")}${gauge("POWER", st.power, "power", "⚡")}` +
           `<div class="inv-convert"><button class="con-btn" data-convert="1">Convert ⛽1 → ${Math.round(ratio)}⚡</button>` +
           `<button class="con-btn" data-convert="10">Convert ⛽10 → ${Math.round(ratio * 10)}⚡</button></div></div>` +
@@ -3447,6 +3471,8 @@
 
     rightEl.querySelector(".con-x").onclick = () => { hideInvPop(); kctx.close(); };
     rightEl.querySelector('[data-act="stations"]').onclick = () => { hideInvPop(); kctx.toggleInv(); };
+    const invGm = rightEl.querySelector("[data-gm]"); if (invGm) invGm.onclick = () => { hideInvPop(); kctx.toggleGM(); };
+    rightEl.querySelectorAll("[data-view]").forEach((b) => { b.onclick = () => { hideInvPop(); kctx.setView(b.dataset.view); }; });
     rightEl.querySelectorAll("[data-convert]").forEach((b) => { b.onclick = () => kctx.convert(Number(b.dataset.convert)); });
     const tuneB = rightEl.querySelector('[data-act="tune"]'); if (tuneB) tuneB.onclick = () => kctx.tune();
     const actorB = rightEl.querySelector('[data-act="actor"]'); if (actorB) actorB.onclick = () => kctx.setActor();
@@ -4898,6 +4924,16 @@
     ok(S.normalizeCombat({ crew: { g: { name: "G", station: "gunner_port", target: "e1" } } }).crew.g.target === "e1",
        "a gunner's target survives normalize — a laid gun stays laid");
     ok(S.normalizeCombat({ crew: { y: { name: "Y", station: "not-a-station" } } }).crew.y.station === "", "invalid stations are dropped");
+
+    // --- which page S opens on ---------------------------------------------
+    ok(S.defaultConsoleMode({ active: true }) === "station", "in a fight, S opens the station panel");
+    ok(S.defaultConsoleMode({ active: false }) === "inventory", "out of a fight, S opens the inventory");
+    ok(S.defaultConsoleMode({}) === "inventory", "an empty combat blob is not a fight");
+    ok(S.defaultConsoleMode(null) === "inventory", "a missing combat blob is not a fight");
+    ok(S.defaultConsoleMode({ active: "yes" }) === "station", "active is coerced, not compared by identity");
+    // Out of combat there is genuinely nothing to drive, which is WHY the default flips.
+    ok(Object.keys(S.normalizeCombat({ active: false }).crew).length === 0,
+       "an ended fight has no crew, so the station panel would be a dead end");
 
     return fails;
   };

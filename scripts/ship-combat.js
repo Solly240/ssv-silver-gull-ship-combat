@@ -79,7 +79,19 @@
     renderBar();                       // hide the top tracker bar while the console is open
   }
   function closeConsole() { armed = null; invMode = false; gmActMode = false; deckMode = false; hideInvPop(); closeItemBrowser(); if (_console) _console.style.display = "none"; renderBar(); }
-  function openShipHUD() { if (consoleOpen()) closeConsole(); else renderConsole(); }
+  /**
+   * The S key. Opens on the page you actually wanted: the inventory between
+   * fights, the station panel in one. `S.defaultConsoleMode` explains why.
+   *
+   * Deliberately only on the OPEN — refreshOpen()/renderConsole() must never
+   * re-apply it, or a live re-render would yank you off the page you chose.
+   */
+  function openShipHUD() {
+    if (consoleOpen()) { closeConsole(); return; }
+    armed = null; gmActMode = false; deckMode = false;
+    invMode = S.defaultConsoleMode(getCombat()) === "inventory";
+    renderConsole();
+  }
   function refreshOpen() { if (consoleOpen()) renderConsole(); }
 
   function drivenCrew() {
@@ -1972,7 +1984,7 @@
     game.settings.register(MODULE_ID, SETTING_COMBAT, { scope: "world", config: false, type: Object, default: {}, onChange: refreshUI });
     game.keybindings.register(MODULE_ID, "open", {
       name: game.i18n?.localize(`${MODULE_ID}.keybind.open.name`) || "Open Ship Overview HUD",
-      hint: game.i18n?.localize(`${MODULE_ID}.keybind.open.hint`) || "Opens the SSV Silver Gull ship-combat overview.",
+      hint: game.i18n?.localize(`${MODULE_ID}.keybind.open.hint`) || "Opens the ship console — the ship inventory between fights, your station's controls during one.",
       editable: [{ key: "KeyS" }],
       onDown: () => {
         // The fleet board sits above the console, so opening one under the other

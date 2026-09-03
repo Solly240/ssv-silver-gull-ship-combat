@@ -348,6 +348,51 @@ which reports once per distinct message. A silent `catch {}` is how a call to a
 function deleted in a refactor survived a whole release looking like "the arcs just
 don't draw".
 
+## 5d. Which page the console opens on
+
+`S` is one key for two jobs, so the **open** picks the page:
+
+| | lands on |
+|---|---|
+| **not** in ship combat | 📦 the ship inventory |
+| in ship combat | ⚔ the station panel |
+
+The reason is that out of combat there is nothing to drive: `endCombat()` sets
+`next.crew = {}`, so `drivenCrew()` returns null and the station panel is the dead
+end that reads *"you're not manning a station yet"*. Between fights the console is
+opened to move cargo, burn a fuel cell or convert power — and the inventory's socket
+rules are `{gm: true, player: true}` **precisely** so they work with no combat
+running (see §5a; an earlier `anyCrew` rule silently refused every player-side
+inventory action out of combat).
+
+Two rules:
+
+- **The decision is `S.defaultConsoleMode(combat)` in the pure half**, so it is
+  asserted in `--selftest` and demonstrated in `preview.html`. Do not inline the
+  `combat.active` test into the wiring.
+- **It applies to the OPEN only.** `openShipHUD()` sets `invMode` and nothing else
+  does; `refreshOpen()` / `renderConsole()` must never re-apply it, or a live
+  re-render — and this module re-renders on every state write — would yank a player
+  off the page they chose mid-action.
+
+`openShipHUD()` also clears `gmActMode` and `deckMode` on the way in, so an open
+never inherits a stale mode from the last time the console was up.
+
+**A landing page must carry its own navigation.** Making the inventory the
+out-of-combat default exposed that its header had only `⚔ Stations` and `✕` — no
+SPACE⇄DECKS toggle and no `⚙ GM`. That quietly broke the rule stated on the station
+panel: *walking around the ship should not require being in a fight.* Both are on
+the inventory header now. If you ever change which panel S lands on, move the
+navigation with it. (The GM Actions panel still has the impoverished header — it is
+never a landing page, so it is left alone.)
+
+Covered by two gates in `check_shipcombat.js`: one presses the registered `S` binding
+under the stub with combat off, on, and with an empty blob, and checks `api.open()`
+agrees — both the "always station" and the inverted mutation fail it. The other reads
+`renderInventoryPanel`'s source and asserts the landing page can still reach stations,
+decks and GM actions. `S.defaultConsoleMode` is also in the cross-half export list, so
+deleting it from the pure half fails the gate rather than breaking the key at runtime.
+
 ## 6. Verification
 
 ```bash
